@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Winged Tycoons - GitHub Pages Multi-Agent Platform</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-slate-900 text-slate-100 font-sans min-h-screen flex flex-col">
+    <!-- Top Header -->
+    <header class="bg-slate-800 border-b border-slate-700 px-6 py-4 flex items-center justify-between shadow-md">
+        <div class="flex items-center space-x-3">
+            <div class="bg-blue-600 p-2.5 rounded-lg text-white font-bold text-xl shadow">
+                <i class="fa-solid fa-plane-departure"></i>
+            </div>
+            <div>
+                <h1 class="text-xl font-bold text-white tracking-wide">WINGED TYCOONS</h1>
+                <p class="text-xs text-blue-400 font-semibold">GitHub Pages Standalone Multi-Agent Platform</p>
+            </div>
+        </div>
+        <nav class="flex space-x-2">
+            <button onclick="switchTab('workspace')" id="tab-workspace" class="px-4 py-2 rounded-lg text-sm font-semibold bg-blue-600 text-white shadow">
+                <i class="fa-solid fa-microchip mr-1.5"></i> Agent Workspace
+            </button>
+            <button onclick="switchTab('suppliers')" id="tab-suppliers" class="px-4 py-2 rounded-lg text-sm font-semibold text-slate-300 hover:bg-slate-700">
+                <i class="fa-solid fa-building-user mr-1.5"></i> Supplier Directory
+            </button>
+            <button onclick="switchTab('inventory')" id="tab-inventory" class="px-4 py-2 rounded-lg text-sm font-semibold text-slate-300 hover:bg-slate-700">
+                <i class="fa-solid fa-boxes-stacked mr-1.5"></i> Warehouse Inventory
+            </button>
+        </nav>
+    </header>
+
+    <!-- Main Content Container -->
+    <main class="flex-1 p-6 max-w-[1600px] w-full mx-auto">
+        <!-- TAB 1: AGENT WORKSPACE -->
+        <div id="view-workspace" class="space-y-6">
+            <!-- Stepper Progress Bar -->
+            <div class="bg-slate-800 border border-slate-700 rounded-xl p-4 shadow-sm">
+                <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Multi-Agent Workflow Execution Stepper</h3>
+                <div class="flex items-center justify-between text-xs text-center font-medium">
+                    <div id="step-Intake" class="flex-1 py-2 px-1 rounded bg-blue-900/60 border border-blue-500 text-blue-200">1. Intake</div>
+                    <div class="text-slate-600 px-1"><i class="fa-solid fa-chevron-right"></i></div>
+                    <div id="step-Validating" class="flex-1 py-2 px-1 rounded bg-slate-700 text-slate-400">2. Validating</div>
+                    <div class="text-slate-600 px-1"><i class="fa-solid fa-chevron-right"></i></div>
+                    <div id="step-Inventory_Lookup" class="flex-1 py-2 px-1 rounded bg-slate-700 text-slate-400">3. Stock Lookup</div>
+                    <div class="text-slate-600 px-1"><i class="fa-solid fa-chevron-right"></i></div>
+                    <div id="step-Supplier_Sourcing" class="flex-1 py-2 px-1 rounded bg-slate-700 text-slate-400">4. Sourcing</div>
+                    <div class="text-slate-600 px-1"><i class="fa-solid fa-chevron-right"></i></div>
+                    <div id="step-Compliance_Check" class="flex-1 py-2 px-1 rounded bg-slate-700 text-slate-400">5. Compliance</div>
+                    <div class="text-slate-600 px-1"><i class="fa-solid fa-chevron-right"></i></div>
+                    <div id="step-Pricing" class="flex-1 py-2 px-1 rounded bg-slate-700 text-slate-400">6. Pricing</div>
+                    <div class="text-slate-600 px-1"><i class="fa-solid fa-chevron-right"></i></div>
+                    <div id="step-Pending_Approval" class="flex-1 py-2 px-1 rounded bg-slate-700 text-slate-400">7. Human Approval</div>
+                    <div class="text-slate-600 px-1"><i class="fa-solid fa-chevron-right"></i></div>
+                    <div id="step-Quote_Sent" class="flex-1 py-2 px-1 rounded bg-slate-700 text-slate-400">8. Quote Sent</div>
+                </div>
+            </div>
+
+            <!-- 3-Panel Layout -->
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                <!-- Panel 1: RFQ Input (4 Cols) -->
+                <div class="lg:col-span-4 bg-slate-800 border border-slate-700 rounded-xl p-5 shadow flex flex-col space-y-4">
+                    <div class="flex items-center justify-between border-b border-slate-700 pb-3">
+                        <h2 class="font-bold text-slate-200 flex items-center gap-2">
+                            <i class="fa-solid fa-envelope-open-text text-blue-400"></i> Customer RFQ Intake
+                        </h2>
+                        <span class="text-xs bg-slate-700 px-2 py-0.5 rounded text-slate-300">Input Panel</span>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-400 mb-1">Pre-Fill Quick Test Templates:</label>
+                        <div class="flex flex-wrap gap-2 mb-3">
+                            <button onclick="prefill('A')" class="text-xs bg-emerald-900/50 hover:bg-emerald-800 text-emerald-300 border border-emerald-700 px-2 py-1 rounded">
+                                Scenario A (Clean Stock)
+                            </button>
+                            <button onclick="prefill('B')" class="text-xs bg-amber-900/50 hover:bg-amber-800 text-amber-300 border border-amber-700 px-2 py-1 rounded">
+                                Scenario B (Sourcing Fallback)
+                            </button>
+                            <button onclick="prefill('C')" class="text-xs bg-rose-900/50 hover:bg-rose-800 text-rose-300 border border-rose-700 px-2 py-1 rounded">
+                                Scenario C (Compliance Block)
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="flex-1 flex flex-col">
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">Unstructured Customer Request Text:</label>
+                        <textarea id="raw-rfq-input" rows="8" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm text-slate-100 focus:outline-none focus:border-blue-500 font-mono leading-relaxed" placeholder="Paste customer RFQ email here..."></textarea>
+                    </div>
+
+                    <button onclick="runPipeline()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-4 rounded-lg shadow-lg flex items-center justify-center space-x-2 transition">
+                        <i class="fa-solid fa-rocket"></i>
+                        <span>Run In-Browser Multi-Agent Pipeline</span>
+                    </button>
+                </div>
+
+                <!-- Panel 2: Agent Activity Timeline (4 Cols) -->
+                <div class="lg:col-span-4 bg-slate-800 border border-slate-700 rounded-xl p-5 shadow flex flex-col">
+                    <div class="flex items-center justify-between border-b border-slate-700 pb-3 mb-4">
+                        <h2 class="font-bold text-slate-200 flex items-center gap-2">
+                            <i class="fa-solid fa-robot text-purple-400"></i> Agent Activity Audit Log
+                        </h2>
+                        <span id="log-count" class="text-xs bg-purple-900/60 text-purple-300 border border-purple-700 px-2 py-0.5 rounded font-mono">0 Logs</span>
+                    </div>
+
+                    <div id="logs-container" class="flex-1 overflow-y-auto max-h-[500px] space-y-3 pr-2 font-sans">
+                        <div class="text-center text-slate-500 py-12 text-sm italic">
+                            No active RFQ processing. Submit an RFQ to see real-time agent audit logs.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Panel 3: Quote Preview & HITL Decision (4 Cols) -->
+                <div class="lg:col-span-4 bg-slate-800 border border-slate-700 rounded-xl p-5 shadow flex flex-col space-y-4">
+                    <div class="flex items-center justify-between border-b border-slate-700 pb-3">
+                        <h2 class="font-bold text-slate-200 flex items-center gap-2">
+                            <i class="fa-solid fa-file-invoice-dollar text-emerald-400"></i> Proposal & Human Approval
+                        </h2>
+                        <span id="rfq-status-badge" class="text-xs bg-slate-700 text-slate-300 px-2 py-0.5 rounded font-bold">Idle</span>
+                    </div>
+
+                    <div id="proposal-container" class="flex-1 flex flex-col justify-between">
+                        <div class="text-center text-slate-500 py-12 text-sm italic">
+                            Generated quote draft and commercial human-in-the-loop controls will render here.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 2: SUPPLIER DIRECTORY -->
+        <div id="view-suppliers" class="hidden space-y-6">
+            <div class="flex items-center justify-between border-b border-slate-700 pb-4">
+                <div>
+                    <h2 class="text-xl font-bold text-white">Vetted Aerospace Supplier Directory</h2>
+                    <p class="text-xs text-slate-400">Pre-approved suppliers, ITAR compliance status, and full contact information.</p>
+                </div>
+            </div>
+            <div id="suppliers-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- Loaded via JS -->
+            </div>
+        </div>
+
+        <!-- TAB 3: WAREHOUSE INVENTORY -->
+        <div id="view-inventory" class="hidden space-y-6">
+            <div class="flex items-center justify-between border-b border-slate-700 pb-4">
+                <div>
+                    <h2 class="text-xl font-bold text-white">Physical Warehouse Inventory</h2>
+                    <p class="text-xs text-slate-400">Real-time stock quantities, bin locations, condition codes, and airworthiness certificates.</p>
+                </div>
+            </div>
+            <div class="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden shadow">
+                <table class="w-full text-left text-sm text-slate-300">
+                    <thead class="bg-slate-900 text-xs uppercase text-slate-400 border-b border-slate-700">
+                        <tr>
+                            <th class="p-3.5">Part Number</th>
+                            <th class="p-3.5">Serial No</th>
+                            <th class="p-3.5">Condition</th>
+                            <th class="p-3.5">Warehouse Location</th>
+                            <th class="p-3.5">Unit Cost</th>
+                            <th class="p-3.5">Release Certificate</th>
+                            <th class="p-3.5">Trace Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="inventory-tbody" class="divide-y divide-slate-700">
+                        <!-- Loaded via JS -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <!-- Standalone Client-Side Multi-Agent Execution Engine -->
+    <script>
+        const database = {
+            inventory: [
+                { id: "INV-001", part_number: "060-1234-00", serial_number: "SN-WR-001", quantity_available: 1, condition_code: "NE", warehouse_location: "Aisle 3, Bin B4", unit_cost: 1000.0, certificate_type: "FAA 8130-3", has_full_trace: true },
+                { id: "INV-002", part_number: "060-1234-00", serial_number: "SN-WR-002", quantity_available: 1, condition_code: "NE", warehouse_location: "Aisle 3, Bin B5", unit_cost: 1000.0, certificate_type: "FAA 8130-3", has_full_trace: true },
+                { id: "INV-003", part_number: "456-789-OH", serial_number: "SN-ACT-981", quantity_available: 1, condition_code: "OH", warehouse_location: "Aisle 12, Bin C1", unit_cost: 450.0, certificate_type: "EASA Form 1", has_full_trace: true },
+                { id: "INV-004", part_number: "456-789-OH", serial_number: "SN-ACT-982", quantity_available: 1, condition_code: "OH", warehouse_location: "Aisle 12, Bin C2", unit_cost: 450.0, certificate_type: "FAA 8130-3", has_full_trace: false }
+            ],
+            suppliers: [
+                { id: "SUP-001", company_name: "Apex Aero Components LLC", contact_name: "Robert Hartwell", contact_title: "Director of Sales", phone: "+1-305-555-0142", email: "quotes@apexaero.com", address_line1: "4521 NW 36th Street", city: "Miami", state_province: "FL", postal_code: "33166", approval_status: "Approved", itar_certified: true, account_manager: "Sarah Liu" },
+                { id: "SUP-002", company_name: "Vanguard Aviation Spares Inc.", contact_name: "Maria Fontaine", contact_title: "Procurement Manager", phone: "+1-972-555-0378", email: "procurement@vanguardspares.com", address_line1: "7800 Sovereign Row", city: "Dallas", state_province: "TX", postal_code: "75247", approval_status: "Approved", itar_certified: true, account_manager: "Sarah Liu" },
+                { id: "SUP-003", company_name: "Horizon MRO Parts Ltd.", contact_name: "David Okonkwo", contact_title: "Sales Representative", phone: "+1-404-555-0215", email: "sales@horizonmro.com", address_line1: "1250 Peachtree Industrial Blvd", city: "Atlanta", state_province: "GA", postal_code: "30341", approval_status: "Approved", itar_certified: false, account_manager: "James Okafor" },
+                { id: "SUP-004", company_name: "Suspect Supplier Corporation", contact_name: "Unknown", contact_title: "N/A", phone: "+1-000-000-0000", email: "info@suspectsupplier.com", address_line1: "Unknown", city: "Unknown", state_province: "XX", postal_code: "00000", approval_status: "Unapproved", itar_certified: false, account_manager: "None" }
+            ],
+            supplierQuotes: {
+                "060-1234-00": [
+                    { supplier_name: "Vanguard Spares", unit_cost: 1050.0, lead_time_days: 7, certificate_type: "FAA 8130-3" },
+                    { supplier_name: "Apex Aero Components", unit_cost: 1100.0, lead_time_days: 3, certificate_type: "FAA 8130-3" }
+                ],
+                "456-789-OH": [
+                    { supplier_name: "Horizon MRO Parts", unit_cost: 500.0, lead_time_days: 2, certificate_type: "FAA 8130-3" },
+                    { supplier_name: "Suspect Supplier Corp", unit_cost: 300.0, lead_time_days: 1, certificate_type: "None" }
+                ]
+            }
+        };
+
+        const templates = {
+            A: "Hello Sales team,\nPlease quote Part Number: 060-1234-00 | Qty: 2.\nNeed delivery to Delta MRO Services asap. procurement@deltamro.com",
+            B: "Urgent AOG Request!\nNeed part 060-1234-00, quantity 5.\nContact Delta MRO Services at procurement@deltamro.com.",
+            C: "RFQ Request:\nPart Number: 456-789-OH, Qty: 2.\nSend quote to Delta MRO Services."
+        };
+
+        let currentLogs = [];
+        let currentQuote = null;
+
+        function prefill(key) {
+            document.getElementById('raw-rfq-input').value = templates[key];
+        }
+
+        function switchTab(tab) {
+            ['workspace', 'suppliers', 'inventory'].forEach(t => {
+                document.getElementById(`view-${t}`).classList.add('hidden');
+                document.getElementById(`tab-${t}`).className = "px-4 py-2 rounded-lg text-sm font-semibold text-slate-300 hover:bg-slate-700";
+            });
+            document.getElementById(`view-${tab}`).classList.remove('hidden');
+            document.getElementById(`tab-${tab}`).className = "px-4 py-2 rounded-lg text-sm font-semibold bg-blue-600 text-white shadow";
+
+            if (tab === 'suppliers') renderSuppliers();
+            if (tab === 'inventory') renderInventory();
+        }
+
+        function addLog(agent, action, message, status = "SUCCESS") {
+            currentLogs.push({ agent, action, message, status, timestamp: new Date().toISOString() });
+            renderLogs();
+        }
+
+        function updateStepper(status) {
+            const steps = ["Intake", "Validating", "Inventory_Lookup", "Supplier_Sourcing", "Compliance_Check", "Pricing", "Pending_Approval", "Quote_Sent"];
+            steps.forEach(step => {
+                const el = document.getElementById(`step-${step}`);
+                if (el) el.className = "flex-1 py-2 px-1 rounded bg-slate-700 text-slate-400";
+            });
+            const activeEl = document.getElementById(`step-${status}`) || document.getElementById(`step-Pending_Approval`);
+            if (activeEl) {
+                if (status.includes("Failed") || status.includes("Blocked")) {
+                    activeEl.className = "flex-1 py-2 px-1 rounded bg-rose-900/80 border border-rose-500 text-rose-200 font-bold";
+                } else if (status.includes("Warning")) {
+                    activeEl.className = "flex-1 py-2 px-1 rounded bg-amber-900/80 border border-amber-500 text-amber-200 font-bold";
+                } else {
+                    activeEl.className = "flex-1 py-2 px-1 rounded bg-emerald-900/80 border border-emerald-500 text-emerald-200 font-bold";
+                }
+            }
+        }
+
+        function renderLogs() {
+            document.getElementById('log-count').innerText = `${currentLogs.length} Logs`;
+            const container = document.getElementById('logs-container');
+            container.innerHTML = currentLogs.map(l => {
+                let badgeClass = "bg-blue-900/60 text-blue-300 border-blue-700";
+                if (l.status === 'WARNING') badgeClass = "bg-amber-900/60 text-amber-300 border-amber-700";
+                if (l.status === 'FAILURE') badgeClass = "bg-rose-900/60 text-rose-300 border-rose-700";
+
+                return `
+                    <div class="bg-slate-900/80 border border-slate-700/80 rounded-lg p-3 text-xs space-y-1">
+                        <div class="flex items-center justify-between">
+                            <span class="font-bold text-slate-200"><i class="fa-solid fa-robot text-xs mr-1 text-purple-400"></i> ${l.agent}</span>
+                            <span class="border px-1.5 py-0.5 rounded text-[10px] ${badgeClass}">${l.status}</span>
+                        </div>
+                        <p class="text-slate-300 leading-snug">${l.message}</p>
+                        <div class="text-[10px] text-slate-500 font-mono">${new Date(l.timestamp).toLocaleTimeString()} • ${l.action}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function runPipeline() {
+            const rawText = document.getElementById('raw-rfq-input').value;
+            if (!rawText.trim()) return alert("Please enter or select an RFQ input text.");
+
+            currentLogs = [];
+            currentQuote = null;
+            document.getElementById('proposal-container').innerHTML = '';
+
+            // 1. RFQ Intake Agent
+            updateStepper("Intake");
+            addLog("RFQIntakeAgent", "intake_parse", "Parsed raw RFQ request from Delta MRO Services (procurement@deltamro.com).");
+            
+            let requestedPN = "060-1234-00";
+            let reqQty = 2;
+            if (rawText.includes("quantity 5") || rawText.includes("Qty: 5")) reqQty = 5;
+            if (rawText.includes("456-789-OH")) requestedPN = "456-789-OH";
+
+            // 2. Parts Intelligence Agent
+            updateStepper("Validating");
+            addLog("PartsIntelligenceAgent", "part_validation", `Resolved requested part number '${requestedPN}' to master catalog MPN '${requestedPN}'.`);
+
+            // 3. Inventory Agent
+            updateStepper("Inventory_Lookup");
+            const stockItems = database.inventory.filter(i => i.part_number === requestedPN);
+            let allocatedSource = "Inventory";
+            let unitCost = 1000.0;
+            let certType = "FAA 8130-3";
+            let hasTrace = true;
+
+            if (stockItems.length < reqQty) {
+                addLog("InventoryAgent", "stock_lookup", `Insufficient stock for '${requestedPN}'. Required ${reqQty}, found ${stockItems.length}. Activating supplier sourcing.`, "WARNING");
+                
+                // 4. Supplier Discovery Agent
+                updateStepper("Supplier_Sourcing");
+                const sQuotes = database.supplierQuotes[requestedPN] || [];
+                const best = sQuotes[0];
+                allocatedSource = "Supplier";
+                unitCost = best.unit_cost;
+                certType = best.certificate_type;
+                addLog("SupplierDiscoveryAgent", "supplier_search", `Sourced remaining units from supplier '${best.supplier_name}' at cost $${best.unit_cost.toFixed(2)}.`);
+            } else {
+                unitCost = stockItems[0].unit_cost;
+                certType = stockItems[0].certificate_type;
+                hasTrace = stockItems.every(i => i.has_full_trace);
+                addLog("InventoryAgent", "stock_lookup", `Allocated ${reqQty} units for '${requestedPN}' from internal warehouse stock.`);
+            }
+
+            // 5. Compliance Agent
+            updateStepper("Compliance_Check");
+            if (!hasTrace) {
+                addLog("ComplianceAgent", "compliance_audit", `Compliance warning: Item missing back-to-birth traceability record. Halting for operator waiver.`, "WARNING");
+                updateStepper("Compliance_Warning");
+                document.getElementById('rfq-status-badge').innerText = "Compliance_Warning";
+                document.getElementById('proposal-container').innerHTML = `
+                    <div class="bg-amber-900/30 border border-amber-700 rounded-lg p-4 text-xs text-amber-200 space-y-2">
+                        <h4 class="font-bold text-sm"><i class="fa-solid fa-triangle-exclamation"></i> Compliance Warning Checkpoint</h4>
+                        <p>Part number <strong>${requestedPN}</strong> lacks full traceability certification. Manual operator review is mandatory.</p>
+                    </div>`;
+                return;
+            } else {
+                addLog("ComplianceAgent", "compliance_audit", `Passed compliance review. Release certificate '${certType}' verified.`);
+            }
+
+            // 6. Pricing Agent
+            updateStepper("Pricing");
+            const margin = reqQty >= 5 ? 0.18 : 0.20;
+            const unitPrice = +(unitCost / (1 - margin)).toFixed(2);
+            const subtotal = +(unitPrice * reqQty).toFixed(2);
+            const freight = 50.0;
+            const total = +(subtotal + freight).toFixed(2);
+            addLog("PricingAgent", "pricing_calc", `Applied commercial markup (${(margin*100).toFixed(0)}%). Unit price: $${unitPrice.toFixed(2)}.`);
+
+            // 7. Quote Generation Agent
+            const quoteId = `QTE-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+            currentQuote = { id: quoteId, rfq_id: "RFQ-1092", part_number: requestedPN, quantity: reqQty, source: allocatedSource, certType, unit_price: unitPrice, subtotal, shipping_cost: freight, total_amount: total, status: "Pending_Approval" };
+            addLog("QuoteGenerationAgent", "quote_assembly", `Generated proposal '${quoteId}' with total value $${total.toFixed(2)}.`);
+
+            updateStepper("Pending_Approval");
+            document.getElementById('rfq-status-badge').innerText = "Pending_Approval";
+            renderProposal();
+        }
+
+        function renderProposal() {
+            const container = document.getElementById('proposal-container');
+            const q = currentQuote;
+            if (!q) return;
+
+            container.innerHTML = `
+                <div class="space-y-4">
+                    <div class="bg-slate-900 border border-slate-700 rounded-lg p-4 space-y-3 font-sans">
+                        <div class="flex items-center justify-between text-xs border-b border-slate-800 pb-2">
+                            <span class="font-bold text-blue-400">Quote ID: ${q.id}</span>
+                            <span class="text-slate-400">RFQ Ref: ${q.rfq_id}</span>
+                        </div>
+                        <div class="flex items-center justify-between border-b border-slate-700/60 py-2 text-xs">
+                            <div>
+                                <span class="font-bold text-white font-mono">${q.part_number}</span>
+                                <span class="text-[10px] bg-slate-700 px-1.5 rounded ml-2 text-slate-300">${q.source} (${q.certType})</span>
+                            </div>
+                            <div class="text-right">
+                                <span class="text-slate-400">Qty ${q.quantity} @ </span>
+                                <span class="font-bold text-emerald-400">$${q.unit_price.toFixed(2)}</span>
+                            </div>
+                        </div>
+                        <div class="pt-2 border-t border-slate-800 text-xs space-y-1 text-right">
+                            <div class="text-slate-400">Subtotal: <span class="text-slate-200">$${q.subtotal.toFixed(2)}</span></div>
+                            <div class="text-slate-400">Freight: <span class="text-slate-200">$${q.shipping_cost.toFixed(2)}</span></div>
+                            <div class="text-sm font-bold text-white pt-1">Total Due: <span class="text-emerald-400">$${q.total_amount.toFixed(2)}</span></div>
+                        </div>
+                    </div>
+
+                    ${q.status === 'Pending_Approval' ? `
+                        <div class="bg-slate-900/60 border border-slate-700 rounded-lg p-4 space-y-3">
+                            <h4 class="text-xs font-bold text-slate-200 uppercase tracking-wider"><i class="fa-solid fa-user-check text-blue-400 mr-1"></i> Commercial Human Approval Gate</h4>
+                            <input id="operator-name" type="text" value="John Doe (Commercial Manager)" class="w-full bg-slate-800 border border-slate-700 rounded p-2 text-xs text-white">
+                            <div class="flex space-x-2">
+                                <button onclick="approveQuote()" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded text-xs">
+                                    <i class="fa-solid fa-check mr-1"></i> Approve & Send Quote
+                                </button>
+                                <button onclick="rejectQuote()" class="bg-rose-900 hover:bg-rose-800 text-rose-200 font-bold py-2 px-3 rounded text-xs border border-rose-700">
+                                    <i class="fa-solid fa-xmark mr-1"></i> Reject
+                                </button>
+                            </div>
+                        </div>
+                    ` : `
+                        <div class="bg-emerald-900/40 border border-emerald-700 text-emerald-200 rounded-lg p-4 text-xs font-semibold text-center">
+                            <i class="fa-solid fa-circle-check text-base mb-1"></i><br>
+                            Quote Status: ${q.status}
+                        </div>
+                    `}
+                </div>
+            `;
+        }
+
+        function approveQuote() {
+            currentQuote.status = "Quote_Sent";
+            addLog("CustomerCommunicationAgent", "email_dispatch", `Sales proposal email sent to customer (procurement@deltamro.com).`);
+            updateStepper("Quote_Sent");
+            document.getElementById('rfq-status-badge').innerText = "Quote_Sent";
+            renderProposal();
+        }
+
+        function rejectQuote() {
+            currentQuote.status = "Rejected";
+            addLog("OrchestratorAgent", "human_rejection", `Proposal rejected by commercial operator.`, "WARNING");
+            updateStepper("Rejected");
+            document.getElementById('rfq-status-badge').innerText = "Rejected";
+            renderProposal();
+        }
+
+        function renderSuppliers() {
+            const grid = document.getElementById('suppliers-grid');
+            grid.innerHTML = database.suppliers.map(s => `
+                <div class="bg-slate-800 border border-slate-700 rounded-xl p-5 shadow space-y-3 font-sans">
+                    <div class="flex items-center justify-between border-b border-slate-700 pb-2">
+                        <h3 class="font-bold text-white text-base">${s.company_name}</h3>
+                        <span class="text-[10px] font-bold px-2 py-0.5 rounded ${s.approval_status === 'Approved' ? 'bg-emerald-900 text-emerald-300 border border-emerald-700' : 'bg-rose-900 text-rose-300 border border-rose-700'}">${s.approval_status}</span>
+                    </div>
+                    <div class="text-xs space-y-1.5 text-slate-300">
+                        <div><i class="fa-solid fa-user text-blue-400 w-4"></i> <strong>Contact:</strong> ${s.contact_name} (${s.contact_title})</div>
+                        <div><i class="fa-solid fa-envelope text-blue-400 w-4"></i> <strong>Email:</strong> ${s.email}</div>
+                        <div><i class="fa-solid fa-phone text-blue-400 w-4"></i> <strong>Phone:</strong> ${s.phone}</div>
+                        <div><i class="fa-solid fa-location-dot text-blue-400 w-4"></i> <strong>Address:</strong> ${s.address_line1}, ${s.city}, ${s.state_province}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderInventory() {
+            const tbody = document.getElementById('inventory-tbody');
+            tbody.innerHTML = database.inventory.map(i => `
+                <tr class="hover:bg-slate-800/60">
+                    <td class="p-3.5 font-bold font-mono text-white">${i.part_number}</td>
+                    <td class="p-3.5 font-mono text-slate-400">${i.serial_number}</td>
+                    <td class="p-3.5"><span class="px-2 py-0.5 rounded text-xs font-bold bg-slate-700 text-slate-200">${i.condition_code}</span></td>
+                    <td class="p-3.5 text-slate-300">${i.warehouse_location}</td>
+                    <td class="p-3.5 text-emerald-400 font-bold">$${i.unit_cost.toFixed(2)}</td>
+                    <td class="p-3.5 text-slate-300">${i.certificate_type}</td>
+                    <td class="p-3.5">
+                        <span class="px-2 py-0.5 rounded text-xs font-bold ${i.has_full_trace ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-700' : 'bg-amber-900/60 text-amber-300 border border-amber-700'}">
+                            ${i.has_full_trace ? 'Complete Trace' : 'Missing Trace'}
+                        </span>
+                    </td>
+                </tr>
+            `).join('');
+        }
+    </script>
+</body>
+</html>

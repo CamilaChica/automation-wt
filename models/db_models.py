@@ -1,0 +1,120 @@
+from datetime import datetime
+from typing import List, Optional
+from pydantic import BaseModel, Field
+
+class RFQItem(BaseModel):
+    id: str = Field(description="Unique ID for the RFQ item")
+    rfq_id: str = Field(description="Associated RFQ ID")
+    requested_part_number: str = Field(description="Unvalidated part number requested by customer")
+    resolved_part_number: Optional[str] = Field(None, description="Validated and cleaned part number")
+    quantity: int = Field(description="Requested quantity")
+    uom: str = Field("EA", description="Unit of Measure (EA, KIT, ASSY, etc.)")
+    aircraft_type: Optional[str] = Field(None, description="E.g., B737, A320")
+    condition_preference: Optional[str] = Field("NE", description="Condition preference: NE (New), NS (New Surplus), OH (Overhauled), AR (As Removed)")
+
+class RFQIntakeOutput(BaseModel):
+    """Structured output produced by RFQIntakeAgent from an unstructured RFQ text."""
+    rfq_id: str = Field(description="Unique generated RFQ identifier")
+    status: str = Field(description="COMPLETE if all mandatory fields present, NEEDS_CLARIFICATION otherwise")
+    customer_name: Optional[str] = Field(None, description="Customer contact name")
+    company: Optional[str] = Field(None, description="Customer company name")
+    part_number: Optional[str] = Field(None, description="Normalized part number (uppercase, trimmed)")
+    quantity: Optional[int] = Field(None, description="Requested quantity as integer")
+    condition: Optional[str] = Field(None, description="Part condition code: NE, NS, OH, AR")
+    required_date: Optional[str] = Field(None, description="Required delivery date (ISO 8601 or free text)")
+    delivery_location: Optional[str] = Field(None, description="Delivery destination")
+    AOG_status: bool = Field(False, description="True if this is an Aircraft on Ground emergency request")
+    certification_requirements: List[str] = Field(default_factory=list, description="Required certs, e.g. FAA 8130-3, EASA Form 1")
+    additional_requirements: Optional[str] = Field(None, description="Any extra requirements not covered by other fields")
+    priority: str = Field("Routine", description="AOG | Urgent | Routine")
+    missing_fields: List[str] = Field(default_factory=list, description="Mandatory fields that could not be extracted")
+    ambiguous_fields: List[str] = Field(default_factory=list, description="Fields whose values are ambiguous and need clarification")
+
+
+class RFQ(BaseModel):
+    id: str = Field(description="Unique ID for the RFQ")
+    customer_name: str = Field(description="Name of the customer company or contact")
+    customer_email: str = Field(description="Contact email")
+    status: str = Field("Intake", description="Intake, Validating, Supplier_Sourcing, Compliance_Check, Pricing, Pending_Approval, Quote_Sent, Rejected")
+    raw_text: str = Field(description="Raw unstructured text from email or document")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class InventoryItem(BaseModel):
+    id: str = Field(description="Unique inventory item record ID")
+    part_number: str = Field(description="Validated part number")
+    serial_number: str = Field(description="Unique manufacturer serial number")
+    quantity_available: int = Field(description="In-stock count")
+    condition_code: str = Field(description="Condition code: NE, NS, OH, AR")
+    warehouse_location: str = Field(description="Warehouse bin location")
+    unit_cost: float = Field(description="Acquisition unit cost in USD")
+    certificate_type: str = Field(description="Certificate of conformance type: FAA 8130-3, EASA Form 1, CoC, None")
+    has_full_trace: bool = Field(True, description="Indicates if full historical traceability is available")
+
+class Supplier(BaseModel):
+    id: str = Field(description="Unique supplier ID")
+    company_name: str = Field(description="Legal company name")
+    dba_name: Optional[str] = Field(None, description="Doing-Business-As name if different from legal name")
+    contact_name: str = Field(description="Primary point-of-contact full name")
+    contact_title: Optional[str] = Field(None, description="Contact's job title (e.g., Sales Manager)")
+    phone: str = Field(description="Primary phone number (include country code)")
+    phone_alt: Optional[str] = Field(None, description="Alternate or after-hours phone number")
+    email: str = Field(description="Primary contact email address")
+    email_quotes: Optional[str] = Field(None, description="Dedicated quotes or procurement email")
+    website: Optional[str] = Field(None, description="Company website URL")
+    address_line1: str = Field(description="Street address line 1")
+    address_line2: Optional[str] = Field(None, description="Suite, unit, or building number")
+    city: str = Field(description="City")
+    state_province: str = Field(description="State or province code (e.g., FL, CA)")
+    postal_code: str = Field(description="ZIP or postal code")
+    country: str = Field("US", description="ISO 3166-1 alpha-2 country code")
+    approval_status: str = Field("Approved", description="Approved | Conditional | Unapproved | On-Watch")
+    itar_certified: bool = Field(False, description="True if supplier holds ITAR certification")
+    account_manager: Optional[str] = Field(None, description="Winged Tycoons account manager responsible for this supplier")
+    notes: Optional[str] = Field(None, description="Internal notes about the supplier relationship")
+
+class SupplierQuote(BaseModel):
+    id: str = Field(description="Unique quote ID from supplier")
+    rfq_item_id: str = Field(description="Associated RFQ item ID")
+    supplier_id: Optional[str] = Field(None, description="Reference to Supplier.id")
+    supplier_name: str = Field(description="External supplier name")
+    contact_email: Optional[str] = Field(None, description="Contact email at supplier for this quote")
+    contact_phone: Optional[str] = Field(None, description="Contact phone at supplier for this quote")
+    part_number: str = Field(description="Part number offered by supplier")
+    unit_cost: float = Field(description="Offered unit cost from supplier")
+    quantity_available: int = Field(description="Supplier inventory count")
+    lead_time_days: int = Field(description="Estimated days to deliver to Winged Tycoons")
+    certificate_type: str = Field(description="Certificate type: FAA 8130-3, EASA Form 1, CoC, None")
+
+class QuoteItem(BaseModel):
+    id: str = Field(description="Unique quote item ID")
+    quote_id: str = Field(description="Associated Quote ID")
+    rfq_item_id: str = Field(description="Associated RFQ item ID")
+    part_number: str = Field(description="Offered part number")
+    quantity: int = Field(description="Quantity quoted")
+    source: str = Field(description="Source of part: 'Inventory' or 'Supplier'")
+    unit_cost: float = Field(description="Unit cost from source in USD")
+    unit_price: float = Field(description="Calculated or adjusted customer unit price in USD")
+    margin_percent: float = Field(description="Profit margin percentage")
+    certificate_type: str = Field(description="Form of release certificate")
+    compliance_status: str = Field("Pass", description="Pass, Warn, Fail")
+
+class Quote(BaseModel):
+    id: str = Field(description="Unique quote ID")
+    rfq_id: str = Field(description="Associated RFQ ID")
+    subtotal: float = Field(0.0, description="Sum of quote items")
+    shipping_cost: float = Field(0.0, description="Calculated shipping cost")
+    total_amount: float = Field(0.0, description="Subtotal + shipping + taxes")
+    status: str = Field("Draft", description="Draft, Approved, Rejected, Sent")
+    comments: Optional[str] = Field(None, description="Review notes or rejection reasons")
+    approved_by: Optional[str] = Field(None, description="Authorized human user name")
+    approved_at: Optional[datetime] = Field(None, description="Approval timestamp")
+
+class AgentAuditLog(BaseModel):
+    id: Optional[int] = Field(None, description="Autoincrement log ID")
+    rfq_id: str = Field(description="Associated RFQ ID")
+    agent_name: str = Field(description="Name of the agent creating the log")
+    action_type: str = Field(description="Action executed (e.g., parse_rfq, check_stock)")
+    message: str = Field(description="Human readable description of the action")
+    status: str = Field("SUCCESS", description="SUCCESS, WARNING, FAILURE")
+    payload_json: Optional[str] = Field(None, description="Serialized JSON payload of details, inputs, or outputs")
+    timestamp: datetime = Field(default_factory=datetime.utcnow)

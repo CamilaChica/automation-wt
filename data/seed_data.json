@@ -1,0 +1,196 @@
+{
+  "catalog": [
+    {
+      "part_number": "060-1234-00",
+      "description": "Weather Radar Receiver-Transmitter (B737)",
+      "uom": "EA"
+    },
+    {
+      "part_number": "456-789-OH",
+      "description": "Actuator Assembly (A320)",
+      "uom": "EA"
+    }
+  ],
+  "inventory": [
+    {
+      "id": "INV-001",
+      "part_number": "060-1234-00",
+      "serial_number": "SN-WR-001",
+      "quantity_available": 1,
+      "condition_code": "NE",
+      "warehouse_location": "Aisle 3, Bin B4",
+      "unit_cost": 1000.0,
+      "certificate_type": "FAA 8130-3",
+      "has_full_trace": true
+    },
+    {
+      "id": "INV-002",
+      "part_number": "060-1234-00",
+      "serial_number": "SN-WR-002",
+      "quantity_available": 1,
+      "condition_code": "NE",
+      "warehouse_location": "Aisle 3, Bin B5",
+      "unit_cost": 1000.0,
+      "certificate_type": "FAA 8130-3",
+      "has_full_trace": true
+    },
+    {
+      "id": "INV-003",
+      "part_number": "456-789-OH",
+      "serial_number": "SN-ACT-981",
+      "quantity_available": 1,
+      "condition_code": "OH",
+      "warehouse_location": "Aisle 12, Bin C1",
+      "unit_cost": 450.0,
+      "certificate_type": "EASA Form 1",
+      "has_full_trace": true
+    },
+    {
+      "id": "INV-004",
+      "part_number": "456-789-OH",
+      "serial_number": "SN-ACT-982",
+      "quantity_available": 1,
+      "condition_code": "OH",
+      "warehouse_location": "Aisle 12, Bin C2",
+      "unit_cost": 450.0,
+      "certificate_type": "FAA 8130-3",
+      "has_full_trace": false
+    }
+  ],
+  "supplier_contacts": [
+    {
+      "id": "SUP-001",
+      "company_name": "Apex Aero Components LLC",
+      "dba_name": "Apex Aero",
+      "contact_name": "Robert Hartwell",
+      "contact_title": "Director of Sales",
+      "phone": "+1-305-555-0142",
+      "phone_alt": "+1-305-555-0199",
+      "email": "r.hartwell@apexaero.com",
+      "email_quotes": "quotes@apexaero.com",
+      "website": "https://www.apexaerocomponents.com",
+      "address_line1": "4521 NW 36th Street",
+      "address_line2": "Suite 210",
+      "city": "Miami",
+      "state_province": "FL",
+      "postal_code": "33166",
+      "country": "US",
+      "approval_status": "Approved",
+      "itar_certified": true,
+      "account_manager": "Sarah Liu",
+      "notes": "Preferred Boeing parts supplier. Net-30 payment terms."
+    },
+    {
+      "id": "SUP-002",
+      "company_name": "Vanguard Aviation Spares Inc.",
+      "dba_name": null,
+      "contact_name": "Maria Fontaine",
+      "contact_title": "Procurement Manager",
+      "phone": "+1-972-555-0378",
+      "phone_alt": null,
+      "email": "m.fontaine@vanguardspares.com",
+      "email_quotes": "procurement@vanguardspares.com",
+      "website": "https://www.vanguardspares.com",
+      "address_line1": "7800 Sovereign Row",
+      "address_line2": null,
+      "city": "Dallas",
+      "state_province": "TX",
+      "postal_code": "75247",
+      "country": "US",
+      "approval_status": "Approved",
+      "itar_certified": true,
+      "account_manager": "Sarah Liu",
+      "notes": "Secondary Boeing parts supplier. Slightly longer lead times."
+    },
+    {
+      "id": "SUP-003",
+      "company_name": "Horizon MRO Parts Ltd.",
+      "dba_name": null,
+      "contact_name": "David Okonkwo",
+      "contact_title": "Sales Representative",
+      "phone": "+1-404-555-0215",
+      "phone_alt": "+1-404-555-0216",
+      "email": "d.okonkwo@horizonmro.com",
+      "email_quotes": "sales@horizonmro.com",
+      "website": "https://www.horizonmroparts.com",
+      "address_line1": "1250 Peachtree Industrial Blvd",
+      "address_line2": "Unit 5B",
+      "city": "Atlanta",
+      "state_province": "GA",
+      "postal_code": "30341",
+      "country": "US",
+      "approval_status": "Approved",
+      "itar_certified": false,
+      "account_manager": "James Okafor",
+      "notes": "Airbus parts specialist. Fast turnaround for OH condition parts."
+    },
+    {
+      "id": "SUP-004",
+      "company_name": "Suspect Supplier Corporation",
+      "dba_name": null,
+      "contact_name": "Unknown",
+      "contact_title": null,
+      "phone": "+1-000-000-0000",
+      "phone_alt": null,
+      "email": "info@suspectsupplier.com",
+      "email_quotes": null,
+      "website": null,
+      "address_line1": "Unknown",
+      "address_line2": null,
+      "city": "Unknown",
+      "state_province": "XX",
+      "postal_code": "00000",
+      "country": "US",
+      "approval_status": "Unapproved",
+      "itar_certified": false,
+      "account_manager": null,
+      "notes": "FLAGGED: Unapproved vendor. Do not source without QA and compliance sign-off."
+    }
+  ],
+  "suppliers": [
+    {
+      "supplier_id": "SUP-001",
+      "supplier_name": "Apex Aero Components",
+      "contact_email": "quotes@apexaero.com",
+      "contact_phone": "+1-305-555-0142",
+      "part_number": "060-1234-00",
+      "unit_cost": 1100.0,
+      "quantity_available": 10,
+      "lead_time_days": 3,
+      "certificate_type": "FAA 8130-3"
+    },
+    {
+      "supplier_id": "SUP-002",
+      "supplier_name": "Vanguard Spares",
+      "contact_email": "procurement@vanguardspares.com",
+      "contact_phone": "+1-972-555-0378",
+      "part_number": "060-1234-00",
+      "unit_cost": 1050.0,
+      "quantity_available": 3,
+      "lead_time_days": 7,
+      "certificate_type": "FAA 8130-3"
+    },
+    {
+      "supplier_id": "SUP-003",
+      "supplier_name": "Horizon MRO Parts",
+      "contact_email": "sales@horizonmro.com",
+      "contact_phone": "+1-404-555-0215",
+      "part_number": "456-789-OH",
+      "unit_cost": 500.0,
+      "quantity_available": 5,
+      "lead_time_days": 2,
+      "certificate_type": "FAA 8130-3"
+    },
+    {
+      "supplier_id": "SUP-004",
+      "supplier_name": "Suspect Supplier Corp",
+      "contact_email": "info@suspectsupplier.com",
+      "contact_phone": "+1-000-000-0000",
+      "part_number": "456-789-OH",
+      "unit_cost": 300.0,
+      "quantity_available": 1,
+      "lead_time_days": 1,
+      "certificate_type": "None"
+    }
+  ]
+}
