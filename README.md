@@ -49,6 +49,21 @@ uvicorn api.main:app --reload --host 127.0.0.1 --port 8000
 
 The API is available at `http://127.0.0.1:8000`. Interactive OpenAPI documentation is available at `http://127.0.0.1:8000/docs`.
 
+### Deploying to Render
+
+The repository includes `render.yaml` for the FastAPI web service and a separate
+mailbox worker. Create a Render Blueprint from the repository, set every
+`sync: false` variable in the Render dashboard, and do not commit a `.env` file.
+Set `WT_AUTH_ENV=production` and generate a unique `WT_AUTH_SECRET`. The worker
+requires a long-running worker plan; a serverless-only plan cannot poll IMAP.
+Set `FRONTEND_ORIGIN` to the deployed frontend URL and set the frontend
+`VITE_API_BASE_URL` to the deployed API URL plus `/api`, for example
+`https://winged-tycoons-api.onrender.com/api`.
+
+The current worker validates mailbox connectivity and logs header counts. Message
+persistence, assignment, and outbound attribution should be enabled only after
+the first safe IMAP smoke test succeeds.
+
 ## Run the Frontend
 
 In a second terminal:
@@ -60,6 +75,34 @@ npm run dev
 ```
 
 Open `http://localhost:3000`. Vite proxies frontend requests from `/api` to the local backend at `http://127.0.0.1:8000`.
+
+The customer-facing parts portal is available at `http://localhost:3000/customer-portal` (or `/portal`).
+Publish that path behind the Winged Tycoons website navigation, for example as
+`https://wingedtycoons.com/customer-portal`. Configure the web host to fall back to
+`index.html` for this SPA route. Keep `/api/catalog/search` as the only catalog endpoint
+exposed to unauthenticated customers; it intentionally excludes internal costs, serial
+numbers, and warehouse locations.
+
+Both application surfaces require role-specific email OTP sign-in. The initial
+local admin is `camila@wingedtycoons.com`; development mode returns the OTP in
+the API response so the flow can be tested without an email provider. Set
+`WT_AUTH_ENV=production` before deployment to disable that behavior.
+The API returns `401` for missing/invalid sessions and `403` when a valid user attempts
+to cross role boundaries; internal inventory, suppliers, approvals, and RFQ operations
+are not exposed to customer-role tokens.
+
+The local mailbox adapter is in `services/mailbox_service.py`. Copy `.env.example`
+to a local `.env` or configure equivalent process environment variables. Set
+`SALES_EMAIL_PASSWORD` and `PURCHASING_EMAIL_PASSWORD` for the two separate
+mailboxes; passwords are never written to SQLite or source code. It reads each
+`INBOX` over IMAP on `outlook.office365.com:993` and sends through
+`smtp.office365.com:587`. In production, set `WT_AUTH_ENV=production` so OTPs
+are sent through the Sales mailbox instead of being returned in API responses.
+
+For local mailbox testing, set the four mailbox variables in the process
+environment, then run `python worker.py`. Stop the worker after confirming both
+mailboxes can be read. Do not test against production mailboxes until you have
+verified the credentials and Microsoft 365 tenant policy.
 
 Useful frontend commands:
 
@@ -87,6 +130,7 @@ The tests cover the clean inventory flow, supplier sourcing fallback, compliance
 - `GET /api/rfqs/{rfq_id}` - Retrieve RFQ details, quote data, and audit logs
 - `POST /api/rfqs/{rfq_id}/process` - Advance an RFQ through the workflow
 - `GET /api/inventory` - List mock inventory
+- `GET /api/catalog/search?query=...` - Customer-safe part availability search
 - `GET /api/suppliers` - List suppliers
 - `GET /api/suppliers/{supplier_id}` - Retrieve a supplier
 - `POST /api/quotes/{quote_id}/approve` - Approve and send a quote, optionally with price overrides

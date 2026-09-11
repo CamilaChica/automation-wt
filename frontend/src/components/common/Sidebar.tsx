@@ -113,6 +113,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) =
             <Settings className="w-4 h-4 text-slate-400" />
             <span>Account Settings</span>
           </button>
+          <a href="/customer-portal" className="w-full flex items-center space-x-3 px-3 py-2 text-xs text-aero-blue hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors">
+            <Search className="w-4 h-4" />
+            <span>Open Customer Portal</span>
+          </a>
         </div>
       </div>
 

@@ -1,7 +1,20 @@
 import axios from 'axios';
 import { RFQ, RFQDetailResponse, InventoryItem, Supplier, Quote, QuoteItem, AgentAuditLog } from '../types';
 
-const API_BASE = '/api';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
+
+axios.interceptors.request.use(config => {
+  const token = localStorage.getItem('wt_access_token');
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+const rethrowAuthError = (error: unknown): never => {
+  if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) {
+    throw error;
+  }
+  throw error;
+};
 
 export const mockRFQs: RFQ[] = [
   {
@@ -157,11 +170,42 @@ export const mockInventory: InventoryItem[] = [
 ];
 
 export const apiService = {
+  async requestOtp(email: string, role: 'ROLE_CUSTOMER' | 'ROLE_INTERNAL', fullName = ''): Promise<{ challenge_id: string; development_otp?: string }> {
+    const res = await axios.post(`${API_BASE}/auth/otp/request`, { email, role, full_name: fullName });
+    return res.data;
+  },
+
+  async verifyOtp(challengeId: string, code: string): Promise<{ role: string; email: string }> {
+    const res = await axios.post(`${API_BASE}/auth/otp/verify`, { challenge_id: challengeId, code });
+    localStorage.setItem('wt_access_token', res.data.access_token);
+    localStorage.setItem('wt_role', res.data.role);
+    localStorage.setItem('wt_email', res.data.email);
+    return res.data;
+  },
+
+  logout() {
+    localStorage.removeItem('wt_access_token');
+    localStorage.removeItem('wt_role');
+    localStorage.removeItem('wt_email');
+  },
+
+  getRole(): 'customer' | 'internal' | null {
+    const role = localStorage.getItem('wt_role');
+    if (role === 'ROLE_CUSTOMER') return 'customer';
+    if (role === 'ROLE_ADMIN' || role === 'ROLE_MANAGER' || role === 'ROLE_SALES' || role === 'ROLE_PURCHASING') return 'internal';
+    return null;
+  },
+
+  isAuthenticated() {
+    return Boolean(localStorage.getItem('wt_access_token'));
+  },
+
   async getRFQs(): Promise<RFQ[]> {
     try {
       const res = await axios.get(`${API_BASE}/rfqs`);
       return res.data;
-    } catch {
+    } catch (error) {
+      if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
       return mockRFQs;
     }
   },
@@ -170,13 +214,39 @@ export const apiService = {
     try {
       const res = await axios.post(`${API_BASE}/rfqs/intake`, { raw_text });
       return res.data;
-    } catch {
+    } catch (error) {
+      if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
       const newId = `WT-${Math.floor(10000 + Math.random() * 90000)}`;
       return {
         rfq_id: newId,
         status: 'Quoted',
         message: 'RFQ processed successfully via agent pipeline.'
       };
+    }
+  },
+
+  async submitCustomerRFQ(raw_text: string, customer_name: string, customer_email: string): Promise<{ rfq_id: string; status: string; message: string }> {
+    try {
+      const res = await axios.post(`${API_BASE}/rfqs/intake`, { raw_text, customer_name, customer_email });
+      return res.data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
+      return this.submitRFQ(raw_text);
+    }
+  },
+
+  async searchCatalog(query: string): Promise<Array<Pick<InventoryItem, 'part_number' | 'condition_code' | 'quantity_available' | 'certificate_type' | 'has_full_trace'>>> {
+    try {
+      const res = await axios.get(`${API_BASE}/catalog/search`, { params: { query } });
+      return res.data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
+      const normalizedQuery = query.trim().toLowerCase();
+      return mockInventory
+        .filter(item => !normalizedQuery || item.part_number.toLowerCase().includes(normalizedQuery))
+        .map(({ part_number, condition_code, quantity_available, certificate_type, has_full_trace }) => ({
+          part_number, condition_code, quantity_available, certificate_type, has_full_trace
+        }));
     }
   },
 
@@ -278,7 +348,8 @@ export const apiService = {
     try {
       const res = await axios.get(`${API_BASE}/inventory`);
       return res.data;
-    } catch {
+    } catch (error) {
+      if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
       return mockInventory;
     }
   },
@@ -287,7 +358,8 @@ export const apiService = {
     try {
       const res = await axios.get(`${API_BASE}/suppliers`);
       return res.data;
-    } catch {
+    } catch (error) {
+      if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
       return mockSuppliers;
     }
   },

@@ -9,8 +9,15 @@ import { AeroProcurementView } from './components/views/AeroProcurementView';
 import { TraceVaultView } from './components/views/TraceVaultView';
 import { FulfillmentHubView } from './components/views/FulfillmentHubView';
 import { SalesCommandView } from './components/views/SalesCommandView';
+import { CustomerPortal } from './components/views/CustomerPortal';
+import { AuthScreen } from './components/common/AuthScreen';
+import { apiService } from './services/api';
 
-export const App: React.FC = () => {
+const InternalApp: React.FC = () => {
+  const [authenticated, setAuthenticated] = useState(apiService.getRole() === 'internal');
+  if (!authenticated) {
+    return <AuthScreen role="internal" onAuthenticated={() => setAuthenticated(true)} />;
+  }
   const [currentView, setCurrentView] = useState<ViewMode>('customer');
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [isAuditLogOpen, setIsAuditLogOpen] = useState(false);
@@ -136,5 +143,16 @@ export const App: React.FC = () => {
     </div>
   );
 };
+
+const CustomerPortalRoute: React.FC = () => {
+  const [authenticated, setAuthenticated] = useState(apiService.getRole() === 'customer');
+  return authenticated ? <CustomerPortal /> : <AuthScreen role="customer" onAuthenticated={() => setAuthenticated(true)} />;
+};
+
+export const App: React.FC = () => (
+  window.location.pathname === '/customer-portal' || window.location.pathname === '/portal'
+    ? <CustomerPortalRoute />
+    : <InternalApp />
+);
 
 export default App;
