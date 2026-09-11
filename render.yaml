@@ -40,8 +40,9 @@ services:
       - key: MAILBOX_POLL_INTERVAL_SECONDS
         value: "60"
 
-  - type: static
+  - type: web
     name: winged-tycoons-frontend
+    runtime: static
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
     rootDir: frontend
