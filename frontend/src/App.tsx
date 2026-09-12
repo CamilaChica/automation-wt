@@ -12,15 +12,21 @@ import { SalesCommandView } from './components/views/SalesCommandView';
 import { CustomerPortal } from './components/views/CustomerPortal';
 import { AuthScreen } from './components/common/AuthScreen';
 import { apiService } from './services/api';
+import { AppRole, canAccessView, canUsePermission, getAvailableViews, getDefaultInternalView } from './auth/permissions';
 
 const InternalApp: React.FC = () => {
+  const [role, setRole] = useState<AppRole | null>(apiService.getStoredRole());
   const [authenticated, setAuthenticated] = useState(apiService.getRole() === 'internal');
-  if (!authenticated) {
-    return <AuthScreen role="internal" onAuthenticated={() => setAuthenticated(true)} />;
-  }
-  const [currentView, setCurrentView] = useState<ViewMode>('customer');
+  const [currentView, setCurrentView] = useState<ViewMode>(getDefaultInternalView(role));
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [isAuditLogOpen, setIsAuditLogOpen] = useState(false);
+  const availableViews = getAvailableViews(role);
+
+  useEffect(() => {
+    if (!canAccessView(role, currentView)) {
+      setCurrentView(getDefaultInternalView(role));
+    }
+  }, [currentView, role]);
 
   const sampleLogs: AgentAuditLog[] = [
     {
@@ -89,10 +95,30 @@ const InternalApp: React.FC = () => {
     setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
   };
 
+  const onSelectView = (view: ViewMode) => {
+    if (canAccessView(role, view)) {
+      setCurrentView(view);
+    }
+  };
+
+  if (!authenticated) {
+    return <AuthScreen role="internal" onAuthenticated={() => {
+      setRole(apiService.getStoredRole());
+      setAuthenticated(true);
+    }} />;
+  }
+
   const renderActiveView = () => {
+    if (!canAccessView(role, currentView)) {
+      return (
+        <div className="mx-auto mt-10 max-w-xl rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+          This workspace is restricted for your role. Select another authorized view from the sidebar.
+        </div>
+      );
+    }
     switch (currentView) {
       case 'customer':
-        return <CustomerDashboard />;
+        return <CustomerDashboard role={role} />;
       case 'sourcing':
         return <SupplierSourcingView />;
       case 'aero-procurement':
@@ -102,9 +128,14 @@ const InternalApp: React.FC = () => {
       case 'fulfillment':
         return <FulfillmentHubView />;
       case 'sales':
-        return <SalesCommandView />;
+        return (
+          <SalesCommandView
+            canIssueQuotes={canUsePermission(role, 'quote.issue')}
+            canExportQuotes={canUsePermission(role, 'quote.export')}
+          />
+        );
       default:
-        return <CustomerDashboard />;
+        return <CustomerDashboard role={role} />;
     }
   };
 
@@ -115,17 +146,20 @@ const InternalApp: React.FC = () => {
       {/* Global Top App Bar */}
       <TopBar
         currentView={currentView}
+        role={role}
         theme={theme}
         onToggleTheme={toggleTheme}
-        onSelectView={setCurrentView}
-        onOpenAuditLog={() => setIsAuditLogOpen(true)}
+        onSelectView={onSelectView}
+        onOpenAuditLog={canUsePermission(role, 'audit.logs.view') ? () => setIsAuditLogOpen(true) : undefined}
       />
 
       {/* Main Content Layout (Sidebar + Active View) */}
       <div className="flex-1 flex overflow-hidden">
         <Sidebar
+          role={role}
+          availableViews={availableViews}
           currentView={currentView}
-          onSelectView={setCurrentView}
+          onSelectView={onSelectView}
         />
 
         <main className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950/60">

@@ -37,9 +37,9 @@ export default {
         }
       },
       fontFamily: {
-        display: ['"Space Grotesk"', 'sans-serif'],
-        sans: ['Inter', 'sans-serif'],
-        mono: ['"JetBrains Mono"', 'monospace']
+        display: ['Montserrat', 'sans-serif'],
+        sans: ['Montserrat', 'sans-serif'],
+        mono: ['Montserrat', 'sans-serif']
       },
       animation: {
         'pulse-fast': 'pulse 1.2s cubic-bezier(0.4, 0, 0.6, 1) infinite',

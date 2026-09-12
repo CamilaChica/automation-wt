@@ -11,7 +11,12 @@ import {
   UserCheck
 } from 'lucide-react';
 
-export const SalesCommandView: React.FC = () => {
+interface SalesCommandViewProps {
+  canIssueQuotes: boolean;
+  canExportQuotes: boolean;
+}
+
+export const SalesCommandView: React.FC<SalesCommandViewProps> = ({ canIssueQuotes, canExportQuotes }) => {
   const [selectedRfqId, setSelectedRfqId] = useState('WT-31005');
   const [unitPrice, setUnitPrice] = useState<number>(14200);
   const [marginPercent, setMarginPercent] = useState<number>(20);
@@ -25,6 +30,11 @@ export const SalesCommandView: React.FC = () => {
   };
 
   const handleIssueQuote = async () => {
+    if (!canIssueQuotes) {
+      setNotification('Your role is not authorized to issue quotes.');
+      setTimeout(() => setNotification(null), 5000);
+      return;
+    }
     setIssuing(true);
     await apiService.approveQuote(selectedRfqId.replace('WT-', 'QTE-'), 'Alex R. (Sales Lead)', [
       { quote_item_id: 'QITEM-01', unit_price: unitPrice }
@@ -227,11 +237,11 @@ export const SalesCommandView: React.FC = () => {
 
               {/* PDF & Excel Action buttons */}
               <div className="flex items-center space-x-2 pt-1">
-                <button className="flex-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-2 px-3 rounded-xl text-[10px] font-bold border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1.5 transition-colors">
+                <button disabled={!canExportQuotes} className="flex-1 bg-slate-100 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-2 px-3 rounded-xl text-[10px] font-bold border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1.5 transition-colors">
                   <FileText className="w-3.5 h-3.5 text-aog-red" />
                   <span>PDF Export</span>
                 </button>
-                <button className="flex-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-2 px-3 rounded-xl text-[10px] font-bold border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1.5 transition-colors">
+                <button disabled={!canExportQuotes} className="flex-1 bg-slate-100 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-2 px-3 rounded-xl text-[10px] font-bold border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1.5 transition-colors">
                   <Download className="w-3.5 h-3.5 text-emerald-500" />
                   <span>Excel Export</span>
                 </button>
@@ -241,11 +251,11 @@ export const SalesCommandView: React.FC = () => {
               <div className="grid grid-cols-2 gap-2 pt-1 font-display">
                 <button
                   onClick={handleIssueQuote}
-                  disabled={issuing}
-                  className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1.5 shadow-sm"
+                  disabled={issuing || !canIssueQuotes}
+                  className="bg-aero-blue hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1.5 shadow-sm"
                 >
                   <Send className="w-3.5 h-3.5" />
-                  <span>{issuing ? 'ISSUING...' : 'ISSUE QUOTE'}</span>
+                  <span>{canIssueQuotes ? (issuing ? 'ISSUING...' : 'ISSUE QUOTE') : 'ISSUE RESTRICTED'}</span>
                 </button>
                 <button className="bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 transition-colors">
                   ISSUE PO

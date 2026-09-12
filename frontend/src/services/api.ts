@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { RFQ, RFQDetailResponse, InventoryItem, Supplier, Quote, QuoteItem, AgentAuditLog } from '../types';
+import { AppPermission, AppRole, canUsePermission, isInternalRole, normalizeAppRole } from '../auth/permissions';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
@@ -190,10 +191,18 @@ export const apiService = {
   },
 
   getRole(): 'customer' | 'internal' | null {
-    const role = localStorage.getItem('wt_role');
+    const role = normalizeAppRole(localStorage.getItem('wt_role'));
     if (role === 'ROLE_CUSTOMER') return 'customer';
-    if (role === 'ROLE_ADMIN' || role === 'ROLE_MANAGER' || role === 'ROLE_SALES' || role === 'ROLE_PURCHASING') return 'internal';
+    if (isInternalRole(role)) return 'internal';
     return null;
+  },
+
+  getStoredRole(): AppRole | null {
+    return normalizeAppRole(localStorage.getItem('wt_role'));
+  },
+
+  hasPermission(permission: AppPermission): boolean {
+    return canUsePermission(this.getStoredRole(), permission);
   },
 
   isAuthenticated() {

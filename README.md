@@ -110,6 +110,15 @@ Useful frontend commands:
 npm run build    # Type-check and create a production build
 npm run lint     # Run the TypeScript compiler checks
 npm run preview  # Preview the production build locally
+npm run test:access        # Verify role-based view/action visibility
+npm run test:ui-regression # Run responsive + accessibility checks
+```
+
+For the first run of frontend E2E checks, install Playwright browser binaries:
+
+```powershell
+cd frontend
+npx playwright install chromium
 ```
 
 ## Run Tests
@@ -121,6 +130,20 @@ python -m unittest discover -s tests -p "test_*.py"
 ```
 
 The tests cover the clean inventory flow, supplier sourcing fallback, compliance escalation, RFQ intake, parts intelligence, and agent behavior.
+
+Frontend role/access and UI verification (from `frontend/`):
+
+```powershell
+npm run test:access
+npm run test:ui-regression
+```
+
+Access matrix enforced in the frontend:
+
+- `ROLE_CUSTOMER`: customer portal (`/customer-portal`)
+- `ROLE_SALES`: internal `customer`, `fulfillment`, `sales`
+- `ROLE_PURCHASING`: internal `customer`, `sourcing`, `aero-procurement`, `trace-vault`, `fulfillment`
+- `ROLE_MANAGER` and `ROLE_ADMIN`: all internal views
 
 ## API Overview
 

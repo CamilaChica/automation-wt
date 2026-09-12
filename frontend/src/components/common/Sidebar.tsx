@@ -1,5 +1,6 @@
 import React from 'react';
 import { ViewMode } from '../../types';
+import { AppRole, canAccessView } from '../../auth/permissions';
 import { 
   LayoutDashboard, 
   FileText, 
@@ -13,11 +14,13 @@ import {
 } from 'lucide-react';
 
 interface SidebarProps {
+  role: AppRole | null;
+  availableViews: ViewMode[];
   currentView: ViewMode;
   onSelectView: (view: ViewMode) => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ role, availableViews, currentView, onSelectView }) => {
   const navItems = [
     {
       id: 'customer' as ViewMode,
@@ -65,7 +68,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) =
         </div>
 
         <nav className="space-y-1">
-          {navItems.map((item) => {
+          {navItems.filter(item => canAccessView(role, item.id)).map((item) => {
             const Icon = item.icon;
             const isActive = currentView === item.id;
 
@@ -117,6 +120,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) =
             <Search className="w-4 h-4" />
             <span>Open Customer Portal</span>
           </a>
+          {availableViews.length === 0 && (
+            <p className="px-3 py-2 text-[10px] text-amber-600">No authorized internal views for this role.</p>
+          )}
         </div>
       </div>
 

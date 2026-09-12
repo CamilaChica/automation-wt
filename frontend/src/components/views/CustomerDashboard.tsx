@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { WorkflowStepper } from '../common/WorkflowStepper';
+import { PermissionGate } from '../common/PermissionGate';
 import { apiService } from '../../services/api';
 import { RFQ } from '../../types';
+import { AppRole, canUsePermission } from '../../auth/permissions';
 import { 
   Send, 
   CheckCircle, 
@@ -34,7 +36,12 @@ import {
 
 type ClientTab = 'quotations' | 'new-rfq' | 'tracking' | 'trace-vault' | 'analytics';
 
-export const CustomerDashboard: React.FC = () => {
+interface CustomerDashboardProps {
+  role: AppRole | null;
+}
+
+export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({ role }) => {
+  const canApproveQuotes = canUsePermission(role, 'quote.approve');
   const [activeTab, setActiveTab] = useState<ClientTab>('quotations');
 
   // Form State for RFQ
@@ -190,6 +197,14 @@ export const CustomerDashboard: React.FC = () => {
   };
 
   const handleApproveQuote = async () => {
+    if (!canApproveQuotes) {
+      setNotification({
+        type: 'info',
+        message: 'Your role does not have approval access for purchase order dispatch.',
+      });
+      setTimeout(() => setNotification(null), 5000);
+      return;
+    }
     await apiService.approveQuote(`QTE-${selectedRfqId.replace('WT-', '')}`, approverName);
     setIsApproveModalOpen(false);
     
@@ -576,13 +591,26 @@ export const CustomerDashboard: React.FC = () => {
                 </div>
 
                 <div className="mt-4 flex flex-col sm:flex-row items-center gap-3">
-                  <button
-                    onClick={() => setIsApproveModalOpen(true)}
-                    className="w-full sm:flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-display font-bold py-2.5 px-4 rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 transition-all transform active:scale-95"
+                  <PermissionGate
+                    role={role}
+                    permission="quote.approve"
+                    fallback={
+                      <button
+                        disabled
+                        className="w-full sm:flex-1 cursor-not-allowed rounded-xl border border-slate-200 bg-slate-100 px-4 py-2.5 text-xs font-display font-semibold text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-500"
+                      >
+                        APPROVAL RESTRICTED BY ROLE
+                      </button>
+                    }
                   >
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>APPROVE & ISSUE PURCHASE ORDER</span>
-                  </button>
+                    <button
+                      onClick={() => setIsApproveModalOpen(true)}
+                      className="w-full sm:flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-display font-bold py-2.5 px-4 rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 transition-all transform active:scale-95"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>APPROVE & ISSUE PURCHASE ORDER</span>
+                    </button>
+                  </PermissionGate>
 
                   <button
                     onClick={() => openDocViewer('8130-3-2026-99', selectedRfq.part_number || '32-11-45-01', 'MLG-9840', 'FAA 8130-3 Airworthiness Release', '2026-08-28')}
@@ -1148,7 +1176,7 @@ export const CustomerDashboard: React.FC = () => {
       {/* 5. MODALS */}
 
       {/* APPROVE QUOTE MODAL */}
-      {isApproveModalOpen && (
+      {isApproveModalOpen && canApproveQuotes && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-700 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 animate-fade-in">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
