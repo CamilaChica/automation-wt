@@ -33,6 +33,11 @@ export interface RFQ {
   best_price?: number;
   lead_time?: string;
   delivery_location?: string;
+  lifecycle_status?: 'Pending' | 'PO Pending' | 'Solved';
+  quote_id?: string;
+  quote_total?: number;
+  po_status?: string;
+  updated_at?: string;
 }
 
 export interface InventoryItem {
@@ -100,6 +105,8 @@ export interface QuoteItem {
   margin_percent: number;
   certificate_type: string;
   compliance_status: 'Pass' | 'Warn' | 'Fail';
+  supplier_id?: string;
+  supplier_name?: string;
 }
 
 export interface Quote {
@@ -133,4 +140,38 @@ export interface RFQDetailResponse {
     quote: Quote;
     items: QuoteItem[];
   };
+}
+
+export interface IntakeResult {
+  rfq_id: string;
+  status: string;
+  message: string;
+  quote_id?: string;
+  instant_price?: number;
+  available_quantity?: number;
+  source?: string;
+}
+
+export interface ProcurementOverview {
+  supplier_inventory: Array<{
+    id: string;
+    part_number: string;
+    quantity_available: number;
+    condition_code: string;
+    certificate_type: string;
+    unit_cost: number;
+    supplier_id?: string;
+    supplier_name: string;
+  }>;
+  active_purchase_orders: Array<{
+    id: string;
+    rfq_id: string;
+    quote_id: string;
+    supplier_id?: string;
+    supplier_name: string;
+    part_number: string;
+    quantity: number;
+    status: string;
+    created_at: string;
+  }>;
 }

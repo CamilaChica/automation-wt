@@ -73,6 +73,56 @@ def fetch_inbox_headers(mailbox: str, limit: int = 25) -> list[dict[str, str]]:
             pass
 
 
+def fetch_inbox_messages(mailbox: str, limit: int = 10) -> list[dict[str, str]]:
+    username, password = _credentials(mailbox)
+    client = imaplib.IMAP4_SSL("outlook.office365.com", 993)
+    try:
+        client.login(username, password)
+        status, _ = client.select("INBOX", readonly=True)
+        if status != "OK":
+            raise RuntimeError("Unable to open mailbox INBOX.")
+        status, data = client.search(None, "ALL")
+        if status != "OK":
+            raise RuntimeError("Unable to search mailbox.")
+        message_ids = data[0].split()[-limit:]
+        messages = []
+        for message_id in reversed(message_ids):
+            status, message_data = client.fetch(message_id, "(RFC822)")
+            if status != "OK":
+                continue
+            raw_message = b"".join(part for part in message_data if isinstance(part, tuple))
+            parsed = email.message_from_bytes(raw_message)
+            body = ""
+            if parsed.is_multipart():
+                for part in parsed.walk():
+                    content_type = part.get_content_type()
+                    content_disposition = str(part.get("Content-Disposition", ""))
+                    if content_type == "text/plain" and "attachment" not in content_disposition:
+                        payload = part.get_payload(decode=True)
+                        body = (payload or b"").decode(errors="ignore")
+                        break
+            else:
+                payload = parsed.get_payload(decode=True)
+                body = (payload or b"").decode(errors="ignore")
+
+            messages.append(
+                {
+                    "mailbox": mailbox,
+                    "message_id": message_id.decode(),
+                    "from": parsed.get("From", ""),
+                    "subject": parsed.get("Subject", ""),
+                    "date": parsed.get("Date", ""),
+                    "body": body.strip(),
+                }
+            )
+        return messages
+    finally:
+        try:
+            client.logout()
+        except imaplib.IMAP4.error:
+            pass
+
+
 def send_message(mailbox: str, recipient: str, subject: str, body: str, reply_to: Optional[str] = None) -> None:
     username, password = _credentials(mailbox)
     message = EmailMessage()

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { RFQ, RFQDetailResponse, InventoryItem, Supplier, Quote, QuoteItem, AgentAuditLog } from '../types';
+import { RFQ, RFQDetailResponse, InventoryItem, Supplier, AgentAuditLog, IntakeResult, ProcurementOverview } from '../types';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
@@ -210,7 +210,7 @@ export const apiService = {
     }
   },
 
-  async submitRFQ(raw_text: string): Promise<{ rfq_id: string; status: string; message: string }> {
+  async submitRFQ(raw_text: string): Promise<IntakeResult> {
     try {
       const res = await axios.post(`${API_BASE}/rfqs/intake`, { raw_text });
       return res.data;
@@ -220,12 +220,15 @@ export const apiService = {
       return {
         rfq_id: newId,
         status: 'Quoted',
-        message: 'RFQ processed successfully via agent pipeline.'
+        message: 'RFQ processed successfully via agent pipeline.',
+        instant_price: 14200,
+        available_quantity: 1,
+        source: 'Inventory'
       };
     }
   },
 
-  async submitCustomerRFQ(raw_text: string, customer_name: string, customer_email: string): Promise<{ rfq_id: string; status: string; message: string }> {
+  async submitCustomerRFQ(raw_text: string, customer_name: string, customer_email: string): Promise<IntakeResult> {
     try {
       const res = await axios.post(`${API_BASE}/rfqs/intake`, { raw_text, customer_name, customer_email });
       return res.data;
@@ -364,18 +367,56 @@ export const apiService = {
     }
   },
 
-  async approveQuote(quote_id: string, operator_name: string, overrides?: any[]): Promise<any> {
+  async approveQuote(
+    quote_id: string,
+    operator_name: string,
+    overrides?: Array<{ quote_item_id: string; unit_price: number }>,
+    compliance_signed = false
+  ): Promise<{ status: string; quote_id: string; message?: string; purchase_orders?: Array<{ po_id: string; supplier_name: string; part_number: string; quantity: number }> }> {
     try {
       const res = await axios.post(`${API_BASE}/quotes/${quote_id}/approve`, {
         operator_name,
-        items_override: overrides
+        items_override: overrides,
+        compliance_signed
       });
       return res.data;
     } catch {
       return {
         status: 'Sent',
         quote_id,
-        message: `Quote ${quote_id} approved by ${operator_name}. Outbound email dispatched.`
+        message: `Quote ${quote_id} approved by ${operator_name}. Outbound email dispatched.`,
+        purchase_orders: compliance_signed ? [{ po_id: `PO-${quote_id}`, supplier_name: 'Supplier', part_number: 'Unknown', quantity: 1 }] : []
+      };
+    }
+  },
+
+  async getSalesClientRfqs(): Promise<RFQ[]> {
+    try {
+      const res = await axios.get(`${API_BASE}/sales/client-rfqs`);
+      return res.data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
+      return mockRFQs.map(item => ({ ...item, lifecycle_status: 'Pending' as const }));
+    }
+  },
+
+  async getProcurementOverview(): Promise<ProcurementOverview> {
+    try {
+      const res = await axios.get(`${API_BASE}/procurement/overview`);
+      return res.data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
+      return {
+        supplier_inventory: mockInventory.map((item) => ({
+          id: item.id,
+          part_number: item.part_number,
+          quantity_available: item.quantity_available,
+          condition_code: item.condition_code,
+          certificate_type: item.certificate_type,
+          unit_cost: item.unit_cost,
+          supplier_name: 'Winged Tycoons Internal',
+        })),
+        active_purchase_orders: [],
       };
     }
   },

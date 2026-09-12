@@ -1,109 +1,107 @@
-import React, { useState } from 'react';
-import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
+import React, { useEffect, useMemo, useState } from 'react';
+import { CheckCircle, Send } from 'lucide-react';
 import { apiService } from '../../services/api';
-import { 
-  Send, 
-  FileText, 
-  CheckCircle, 
-  Sliders, 
-  Download,
-  Mail,
-  UserCheck
-} from 'lucide-react';
+import { RFQ } from '../../types';
+import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 
 export const SalesCommandView: React.FC = () => {
-  const [selectedRfqId, setSelectedRfqId] = useState('WT-31005');
-  const [unitPrice, setUnitPrice] = useState<number>(14200);
-  const [marginPercent, setMarginPercent] = useState<number>(20);
-  const [shippingOption, setShippingOption] = useState<'NFO' | 'HotShot'>('HotShot');
+  const [rfqs, setRfqs] = useState<RFQ[]>([]);
+  const [selectedRfqId, setSelectedRfqId] = useState<string | null>(null);
   const [issuing, setIssuing] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
 
-  const calculateTotal = () => {
-    const shipping = shippingOption === 'HotShot' ? 250 : 120;
-    return unitPrice + shipping;
-  };
+  useEffect(() => {
+    const load = async () => {
+      const items = await apiService.getSalesClientRfqs();
+      setRfqs(items);
+      if (items.length > 0) {
+        setSelectedRfqId(items[0].id);
+      }
+    };
+    void load();
+  }, []);
+
+  const selected = useMemo(
+    () => rfqs.find((item) => item.id === selectedRfqId) || rfqs[0],
+    [rfqs, selectedRfqId]
+  );
+
+  const counts = useMemo(() => {
+    const pending = rfqs.filter((item) => item.lifecycle_status === 'Pending').length;
+    const poPending = rfqs.filter((item) => item.lifecycle_status === 'PO Pending').length;
+    const solved = rfqs.filter((item) => item.lifecycle_status === 'Solved').length;
+    return { pending, poPending, solved };
+  }, [rfqs]);
 
   const handleIssueQuote = async () => {
+    if (!selected?.quote_id) {
+      setNotification('Selected RFQ has no generated quote yet.');
+      return;
+    }
     setIssuing(true);
-    await apiService.approveQuote(selectedRfqId.replace('WT-', 'QTE-'), 'Alex R. (Sales Lead)', [
-      { quote_item_id: 'QITEM-01', unit_price: unitPrice }
-    ]);
+    const response = await apiService.approveQuote(
+      selected.quote_id,
+      'Alex R. (Sales Lead)',
+      undefined,
+      true
+    );
     setIssuing(false);
-    setNotification(`Quote ${selectedRfqId} issued to Global Airlines! Customer communication dispatched.`);
-    setTimeout(() => setNotification(null), 5000);
+    setNotification(
+      `Quote ${response.quote_id} approved. Auto-procurement generated ${response.purchase_orders?.length ?? 0} PO(s).`
+    );
+    const refreshed = await apiService.getSalesClientRfqs();
+    setRfqs(refreshed);
   };
-
-  const rfqInbox = [
-    { id: 'WT-31005', customer: 'Global Airlines', part: '32-11-45-01', ata: '32', urgency: 'AOG', timer: '0:14:31', status: 'Sourcing' },
-    { id: 'WT-31006', customer: 'Global Airlines', part: '32-11-45-01', ata: '1', urgency: 'SV', timer: '0:14:31', status: 'Quoted' },
-    { id: 'WT-31007', customer: 'Charter Fleet', part: '747-1011-00', ata: '32', urgency: 'AOG', timer: '0:14:31', status: 'Quoted' },
-    { id: 'WT-31008', customer: 'Global Airlines', part: '32-11-45-01', ata: '32', urgency: 'AOG', timer: '0:14:33', status: 'Sourcing' },
-    { id: 'WT-31002', customer: 'Charter Fleet', part: '32-11-45-01', ata: '1', urgency: 'AOG', timer: '0:14:33', status: 'Quoted' },
-    { id: 'WT-31003', customer: 'Charter Fleet', part: '32-11-45-01', ata: '1', urgency: 'OH', timer: '0:14:33', status: 'Quoted' },
-    { id: 'WT-31004', customer: 'MRO Ops', part: '747-1011-00', ata: '1', urgency: 'OH', timer: '0:14:33', status: 'Pending Customer' }
-  ];
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
-      {/* Toast Notification */}
       {notification && (
-        <div className="bg-emerald-50 dark:bg-emerald-500/20 border border-emerald-300 dark:border-emerald-500 text-emerald-800 dark:text-emerald-300 p-4 rounded-2xl flex items-center justify-between text-xs font-semibold animate-fade-in shadow-sm">
-          <div className="flex items-center space-x-2">
-            <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-            <span>{notification}</span>
-          </div>
-          <button onClick={() => setNotification(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-white">✕</button>
+        <div className="bg-emerald-50 dark:bg-emerald-500/20 border border-emerald-300 dark:border-emerald-500 text-emerald-800 dark:text-emerald-300 p-4 rounded-2xl text-xs font-semibold flex items-center gap-2">
+          <CheckCircle className="w-4 h-4" />
+          <span>{notification}</span>
         </div>
       )}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="rounded-2xl p-4 border bg-white dark:bg-card-dark">
+          <div className="text-xs uppercase text-slate-500">Pending</div>
+          <div className="text-2xl font-bold">{counts.pending}</div>
+        </div>
+        <div className="rounded-2xl p-4 border bg-white dark:bg-card-dark">
+          <div className="text-xs uppercase text-slate-500">PO Pending</div>
+          <div className="text-2xl font-bold">{counts.poPending}</div>
+        </div>
+        <div className="rounded-2xl p-4 border bg-white dark:bg-card-dark">
+          <div className="text-xs uppercase text-slate-500">Solved</div>
+          <div className="text-2xl font-bold">{counts.solved}</div>
+        </div>
+      </div>
 
-      {/* Main Grid: 3 Columns */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column (5 cols): GLOBAL RFQ INBOX */}
-        <div className="lg:col-span-5 bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-            <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase flex items-center space-x-2">
-              <span className="w-2 h-2 rounded-full bg-aero-blue animate-pulse" />
-              <span>GLOBAL RFQ INBOX</span>
-            </h2>
-            <span className="px-2.5 py-0.5 rounded-full bg-blue-50 dark:bg-emerald-500/10 text-aero-blue dark:text-emerald-400 font-mono text-[10px] font-bold border border-blue-200 dark:border-emerald-500/30">
-              REAL TIME DATA
-            </span>
-          </div>
-
+        <div className="lg:col-span-8 rounded-2xl p-5 border bg-white dark:bg-card-dark">
+          <h2 className="font-display text-sm font-bold mb-4">Client RFQ Queue</h2>
           <div className="overflow-x-auto">
-            <table className="w-full text-left font-mono text-[11px]">
+            <table className="w-full text-left text-xs">
               <thead>
-                <tr className="text-slate-400 border-b border-slate-100 dark:border-slate-800 text-[10px]">
-                  <th className="pb-2">RFQ ID</th>
-                  <th className="pb-2">Customer</th>
-                  <th className="pb-2">Part Number</th>
-                  <th className="pb-2">Urgency</th>
-                  <th className="pb-2 text-right">Status</th>
+                <tr className="text-slate-500 border-b">
+                  <th className="py-2">RFQ</th>
+                  <th className="py-2">Customer</th>
+                  <th className="py-2">Part</th>
+                  <th className="py-2">Qty</th>
+                  <th className="py-2">Lifecycle</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
-                {rfqInbox.map((rfq) => (
+              <tbody>
+                {rfqs.map((item) => (
                   <tr
-                    key={rfq.id}
-                    onClick={() => setSelectedRfqId(rfq.id)}
-                    className={`cursor-pointer transition-colors ${
-                      selectedRfqId === rfq.id
-                        ? 'bg-blue-50/80 dark:bg-aero-blue/20 text-slate-900 dark:text-white font-semibold'
-                        : 'hover:bg-slate-50 dark:hover:bg-slate-800/40 text-slate-700 dark:text-slate-300'
-                    }`}
+                    key={item.id}
+                    onClick={() => setSelectedRfqId(item.id)}
+                    className={`cursor-pointer border-b ${selected?.id === item.id ? 'bg-blue-50 dark:bg-blue-900/20' : ''}`}
                   >
-                    <td className="py-2.5 font-bold text-aero-blue">{rfq.id}</td>
-                    <td className="py-2.5 text-slate-800 dark:text-slate-200 text-[10px]">{rfq.customer}</td>
-                    <td className="py-2.5 font-mono text-[10px]">{rfq.part}</td>
-                    <td className="py-2.5">
-                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
-                        rfq.urgency === 'AOG' ? 'bg-red-50 dark:bg-aog-red/20 text-aog-red border border-red-200 dark:border-aog-red/40 aog-pulse-badge' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
-                      }`}>
-                        {rfq.urgency}
-                      </span>
-                    </td>
-                    <td className="py-2.5 text-right text-emerald-600 dark:text-emerald-400 font-bold">{rfq.status}</td>
+                    <td className="py-2 font-semibold text-aero-blue">{item.id}</td>
+                    <td className="py-2">{item.customer_name}</td>
+                    <td className="py-2 font-mono">{item.part_number || '-'}</td>
+                    <td className="py-2">{item.quantity ?? '-'}</td>
+                    <td className="py-2">{item.lifecycle_status || 'Pending'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -111,199 +109,25 @@ export const SalesCommandView: React.FC = () => {
           </div>
         </div>
 
-        {/* Center Column (4 cols): QUOTATION BUILDER & SMART QUOTE EDITOR */}
-        <div className="lg:col-span-4 space-y-6">
-          {/* Active Workflow: Quotation Builder */}
-          <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase">
-                ACTIVE WORKFLOW ({selectedRfqId})
-              </h2>
-            </div>
-
-            <div className="space-y-2.5 font-mono text-[11px]">
-              <div className="text-slate-500 dark:text-slate-400 uppercase text-[9px] font-bold">PARTS RESOLVER & SOURCE MATRICES</div>
-              <div className="bg-slate-50 dark:bg-slate-900/80 p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center justify-between text-slate-800 dark:text-slate-200">
-                <span className="font-bold">32-11-45-01</span>
-                <span className="text-slate-500 dark:text-slate-400 text-[10px]">Lead Time: 1 Day</span>
-              </div>
-
-              {/* Source matrix comparison snippet */}
-              <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2">
-                <div className="flex items-center justify-between font-bold text-slate-800 dark:text-slate-200">
-                  <span>Supplier A (Stock)</span>
-                  <span className="text-emerald-600 dark:text-emerald-400">$14,200</span>
-                </div>
-                <div className="flex items-center justify-between text-[10px] text-slate-600 dark:text-slate-400">
-                  <span>Supplier B (FRA)</span>
-                  <span className="text-slate-800 dark:text-slate-200">$11,800</span>
-                </div>
-                <div className="flex items-center justify-between text-[10px] text-slate-600 dark:text-slate-400">
-                  <span>Supplier C (DFW)</span>
-                  <span className="text-slate-800 dark:text-slate-200">$12,500</span>
-                </div>
-              </div>
-            </div>
+        <div className="lg:col-span-4 rounded-2xl p-5 border bg-white dark:bg-card-dark space-y-4">
+          <h2 className="font-display text-sm font-bold">Selected RFQ</h2>
+          <div className="text-xs space-y-1">
+            <div><span className="text-slate-500">RFQ:</span> {selected?.id || '-'}</div>
+            <div><span className="text-slate-500">Quote:</span> {selected?.quote_id || 'Not generated'}</div>
+            <div><span className="text-slate-500">Amount:</span> {selected?.quote_total ? `$${selected.quote_total.toLocaleString()}` : '-'}</div>
+            <div><span className="text-slate-500">PO:</span> {selected?.po_status || 'Pending'}</div>
           </div>
-
-          {/* Smart Quote Editor */}
-          <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase flex items-center space-x-2">
-                <Sliders className="w-4 h-4 text-aero-blue" />
-                <span>SMART QUOTE EDITOR</span>
-              </h2>
-              <span className="text-[9px] font-mono text-slate-500 dark:text-slate-400">Markup Controls</span>
-            </div>
-
-            <div className="space-y-3 font-mono text-[11px]">
-              <div className="grid grid-cols-4 gap-2 text-slate-400 text-[10px] border-b border-slate-100 dark:border-slate-800 pb-1">
-                <div>Part</div>
-                <div>Qty</div>
-                <div>Unit Price</div>
-                <div className="text-right">Margin</div>
-              </div>
-
-              <div className="grid grid-cols-4 gap-2 items-center text-slate-800 dark:text-slate-100 font-bold">
-                <div className="text-aero-blue">32-11-45-01</div>
-                <div>1</div>
-                <div>${unitPrice.toLocaleString()}</div>
-                <div className="text-right text-emerald-600 dark:text-emerald-400">{marginPercent}%</div>
-              </div>
-
-              {/* Dynamic Interactive Unit Price & Margin Slider */}
-              <div className="space-y-1.5 bg-slate-50 dark:bg-slate-900/90 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
-                <div className="flex items-center justify-between text-[10px] text-slate-600 dark:text-slate-300">
-                  <span>Adjust Unit Price / Margin:</span>
-                  <span className="font-bold text-aero-blue">${unitPrice.toLocaleString()}</span>
-                </div>
-                <input
-                  type="range"
-                  min="10000"
-                  max="20000"
-                  step="100"
-                  value={unitPrice}
-                  onChange={(e) => {
-                    const price = parseFloat(e.target.value);
-                    setUnitPrice(price);
-                    setMarginPercent(Math.round(((price - 9800) / price) * 100));
-                  }}
-                  className="w-full h-1.5 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-aero-blue"
-                />
-              </div>
-
-              {/* Shipping Premium Selectors */}
-              <div className="space-y-1.5">
-                <label className="text-[10px] text-slate-500 dark:text-slate-400 uppercase font-bold">Shipping Cost Option:</label>
-                <div className="flex items-center space-x-4 bg-slate-50 dark:bg-slate-900 p-2.5 rounded-xl border border-slate-200 dark:border-slate-800">
-                  <label className="flex items-center space-x-2 cursor-pointer text-[10px] text-slate-700 dark:text-slate-300">
-                    <input
-                      type="radio"
-                      name="shipping"
-                      checked={shippingOption === 'NFO'}
-                      onChange={() => setShippingOption('NFO')}
-                      className="text-aero-blue"
-                    />
-                    <span>NFO ($120)</span>
-                  </label>
-                  <label className="flex items-center space-x-2 cursor-pointer text-[10px] text-amber-600 dark:text-amber-400 font-bold">
-                    <input
-                      type="radio"
-                      name="shipping"
-                      checked={shippingOption === 'HotShot'}
-                      onChange={() => setShippingOption('HotShot')}
-                      className="text-aero-blue"
-                    />
-                    <span>Hot Shot ($250)</span>
-                  </label>
-                </div>
-              </div>
-
-              {/* Total Calculation */}
-              <div className="bg-slate-50 dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center justify-between">
-                <span className="font-bold text-slate-700 dark:text-slate-300">TOTAL PROPOSAL:</span>
-                <span className="font-extrabold text-emerald-600 dark:text-emerald-400 text-sm">${calculateTotal().toLocaleString()}</span>
-              </div>
-
-              {/* PDF & Excel Action buttons */}
-              <div className="flex items-center space-x-2 pt-1">
-                <button className="flex-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-2 px-3 rounded-xl text-[10px] font-bold border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1.5 transition-colors">
-                  <FileText className="w-3.5 h-3.5 text-aog-red" />
-                  <span>PDF Export</span>
-                </button>
-                <button className="flex-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-2 px-3 rounded-xl text-[10px] font-bold border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1.5 transition-colors">
-                  <Download className="w-3.5 h-3.5 text-emerald-500" />
-                  <span>Excel Export</span>
-                </button>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="grid grid-cols-2 gap-2 pt-1 font-display">
-                <button
-                  onClick={handleIssueQuote}
-                  disabled={issuing}
-                  className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1.5 shadow-sm"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                  <span>{issuing ? 'ISSUING...' : 'ISSUE QUOTE'}</span>
-                </button>
-                <button className="bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 transition-colors">
-                  ISSUE PO
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Right Column (3 cols): CUSTOMER 360 & HISTORY & TELEMETRY */}
-        <div className="lg:col-span-3 space-y-6">
-          {/* Customer 360 & History */}
-          <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4 font-mono text-[11px]">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase flex items-center space-x-2">
-                <UserCheck className="w-4 h-4 text-emerald-500" />
-                <span>CUSTOMER 360</span>
-              </h2>
-            </div>
-
-            <div className="bg-slate-50 dark:bg-slate-900/80 p-3 rounded-xl border border-slate-200 dark:border-slate-800 space-y-1.5">
-              <div className="font-extrabold text-slate-900 dark:text-slate-100 text-xs">GLOBAL AIRLINES</div>
-              <div className="flex items-center justify-between text-[10px]">
-                <span className="text-slate-500 dark:text-slate-400">Credit Standing:</span>
-                <span className="px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 font-bold border border-emerald-200 dark:border-emerald-500/30">Verified</span>
-              </div>
-              <div className="flex items-center justify-between text-[10px]">
-                <span className="text-slate-500 dark:text-slate-400">Quote Conversion:</span>
-                <span className="text-emerald-600 dark:text-emerald-400 font-bold">90%</span>
-              </div>
-            </div>
-
-            {/* Communications Feed */}
-            <div className="space-y-2">
-              <div className="text-slate-500 dark:text-slate-400 text-[10px] uppercase font-bold">COMMUNICATIONS FEED</div>
-              
-              <div className="bg-slate-50 dark:bg-slate-900/60 p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center justify-between text-[10px]">
-                <div className="flex items-center space-x-2 text-aero-blue font-semibold">
-                  <Mail className="w-3.5 h-3.5" />
-                  <span>WT-31005 Trace Packet</span>
-                </div>
-                <Download className="w-3.5 h-3.5 text-slate-400 cursor-pointer hover:text-slate-700 dark:hover:text-white" />
-              </div>
-
-              <div className="bg-slate-50 dark:bg-slate-900/60 p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center justify-between text-[10px]">
-                <div className="flex items-center space-x-2 text-slate-700 dark:text-slate-300 font-semibold">
-                  <Mail className="w-3.5 h-3.5" />
-                  <span>WT-31006 Invoice PDF</span>
-                </div>
-                <Download className="w-3.5 h-3.5 text-slate-400 cursor-pointer hover:text-slate-700 dark:hover:text-white" />
-              </div>
-            </div>
-          </div>
-
-          {/* Real-Time Tracking & Delivery Map */}
-          <WorldMapTelemetry title="REAL-TIME TRACKING" subtitle="In-transit flight telemetry" />
+          <button
+            onClick={handleIssueQuote}
+            disabled={issuing || !selected?.quote_id}
+            className="w-full bg-aero-blue text-white rounded-xl py-2.5 text-xs font-bold disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            <Send className="w-4 h-4" />
+            {issuing ? 'ISSUING...' : 'APPROVE + AUTO-PO'}
+          </button>
         </div>
       </div>
+      <WorldMapTelemetry title="Sales Dispatch Telemetry" subtitle="Quote and PO movement" />
     </div>
   );
 };

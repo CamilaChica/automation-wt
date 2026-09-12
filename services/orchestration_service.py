@@ -1,6 +1,8 @@
 import json
+import uuid
 from typing import Dict, Any, List, Optional
 from services.db_service import db_service
+from services.integration_db_service import integration_db_service
 from agents.rfq_intake_agent import RFQIntakeAgent
 from agents.parts_intelligence_agent import PartsIntelligenceAgent
 from agents.inventory_agent import InventoryAgent
@@ -155,6 +157,8 @@ class OrchestrationService:
                         "source": "Supplier",
                         "unit_cost": best_quote["unit_cost"],
                         "details": best_quote,
+                        "supplier_id": best_quote.get("supplier_id"),
+                        "supplier_name": best_quote.get("supplier_name"),
                         "certificate_type": best_quote["certificate_type"],
                         "has_full_trace": True
                     }
@@ -176,6 +180,8 @@ class OrchestrationService:
                             "lead_time":        inv_data.get("lead_time"),
                             "available_quantity": available_qty,
                         },
+                        "supplier_id": None,
+                        "supplier_name": "Winged Tycoons Internal",
                         "certificate_type": inv_data.get("certificate_type", "None"),
                         "has_full_trace":   inv_data.get("has_full_trace", True),
                     }
@@ -291,7 +297,9 @@ class OrchestrationService:
                     "certificate_type": source_details.get("certificate_type"),
                     "unit_cost": p_data["unit_cost"],
                     "margin_percent": p_data["margin_percent"],
-                    "compliance_status": source_details.get("compliance_status", "Pass")
+                    "compliance_status": source_details.get("compliance_status", "Pass"),
+                    "supplier_id": source_details.get("supplier_id"),
+                    "supplier_name": source_details.get("supplier_name"),
                 })
                 
             # Generate actual Quote structures
@@ -341,7 +349,9 @@ class OrchestrationService:
                     unit_price=item["unit_price"],
                     margin=item["margin_percent"],
                     cert=item["certificate_type"],
-                    comp_status=item["compliance_status"]
+                    comp_status=item["compliance_status"],
+                    supplier_id=item.get("supplier_id"),
+                    supplier_name=item.get("supplier_name"),
                 )
                 
             # Log success
@@ -356,18 +366,75 @@ class OrchestrationService:
             
             if context["has_low_margin_escalation"]:
                 db_service.update_rfq_status(rfq_id, "Pending_Approval_Low_Margin")
+                self._sync_client_rfq(rfq_id, quote.id, quote.total_amount, "Pending")
                 return {
                     "status": "Pending_Approval_Low_Margin",
                     "quote_id": quote.id,
                     "escalation": context["margin_esc_rule"]
                 }
+            self._sync_client_rfq(rfq_id, quote.id, quote.total_amount, "Pending")
                 
             return {
                 "status": "Pending_Approval",
                 "quote_id": quote.id
             }
 
-    async def approve_and_send_quote(self, quote_id: str, operator_name: str, overrides: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    def _sync_client_rfq(self, rfq_id: str, quote_id: Optional[str], quote_total: Optional[float], po_status: str) -> None:
+        rfq = db_service.get_rfq(rfq_id)
+        if not rfq:
+            return
+        items = db_service.get_rfq_items(rfq_id)
+        first_item = items[0] if items else None
+        integration_db_service.upsert_client_rfq(
+            rfq_id=rfq_id,
+            customer_name=rfq.customer_name,
+            customer_email=rfq.customer_email,
+            part_number=first_item.resolved_part_number if first_item and first_item.resolved_part_number else (first_item.requested_part_number if first_item else None),
+            quantity=first_item.quantity if first_item else None,
+            status=rfq.status,
+            quote_id=quote_id,
+            quote_total=quote_total,
+            po_status=po_status,
+        )
+
+    def _generate_auto_procurement_pos(self, quote_id: str) -> List[Dict[str, Any]]:
+        quote = db_service.get_quote(quote_id)
+        if not quote:
+            return []
+        created: List[Dict[str, Any]] = []
+        for item in db_service.get_quote_items(quote_id):
+            if item.source != "Supplier":
+                continue
+            po_id = f"PO-{uuid.uuid4().hex[:8].upper()}"
+            supplier_name = item.supplier_name or "Unspecified Supplier"
+            integration_db_service.create_purchase_order(
+                po_id=po_id,
+                rfq_id=quote.rfq_id,
+                quote_id=quote_id,
+                supplier_id=item.supplier_id,
+                supplier_name=supplier_name,
+                part_number=item.part_number,
+                quantity=item.quantity,
+                status="PO Pending",
+            )
+            created.append(
+                {
+                    "po_id": po_id,
+                    "supplier_id": item.supplier_id,
+                    "supplier_name": supplier_name,
+                    "part_number": item.part_number,
+                    "quantity": item.quantity,
+                }
+            )
+        return created
+
+    async def approve_and_send_quote(
+        self,
+        quote_id: str,
+        operator_name: str,
+        overrides: Optional[List[Dict[str, Any]]] = None,
+        compliance_signed: bool = False,
+    ) -> Dict[str, Any]:
         """
         Processes human approval. Overrides prices if supplied, recalculates totals,
         and fires Customer Communication transmission.
@@ -421,11 +488,27 @@ class OrchestrationService:
             f"Sales proposal email successfully sent to customer '{rfq.customer_name}' at {rfq.customer_email}.",
             "SUCCESS", json.dumps(comm_res.data)
         )
+        generated_pos = []
+        if compliance_signed:
+            generated_pos = self._generate_auto_procurement_pos(quote_id)
+            db_service.add_audit_log(
+                rfq_id,
+                "Orchestrator",
+                "auto_procurement_po",
+                f"Generated {len(generated_pos)} supplier purchase orders after customer compliance signature.",
+                "SUCCESS",
+                json.dumps(generated_pos),
+            )
+            po_status = "PO Pending" if generated_pos else "Solved"
+        else:
+            po_status = "Pending"
+        self._sync_client_rfq(rfq_id, quote_id, quote.total_amount, po_status)
         
         return {
             "status": "Quote_Sent",
             "quote_id": quote_id,
-            "email_body": comm_res.data["formatted_body"]
+            "email_body": comm_res.data["formatted_body"],
+            "purchase_orders": generated_pos,
         }
 
 orchestration_service = OrchestrationService()

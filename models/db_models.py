@@ -97,6 +97,8 @@ class QuoteItem(BaseModel):
     margin_percent: float = Field(description="Profit margin percentage")
     certificate_type: str = Field(description="Form of release certificate")
     compliance_status: str = Field("Pass", description="Pass, Warn, Fail")
+    supplier_id: Optional[str] = Field(None, description="Supplier identifier when source is external")
+    supplier_name: Optional[str] = Field(None, description="Supplier display name when source is external")
 
 class Quote(BaseModel):
     id: str = Field(description="Unique quote ID")

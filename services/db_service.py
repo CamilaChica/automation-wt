@@ -194,7 +194,21 @@ class MockDatabaseService:
         self.quote_items[quote_id] = []
         return quote
 
-    def add_quote_item(self, quote_id: str, rfq_item_id: str, part_number: str, qty: int, source: str, unit_cost: float, unit_price: float, margin: float, cert: str, comp_status: str) -> QuoteItem:
+    def add_quote_item(
+        self,
+        quote_id: str,
+        rfq_item_id: str,
+        part_number: str,
+        qty: int,
+        source: str,
+        unit_cost: float,
+        unit_price: float,
+        margin: float,
+        cert: str,
+        comp_status: str,
+        supplier_id: str = None,
+        supplier_name: str = None,
+    ) -> QuoteItem:
         qi_id = f"QITM-{uuid.uuid4().hex[:6].upper()}"
         item = QuoteItem(
             id=qi_id,
@@ -207,7 +221,9 @@ class MockDatabaseService:
             unit_price=unit_price,
             margin_percent=margin,
             certificate_type=cert,
-            compliance_status=comp_status
+            compliance_status=comp_status,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
         )
         if quote_id not in self.quote_items:
             self.quote_items[quote_id] = []

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowRight, CheckCircle2, Clock3, FileSearch, Plane, Search, ShieldCheck } from 'lucide-react';
 import { apiService } from '../../services/api';
+import { IntakeResult } from '../../types';
 
 type CatalogResult = Awaited<ReturnType<typeof apiService.searchCatalog>>[number];
 
@@ -15,6 +16,7 @@ export const CustomerPortal: React.FC = () => {
   const [isSearching, setIsSearching] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [instantQuote, setInstantQuote] = useState<IntakeResult | null>(null);
 
   useEffect(() => {
     void searchCatalog('');
@@ -39,6 +41,7 @@ export const CustomerPortal: React.FC = () => {
       customerName,
       customerEmail
     );
+    setInstantQuote(response);
     setNotice(`Request ${response.rfq_id} received. Our parts team will email ${customerEmail} with availability and pricing.`);
     setIsSubmitting(false);
   };
@@ -99,6 +102,14 @@ export const CustomerPortal: React.FC = () => {
                 </button>
               ))}
             </div>
+            {instantQuote?.quote_id && (
+              <div className="mt-5 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm">
+                <div className="font-semibold text-emerald-300">Instant quote preview</div>
+                <div className="mt-2 text-slate-200">Quote: {instantQuote.quote_id}</div>
+                <div className="text-slate-200">Availability: {instantQuote.available_quantity ?? 0} units ({instantQuote.source ?? 'Unknown source'})</div>
+                <div className="text-slate-100 font-semibold">Estimated total: ${instantQuote.instant_price?.toLocaleString() ?? 'Pending'}</div>
+              </div>
+            )}
           </div>
 
           <form onSubmit={handleRequest} className="rounded-3xl border border-cyan-400/30 bg-cyan-400/10 p-6">

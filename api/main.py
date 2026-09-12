@@ -5,8 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from models.db_models import RFQ, RFQItem, Quote, QuoteItem, AgentAuditLog, Supplier
 from services.db_service import db_service
+from services.integration_db_service import integration_db_service
 from services.orchestration_service import orchestration_service
 from services.mailbox_service import fetch_inbox_headers, send_message, send_otp_email
+from services.purchasing_email_parser import parse_purchasing_email
 from api.auth import current_user, init_auth_db, request_otp, require_roles, verify_otp
 
 app = FastAPI(
@@ -54,6 +56,10 @@ class IntakeResponse(BaseModel):
     rfq_id: str
     status: str
     message: str
+    quote_id: Optional[str] = None
+    instant_price: Optional[float] = None
+    available_quantity: Optional[int] = None
+    source: Optional[str] = None
 
 class OverrideItem(BaseModel):
     quote_item_id: str
@@ -63,6 +69,7 @@ class ApproveRequest(BaseModel):
     operator_name: str = Field("John Doe", description="Authorized agent name approving the quote")
     comments: Optional[str] = None
     items_override: Optional[List[OverrideItem]] = None
+    compliance_signed: bool = False
 
 class RejectRequest(BaseModel):
     operator_name: str
@@ -73,6 +80,11 @@ class MailboxMessageRequest(BaseModel):
     subject: str
     body: str
     reply_to: Optional[str] = None
+
+
+class PurchasingEmailIngestRequest(BaseModel):
+    raw_email: str
+    source: str = "api_manual_ingest"
 
 # Endpoints
 
@@ -115,7 +127,7 @@ async def submit_rfq(request: IntakeRequest, user: dict = Depends(current_user))
         raise HTTPException(status_code=400, detail="Raw RFQ text cannot be empty.")
         
     # Standard mock customer resolution (simulating a database record lookup)
-    if user["role"] == "customer":
+    if user["role"] == "ROLE_CUSTOMER":
         customer_name = request.customer_name or user["email"]
         customer_email = user["email"]
     else:
@@ -147,10 +159,39 @@ async def submit_rfq(request: IntakeRequest, user: dict = Depends(current_user))
     if "Failed" in status or "Halted" in status or "Warning" in status:
         msg = f"RFQ pipeline halted or failed: {error}"
         
+    quote_id = pipeline_res.get("quote_id")
+    instant_price = None
+    available_quantity = None
+    source = None
+    if quote_id:
+        quote = db_service.get_quote(quote_id)
+        if quote:
+            instant_price = quote.total_amount
+        quote_items = db_service.get_quote_items(quote_id)
+        if quote_items:
+            available_quantity = sum(item.quantity for item in quote_items)
+            source = "Supplier" if any(item.source == "Supplier" for item in quote_items) else "Inventory"
+    rfq_items = db_service.get_rfq_items(rfq.id)
+    first_item = rfq_items[0] if rfq_items else None
+    integration_db_service.upsert_client_rfq(
+        rfq_id=rfq.id,
+        customer_name=customer_name,
+        customer_email=customer_email,
+        part_number=first_item.resolved_part_number if first_item and first_item.resolved_part_number else (first_item.requested_part_number if first_item else None),
+        quantity=first_item.quantity if first_item else None,
+        status=status,
+        quote_id=quote_id,
+        quote_total=instant_price,
+        po_status="Pending",
+    )
     return IntakeResponse(
         rfq_id=rfq.id,
         status=status,
-        message=msg
+        message=msg,
+        quote_id=quote_id,
+        instant_price=instant_price,
+        available_quantity=available_quantity,
+        source=source,
     )
 
 @app.post("/api/rfqs/{rfq_id}/process")
@@ -219,7 +260,8 @@ async def approve_quote(quote_id: str, request: ApproveRequest, _user: dict = De
     res = await orchestration_service.approve_and_send_quote(
         quote_id=quote_id,
         operator_name=request.operator_name,
-        overrides=overrides_list
+        overrides=overrides_list,
+        compliance_signed=request.compliance_signed,
     )
     
     # Update comments in database
@@ -257,19 +299,22 @@ async def search_catalog(query: str = "", _user: dict = Depends(require_roles("R
 
     Deliberately omits internal costs, serial numbers, and warehouse locations.
     """
+    sqlite_results = integration_db_service.get_catalog_items(query)
+    if sqlite_results:
+        return [CatalogItem(**row) for row in sqlite_results]
     normalized_query = query.strip().lower()
-    results = []
+    fallback = []
     for item in db_service.inventory.values():
         if normalized_query and normalized_query not in item.part_number.lower():
             continue
-        results.append(CatalogItem(
+        fallback.append(CatalogItem(
             part_number=item.part_number,
             condition_code=item.condition_code,
             quantity_available=item.quantity_available,
             certificate_type=item.certificate_type,
             has_full_trace=item.has_full_trace,
         ))
-    return results
+    return fallback
 
 @app.get("/api/inventory")
 async def get_inventory(_user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING"))):
@@ -284,6 +329,34 @@ async def list_suppliers(_user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE
     Returns the full supplier directory with contact information.
     """
     return list(db_service.suppliers.values())
+
+
+@app.get("/api/sales/client-rfqs")
+async def list_sales_client_rfqs(_user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES"))):
+    records = integration_db_service.list_client_rfqs()
+    response = []
+    for row in records:
+        status = row["status"]
+        lifecycle = "Pending"
+        if row["po_status"] == "PO Pending":
+            lifecycle = "PO Pending"
+        elif status in ("Quote_Sent", "Rejected", "Fulfilled") and row["po_status"] in ("Solved", "PO Sent"):
+            lifecycle = "Solved"
+        response.append(
+            {
+                **row,
+                "lifecycle_status": lifecycle,
+            }
+        )
+    return response
+
+
+@app.get("/api/procurement/overview")
+async def procurement_overview(_user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING"))):
+    return {
+        "supplier_inventory": integration_db_service.list_supplier_inventory(),
+        "active_purchase_orders": integration_db_service.list_active_purchase_orders(),
+    }
 
 @app.get("/api/suppliers/{supplier_id}", response_model=Supplier)
 async def get_supplier(supplier_id: str, _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING"))):
@@ -319,3 +392,10 @@ async def mailbox_send(
         raise HTTPException(403, "You do not have send access to this mailbox.")
     send_message(mailbox, request.recipient, request.subject, request.body, request.reply_to)
     return {"status": "sent", "mailbox": mailbox, "sent_by": user["email"]}
+
+
+@app.post("/api/internal/purchasing/ingest-email")
+async def ingest_purchasing_email(request: PurchasingEmailIngestRequest, _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING"))):
+    parsed = parse_purchasing_email(request.raw_email, source=request.source)
+    integration_db_service.upsert_supplier_inventory_email(parsed)
+    return {"status": "ingested", "part_number": parsed["part_number"], "supplier_id": parsed["supplier_id"]}
