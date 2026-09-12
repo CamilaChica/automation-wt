@@ -21,6 +21,7 @@ Winged Tycoons is a prototype aerospace parts procurement platform. It turns an 
 - `data/` - Seed data and mock database storage
 - `frontend/` - React, TypeScript, Vite, and Tailwind dashboard
 - `models/` - Database models and API data structures
+- `scripts/` - Utility scripts for local setup and testing workflows
 - `services/` - Database and orchestration services
 - `tests/` - Backend workflow and agent tests
 - `tools/` - Shared tool interfaces
@@ -121,6 +122,19 @@ python -m unittest discover -s tests -p "test_*.py"
 ```
 
 The tests cover the clean inventory flow, supplier sourcing fallback, compliance escalation, RFQ intake, parts intelligence, and agent behavior.
+
+## Mock Testing Quick Start
+
+To run mock testing with mock customers and internal team members:
+
+1. Seed/reset the auth test users:
+
+```powershell
+python scripts/seed_mock_test_env.py --reset
+```
+
+2. Start backend and frontend (see sections above).
+3. Follow the persona runbooks and scenario matrix in `MOCK_TESTING_GUIDE.md`.
 
 ## API Overview
 
