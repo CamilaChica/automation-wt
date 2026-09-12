@@ -12,6 +12,9 @@ export const CustomerPortal: React.FC = () => {
   const [partNumber, setPartNumber] = useState('');
   const [quantity, setQuantity] = useState(1);
   const [details, setDetails] = useState('');
+  const [agreementSigned, setAgreementSigned] = useState(false);
+  const [complianceFileName, setComplianceFileName] = useState<string | null>(null);
+  const [trackingStatus, setTrackingStatus] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -33,6 +36,10 @@ export const CustomerPortal: React.FC = () => {
 
   const handleRequest = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!agreementSigned) {
+      setNotice('Sign the compliance agreement before submitting your RFQ.');
+      return;
+    }
     setIsSubmitting(true);
     const response = await apiService.submitCustomerRFQ(
       `Customer request for P/N ${partNumber}, quantity ${quantity}. ${details}`,
@@ -40,6 +47,7 @@ export const CustomerPortal: React.FC = () => {
       customerEmail
     );
     setNotice(`Request ${response.rfq_id} received. Our parts team will email ${customerEmail} with availability and pricing.`);
+    setTrackingStatus('Processing Autonomous Fulfillment');
     setIsSubmitting(false);
   };
 
@@ -112,9 +120,32 @@ export const CustomerPortal: React.FC = () => {
                 <input required type="number" min="1" value={quantity} onChange={event => setQuantity(Number(event.target.value))} className="w-24 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-cyan-400" aria-label="Quantity" />
               </div>
               <textarea value={details} onChange={event => setDetails(event.target.value)} placeholder="Condition, aircraft type, certification, delivery location..." rows={4} className="w-full resize-none rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-cyan-400" />
+              <label className="block rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-300">
+                End-user compliance PDF (EUC)
+                <input
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  onChange={event => setComplianceFileName(event.target.files?.[0]?.name ?? null)}
+                  className="mt-2 block w-full text-xs text-slate-400"
+                />
+                {complianceFileName && <span className="mt-2 block text-xs text-emerald-300">Uploaded: {complianceFileName}</span>}
+              </label>
+              <label className="flex items-center gap-2 text-xs text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={agreementSigned}
+                  onChange={event => setAgreementSigned(event.target.checked)}
+                />
+                I confirm this order and compliance documentation are valid for export screening.
+              </label>
               <button disabled={isSubmitting} className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-400 px-4 py-3 font-bold text-slate-950 hover:bg-cyan-300 disabled:opacity-60">{isSubmitting ? 'Sending request...' : 'Send request'} <ArrowRight className="h-4 w-4" /></button>
             </div>
             {notice && <p className="mt-4 flex gap-2 rounded-xl bg-emerald-400/10 p-3 text-sm text-emerald-300"><CheckCircle2 className="h-5 w-5 shrink-0" />{notice}</p>}
+            {trackingStatus && (
+              <p className="mt-3 rounded-xl border border-cyan-400/40 bg-cyan-400/10 p-3 text-xs font-semibold text-cyan-300">
+                Tracking status: {trackingStatus}
+              </p>
+            )}
           </form>
         </section>
 

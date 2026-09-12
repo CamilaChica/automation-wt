@@ -111,6 +111,8 @@ Useful frontend commands:
 npm run build    # Type-check and create a production build
 npm run lint     # Run the TypeScript compiler checks
 npm run preview  # Preview the production build locally
+npm run test:unit # Run Vitest unit/integration suites (frontend/tests)
+npm run test:e2e  # Run Playwright browser E2E suites (frontend/tests/e2e)
 ```
 
 ## Run Tests
@@ -122,6 +124,12 @@ python -m unittest discover -s tests -p "test_*.py"
 ```
 
 The tests cover the clean inventory flow, supplier sourcing fallback, compliance escalation, RFQ intake, parts intelligence, and agent behavior.
+
+## Autonomous Testing Architecture
+
+- Repository-level automation instructions are in `AGENTS.md`.
+- Third-party services (FedEx, DHL, and e-signature) are mocked with MSW handlers in `frontend/src/testing/msw`.
+- Persona E2E coverage exists for Customer, Sales, Procurement, Admin, and Full Autonomous Flow in `frontend/tests/e2e`.
 
 ## Mock Testing Quick Start
 

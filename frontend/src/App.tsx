@@ -149,10 +149,12 @@ const CustomerPortalRoute: React.FC = () => {
   return authenticated ? <CustomerPortal /> : <AuthScreen role="customer" onAuthenticated={() => setAuthenticated(true)} />;
 };
 
-export const App: React.FC = () => (
-  window.location.pathname === '/customer-portal' || window.location.pathname === '/portal'
-    ? <CustomerPortalRoute />
-    : <InternalApp />
-);
+export const App: React.FC = () => {
+  const isCustomerPath =
+    window.location.pathname.startsWith('/customer-portal') ||
+    window.location.pathname.startsWith('/portal');
+  const isCustomerSession = apiService.getRole() === 'customer';
+  return isCustomerPath || isCustomerSession ? <CustomerPortalRoute /> : <InternalApp />;
+};
 
 export default App;
