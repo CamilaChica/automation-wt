@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ViewMode, ThemeMode } from '../../types';
-import { Search, Sun, Moon, Bell, ShieldCheck, UserCheck, AlertTriangle, Bot } from 'lucide-react';
+import { Search, Sun, Moon, Bell, ShieldCheck, UserCheck, AlertTriangle, Bot, ExternalLink } from 'lucide-react';
 
 interface TopBarProps {
   currentView: ViewMode;
@@ -9,6 +9,7 @@ interface TopBarProps {
   onSelectView: (view: ViewMode) => void;
   onSearch?: (query: string) => void;
   onOpenAuditLog?: () => void;
+  externalAppUrl?: string;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -17,7 +18,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   onToggleTheme,
   onSelectView,
   onSearch,
-  onOpenAuditLog
+  onOpenAuditLog,
+  externalAppUrl
 }) => {
   const [timeString, setTimeString] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -123,6 +125,17 @@ export const TopBar: React.FC<TopBarProps> = ({
           <Bot className="w-3.5 h-3.5" />
           <span>AGENT LOGS</span>
         </button>
+        {externalAppUrl && (
+          <a
+            href={externalAppUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="px-3 py-1.5 rounded-xl border border-emerald-300 dark:border-emerald-500/50 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-600 hover:text-white font-mono text-[10px] font-bold flex items-center space-x-1.5 transition-all shadow-sm"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            <span>OPEN APP</span>
+          </a>
+        )}
 
         {/* Theme Toggle Switch */}
         <button

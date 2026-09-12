@@ -64,6 +64,42 @@ The current worker validates mailbox connectivity and logs header counts. Messag
 persistence, assignment, and outbound attribution should be enabled only after
 the first safe IMAP smoke test succeeds.
 
+### Deployment readiness automation
+
+Deployment guardrails and launch scripts are in [scripts/](/C:/Users/camil/agy2-projects/my-first-project.worktrees/deployment-readiness-integration-agent/scripts).
+
+- Pre-flight checks: `python scripts/preflight_check.py`
+- Staging deploy + UAT gate: `python scripts/deploy_staging.py`
+- Production cutover (approval required): `APPROVAL_CONFIRMED=true python scripts/production_cutover.py`
+
+Required environment variables for deployment automation:
+
+- `MIGRATION_SQLITE_PATH` (default `/var/data/app.db`)
+- `INTERFACE_BASE_URL` (default `http://127.0.0.1:3000`)
+- `GODADDY_API_KEY`
+- `GODADDY_API_SECRET`
+- `GODADDY_DOMAIN`
+- `RENDER_DEPLOY_HOOK` (fallback hook)
+- `RENDER_STAGING_DEPLOY_HOOK` (preferred for staging)
+- `RENDER_PRODUCTION_DEPLOY_HOOK` (preferred for production)
+- `RENDER_PRODUCTION_IP`
+- `RENDER_PRODUCTION_HOST`
+- `PRODUCTION_URL`
+
+Optional:
+
+- `E2E_CHECK_COMMAND` for compliance/ordering e2e validation in pre-flight.  
+  If `E2E_CHECK_COMMAND` is not set, pre-flight looks for a `test:e2e` script in [frontend/package.json](/C:/Users/camil/agy2-projects/my-first-project.worktrees/deployment-readiness-integration-agent/frontend/package.json) and fails if neither is available.
+- `STAGING_APP_URL`, `STAGING_CUSTOMER_EMAIL`, `STAGING_SALES_EMAIL`, `STAGING_PROCUREMENT_EMAIL`, `STAGING_ADMIN_EMAIL`
+- `CUTOVER_TIMEOUT_SECONDS` (default `1800`)
+- `CUTOVER_POLL_SECONDS` (default `15`)
+
+Safety behavior:
+
+- Pre-flight is mandatory for staging and production script flows.
+- Production DNS/deploy actions are blocked unless `APPROVAL_CONFIRMED=true`.
+- Production cutover script updates GoDaddy A (`@`) and CNAME (`www`) records, triggers Render deploy, then polls until DNS and HTTPS are healthy or timeout occurs.
+
 ## Run the Frontend
 
 In a second terminal:
@@ -75,6 +111,28 @@ npm run dev
 ```
 
 Open `http://localhost:3000`. Vite proxies frontend requests from `/api` to the local backend at `http://127.0.0.1:8000`.
+
+### Publish frontend on GitHub Pages
+
+You can host the static frontend on GitHub Pages and keep the FastAPI backend on Render.
+
+1. In GitHub, enable **Settings -> Pages -> Build and deployment -> Source: GitHub Actions**.
+2. Set repository variable `VITE_API_BASE_URL` to your deployed Render API URL plus `/api` (example: `https://winged-tycoons-api.onrender.com/api`).
+3. Push to `main` (or run the workflow manually) to run [.github/workflows/deploy-frontend-github-pages.yml](/C:/Users/camil/agy2-projects/my-first-project.worktrees/deployment-readiness-integration-agent/.github/workflows/deploy-frontend-github-pages.yml).
+
+The workflow builds [frontend/](/C:/Users/camil/agy2-projects/my-first-project.worktrees/deployment-readiness-integration-agent/frontend) with a GitHub Pages base path and publishes it to:
+
+`https://<github-username>.github.io/<repository-name>/`
+
+For browser API access, set backend `FRONTEND_ORIGIN` to your GitHub Pages origin (example: `https://<github-username>.github.io`).
+
+### Top-bar connect button
+
+The internal app top bar now includes an **OPEN APP** button. Configure destination URL with:
+
+- `VITE_PUBLIC_APP_URL` (recommended; set this to your GitHub Pages URL)
+- For GitHub Pages, use `https://<github-username>.github.io/<repository-name>/?portal=customer`
+- If not set, it falls back to `?portal=customer` at the current app base path
 
 The customer-facing parts portal is available at `http://localhost:3000/customer-portal` (or `/portal`).
 Publish that path behind the Winged Tycoons website navigation, for example as

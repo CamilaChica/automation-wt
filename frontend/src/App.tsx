@@ -13,6 +13,16 @@ import { CustomerPortal } from './components/views/CustomerPortal';
 import { AuthScreen } from './components/common/AuthScreen';
 import { apiService } from './services/api';
 
+const PUBLIC_APP_URL = import.meta.env.VITE_PUBLIC_APP_URL || `${import.meta.env.BASE_URL}?portal=customer`;
+const IS_CUSTOMER_PORTAL_ROUTE = (() => {
+  const params = new URLSearchParams(window.location.search);
+  return (
+    window.location.pathname === '/customer-portal' ||
+    window.location.pathname === '/portal' ||
+    params.get('portal') === 'customer'
+  );
+})();
+
 const InternalApp: React.FC = () => {
   const [authenticated, setAuthenticated] = useState(apiService.getRole() === 'internal');
   if (!authenticated) {
@@ -119,6 +129,7 @@ const InternalApp: React.FC = () => {
         onToggleTheme={toggleTheme}
         onSelectView={setCurrentView}
         onOpenAuditLog={() => setIsAuditLogOpen(true)}
+        externalAppUrl={PUBLIC_APP_URL}
       />
 
       {/* Main Content Layout (Sidebar + Active View) */}
@@ -150,7 +161,7 @@ const CustomerPortalRoute: React.FC = () => {
 };
 
 export const App: React.FC = () => (
-  window.location.pathname === '/customer-portal' || window.location.pathname === '/portal'
+  IS_CUSTOMER_PORTAL_ROUTE
     ? <CustomerPortalRoute />
     : <InternalApp />
 );
