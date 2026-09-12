@@ -71,20 +71,20 @@ export const TopBar: React.FC<TopBarProps> = ({
   };
 
   return (
-    <header className="h-14 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-card-dark px-4 flex items-center justify-between text-xs font-sans select-none transition-colors">
+    <header className="min-h-14 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-card-dark px-3 py-2 sm:px-4 flex flex-wrap items-center gap-2 text-xs font-sans select-none transition-colors">
       {/* Brand & Page Title */}
-      <div className="flex items-center space-x-3">
+      <div className="flex min-w-0 flex-1 items-center space-x-2 sm:space-x-3">
         <div className="flex items-center bg-slate-100 dark:bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700/80">
           <BrandMark imageClassName="h-8" />
         </div>
-        <div className="h-4 w-px bg-slate-300 dark:bg-slate-700" />
-        <span className="font-display font-semibold text-slate-700 dark:text-slate-300 tracking-wide uppercase truncate max-w-xl">
+        <div className="hidden sm:block h-4 w-px bg-slate-300 dark:bg-slate-700" />
+        <span className="hidden md:block font-display font-semibold text-slate-700 dark:text-slate-300 tracking-wide uppercase truncate max-w-xl">
           {getViewTitle()}
         </span>
       </div>
 
       {/* Center Search & AOG Badge */}
-      <div className="flex items-center space-x-4">
+      <div className="hidden xl:flex items-center space-x-3">
         {/* AOG Priority Badge */}
         <div className="flex items-center space-x-2 bg-red-50 dark:bg-aog-red/10 border border-red-200 dark:border-aog-red/40 text-aog-red px-3 py-1 rounded-full font-mono text-[11px] font-semibold aog-pulse-badge">
           <AlertTriangle className="w-3.5 h-3.5 animate-bounce" />
@@ -92,7 +92,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
 
         {/* Global Omnibar */}
-        <div className="relative w-72">
+        <div className="relative w-64 2xl:w-72">
           <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
           <input
             type="text"
@@ -108,7 +108,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       </div>
 
       {/* Right Controls: Telemetry, Theme, Notifications & User */}
-      <div className="flex items-center space-x-4">
+      <div className="ml-auto flex items-center space-x-2 sm:space-x-3">
         {/* Sub-header status tags */}
         <div className="hidden lg:flex items-center space-x-3 text-[11px] font-mono text-slate-600 dark:text-slate-400">
           <span className="flex items-center space-x-1 text-emerald-600 dark:text-emerald-400 font-semibold">
@@ -126,7 +126,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             className="px-3 py-1.5 rounded-xl border border-blue-200 dark:border-aero-blue/40 bg-blue-50 dark:bg-aero-blue/10 text-aero-blue hover:bg-aero-blue hover:text-white font-mono text-[10px] font-bold flex items-center space-x-1.5 transition-all shadow-sm"
           >
             <Bot className="w-3.5 h-3.5" />
-            <span>AGENT LOGS</span>
+            <span className="hidden sm:inline">AGENT LOGS</span>
           </button>
         )}
 
@@ -154,11 +154,11 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
 
         {/* Operator Profile Context */}
-        <div className="flex items-center space-x-2 bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-xl">
+        <div className="flex items-center space-x-2 bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 p-1.5 sm:px-2.5 sm:py-1 rounded-xl">
           <div className="w-6 h-6 rounded-full bg-blue-100 dark:bg-slate-700 flex items-center justify-center text-aero-blue font-bold font-mono">
             <UserCheck className="w-3.5 h-3.5" />
           </div>
-          <div className="flex flex-col text-[11px] leading-tight">
+          <div className="hidden xl:flex flex-col text-[11px] leading-tight">
             <span className="font-semibold text-slate-900 dark:text-slate-100">{getOperatorName()}</span>
             <span className="text-[9px] font-mono text-emerald-600 dark:text-emerald-400 flex items-center space-x-1 font-bold">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
