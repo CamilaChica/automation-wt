@@ -11,6 +11,21 @@ app = FastAPI(
     version="1.0.0"
 )
 
+
+def get_rfq_or_404(rfq_id: str) -> RFQ:
+    rfq = db_service.get_rfq(rfq_id)
+    if not rfq:
+        raise HTTPException(status_code=404, detail="RFQ not found.")
+    return rfq
+
+
+def get_quote_or_404(quote_id: str) -> Quote:
+    quote = db_service.get_quote(quote_id)
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found.")
+    return quote
+
+
 # API Schemas
 class IntakeRequest(BaseModel):
     raw_text: str = Field(..., description="Raw email or RFQ text submitted by customer")
@@ -94,10 +109,7 @@ async def trigger_process(rfq_id: str):
     """
     Manually advances the state-machine of the RFQ pipeline.
     """
-    rfq = db_service.get_rfq(rfq_id)
-    if not rfq:
-        raise HTTPException(status_code=404, detail="RFQ not found.")
-        
+    get_rfq_or_404(rfq_id)
     res = await orchestration_service.process_rfq_pipeline(rfq_id)
     return res
 
@@ -113,10 +125,7 @@ async def get_rfq_detail(rfq_id: str):
     """
     Retrieves complete status details, items, audit logs, and associated quotes.
     """
-    rfq = db_service.get_rfq(rfq_id)
-    if not rfq:
-        raise HTTPException(status_code=404, detail="RFQ not found.")
-        
+    rfq = get_rfq_or_404(rfq_id)
     items = db_service.get_rfq_items(rfq_id)
     logs = db_service.get_audit_logs(rfq_id)
     quote = db_service.get_quote_by_rfq(rfq_id)
@@ -142,10 +151,7 @@ async def approve_quote(quote_id: str, request: ApproveRequest):
     Performs Human-in-the-Loop quote approval and sends final offer.
     Supports pricing overrides.
     """
-    quote = db_service.get_quote(quote_id)
-    if not quote:
-        raise HTTPException(status_code=404, detail="Quote not found.")
-        
+    quote = get_quote_or_404(quote_id)
     overrides_list = []
     if request.items_override:
         overrides_list = [{"quote_item_id": o.quote_item_id, "unit_price": o.unit_price} for o in request.items_override]
@@ -166,10 +172,7 @@ async def reject_quote(quote_id: str, request: RejectRequest):
     """
     Rejects proposal and shifts state.
     """
-    quote = db_service.get_quote(quote_id)
-    if not quote:
-        raise HTTPException(status_code=404, detail="Quote not found.")
-        
+    quote = get_quote_or_404(quote_id)
     db_service.update_quote_status(
         quote_id, "Rejected", 
         approved_by=request.operator_name, 

@@ -3,16 +3,92 @@
 @tailwind utilities;
 
 @layer base {
-  body {
-    font-family: 'Inter', sans-serif;
+  :root {
+    --brand-navy: #12304a;
+    --brand-navy-deep: #0b1f33;
+    --brand-gold: #c9a227;
+    --brand-gold-soft: #f4e8b5;
+    --brand-gray: #eef1f4;
+    --brand-white: #ffffff;
   }
-  
+
+  body {
+    font-family: 'Montserrat', sans-serif;
+    font-feature-settings: 'kern';
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
   h1, h2, h3, h4, .font-display {
-    font-family: 'Space Grotesk', sans-serif;
+    font-family: 'Montserrat', sans-serif;
+    letter-spacing: -0.015em;
+  }
+
+  button, input, select, textarea {
+    font: inherit;
   }
   
   code, pre, .font-mono {
     font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+@layer components {
+  .brand-shell {
+    background:
+      radial-gradient(circle at 85% -10%, rgba(201, 162, 39, 0.14), transparent 28rem),
+      linear-gradient(135deg, #f7f9fb 0%, #eef1f4 48%, #ffffff 100%);
+  }
+
+  .dark .brand-shell {
+    background:
+      radial-gradient(circle at 85% -10%, rgba(201, 162, 39, 0.12), transparent 28rem),
+      linear-gradient(135deg, #0b1f33 0%, #0f2c45 48%, #12304a 100%);
+  }
+
+  .brand-card,
+  [class~='bg-white'],
+  [class~='dark:bg-card-dark'] {
+    box-shadow:
+      0 1px 1px rgba(11, 31, 51, 0.08),
+      0 10px 24px rgba(11, 31, 51, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.72) !important;
+    transform: translateZ(0);
+  }
+
+  .dark .brand-card,
+  .dark [class~='dark:bg-card-dark'] {
+    box-shadow:
+      0 1px 1px rgba(0, 0, 0, 0.28),
+      0 14px 28px rgba(0, 0, 0, 0.2),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+  }
+
+  .brand-card {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .brand-card::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto;
+    height: 3px;
+    background: linear-gradient(90deg, var(--brand-navy), var(--brand-gold));
+    opacity: 0.9;
+  }
+
+  .brand-card:hover {
+    transform: translateY(-2px) translateZ(0);
+    box-shadow:
+      0 3px 3px rgba(11, 31, 51, 0.1),
+      0 16px 30px rgba(11, 31, 51, 0.12);
+  }
+
+  @media (max-width: 767px) {
+    .brand-card {
+      border-radius: 1rem;
+    }
   }
 }
 
@@ -36,7 +112,7 @@
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 107, 255, 0.8);
+  background: rgba(201, 162, 39, 0.85);
 }
 
 /* Glowing Pulsing Animations */

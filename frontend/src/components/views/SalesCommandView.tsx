@@ -72,7 +72,7 @@ export const SalesCommandView: React.FC = () => {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-left font-mono text-[11px]">
+            <table className="w-full min-w-[560px] text-left font-mono text-[11px]">
               <thead>
                 <tr className="text-slate-400 border-b border-slate-100 dark:border-slate-800 text-[10px]">
                   <th className="pb-2">RFQ ID</th>
@@ -157,14 +157,14 @@ export const SalesCommandView: React.FC = () => {
             </div>
 
             <div className="space-y-3 font-mono text-[11px]">
-              <div className="grid grid-cols-4 gap-2 text-slate-400 text-[10px] border-b border-slate-100 dark:border-slate-800 pb-1">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-slate-400 text-[10px] border-b border-slate-100 dark:border-slate-800 pb-1">
                 <div>Part</div>
                 <div>Qty</div>
                 <div>Unit Price</div>
                 <div className="text-right">Margin</div>
               </div>
 
-              <div className="grid grid-cols-4 gap-2 items-center text-slate-800 dark:text-slate-100 font-bold">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 items-center text-slate-800 dark:text-slate-100 font-bold">
                 <div className="text-aero-blue">32-11-45-01</div>
                 <div>1</div>
                 <div>${unitPrice.toLocaleString()}</div>

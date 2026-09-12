@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ViewMode, ThemeMode } from '../../types';
+import { ViewMode, ThemeMode, UserRole, ROLE_LABELS } from '../../types';
 import { Search, Sun, Moon, Bell, ShieldCheck, UserCheck, AlertTriangle, Bot } from 'lucide-react';
 
 interface TopBarProps {
@@ -9,6 +9,8 @@ interface TopBarProps {
   onSelectView: (view: ViewMode) => void;
   onSearch?: (query: string) => void;
   onOpenAuditLog?: () => void;
+  userRole: UserRole;
+  onChangeRole: (role: UserRole) => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -17,7 +19,9 @@ export const TopBar: React.FC<TopBarProps> = ({
   onToggleTheme,
   onSelectView,
   onSearch,
-  onOpenAuditLog
+  onOpenAuditLog,
+  userRole,
+  onChangeRole
 }) => {
   const [timeString, setTimeString] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -46,6 +50,8 @@ export const TopBar: React.FC<TopBarProps> = ({
         return 'CORE UI MODULES & VISUAL ANATOMY | FULFILLMENT COMMAND HUB (FCH)';
       case 'sales':
         return 'WINGED TYCOONS | SALES COMMAND CENTER | GLOBAL FLEET SOLUTIONS';
+      case 'admin':
+        return 'WINGED TYCOONS | ADMINISTRATION CONSOLE';
       default:
         return 'WINGED TYCOONS | COMMAND CENTER';
     }
@@ -57,14 +63,15 @@ export const TopBar: React.FC<TopBarProps> = ({
       case 'sourcing': return 'ELIZA C. (PROC OPERATIONS)';
       case 'trace-vault': return 'MARIA G. (QUALITY OPERATIONS)';
       case 'fulfillment': return 'MARCUS D. (OPS LEAD)';
+      case 'admin': return 'SYSTEM ADMINISTRATOR';
       default: return 'ALEX R. (MRO SALES)';
     }
   };
 
   return (
-    <header className="h-14 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-card-dark px-4 flex items-center justify-between text-xs font-sans select-none transition-colors">
+    <header className="min-h-14 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-card-dark/95 px-3 md:px-4 py-2 flex flex-wrap items-center gap-2 md:gap-3 justify-between text-xs font-sans select-none transition-colors shadow-sm">
       {/* Brand & Page Title */}
-      <div className="flex items-center space-x-3">
+      <div className="flex items-center min-w-0 space-x-2 md:space-x-3">
         <div className="flex items-center space-x-2 bg-slate-100 dark:bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700/80">
           <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-aero-blue to-cyan-400 flex items-center justify-center font-display font-bold text-white text-xs shadow-md">
             WT
@@ -73,14 +80,14 @@ export const TopBar: React.FC<TopBarProps> = ({
             WINGED TYCOONS
           </span>
         </div>
-        <div className="h-4 w-px bg-slate-300 dark:bg-slate-700" />
-        <span className="font-display font-semibold text-slate-700 dark:text-slate-300 tracking-wide uppercase truncate max-w-xl">
+        <div className="hidden md:block h-4 w-px bg-slate-300 dark:bg-slate-700" />
+        <span className="hidden md:block font-display font-semibold text-slate-700 dark:text-slate-300 tracking-wide uppercase truncate max-w-xl">
           {getViewTitle()}
         </span>
       </div>
 
       {/* Center Search & AOG Badge */}
-      <div className="flex items-center space-x-4">
+      <div className="order-3 md:order-2 w-full md:w-auto flex items-center justify-end gap-2 md:space-x-4">
         {/* AOG Priority Badge */}
         <div className="flex items-center space-x-2 bg-red-50 dark:bg-aog-red/10 border border-red-200 dark:border-aog-red/40 text-aog-red px-3 py-1 rounded-full font-mono text-[11px] font-semibold aog-pulse-badge">
           <AlertTriangle className="w-3.5 h-3.5 animate-bounce" />
@@ -88,7 +95,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
 
         {/* Global Omnibar */}
-        <div className="relative w-72">
+        <div className="relative w-full md:w-72">
           <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
           <input
             type="text"
@@ -104,9 +111,9 @@ export const TopBar: React.FC<TopBarProps> = ({
       </div>
 
       {/* Right Controls: Telemetry, Theme, Notifications & User */}
-      <div className="flex items-center space-x-4">
+      <div className="order-2 md:order-3 flex items-center gap-2 md:space-x-4">
         {/* Sub-header status tags */}
-        <div className="hidden lg:flex items-center space-x-3 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+        <div className="hidden xl:flex items-center space-x-3 text-[11px] font-mono text-slate-600 dark:text-slate-400">
           <span className="flex items-center space-x-1 text-emerald-600 dark:text-emerald-400 font-semibold">
             <ShieldCheck className="w-3.5 h-3.5" />
             <span>SPEED. TRACEABILITY. RELIABILITY.</span>
@@ -121,7 +128,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           className="px-3 py-1.5 rounded-xl border border-blue-200 dark:border-aero-blue/40 bg-blue-50 dark:bg-aero-blue/10 text-aero-blue hover:bg-aero-blue hover:text-white font-mono text-[10px] font-bold flex items-center space-x-1.5 transition-all shadow-sm"
         >
           <Bot className="w-3.5 h-3.5" />
-          <span>AGENT LOGS</span>
+          <span className="hidden sm:inline">AGENT LOGS</span>
         </button>
 
         {/* Theme Toggle Switch */}
@@ -139,7 +146,11 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         {/* Notification Bell */}
         <div className="relative">
-          <button className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800/80 text-slate-700 dark:text-slate-300 hover:text-slate-900 hover:border-aero-blue transition-all">
+          <button
+            onClick={onOpenAuditLog}
+            title="View recent agent & system notifications"
+            className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800/80 text-slate-700 dark:text-slate-300 hover:text-slate-900 hover:border-aero-blue transition-all"
+          >
             <Bell className="w-4 h-4" />
           </button>
           <span className="absolute -top-1 -right-1 w-4 h-4 bg-aero-blue text-white font-mono text-[9px] font-bold rounded-full flex items-center justify-center shadow">
@@ -147,12 +158,24 @@ export const TopBar: React.FC<TopBarProps> = ({
           </span>
         </div>
 
+        {/* Role Switcher (simulates signing in as a different interface) */}
+        <select
+          value={userRole}
+          onChange={(e) => onChangeRole(e.target.value as UserRole)}
+          title="Switch signed-in role (delimits which interfaces are accessible)"
+          className="hidden md:block bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 rounded-xl px-2 py-1.5 text-[10px] font-mono font-bold text-slate-700 dark:text-slate-300 focus:outline-none focus:border-aero-blue"
+        >
+          {(Object.keys(ROLE_LABELS) as UserRole[]).map((r) => (
+            <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+          ))}
+        </select>
+
         {/* Operator Profile Context */}
         <div className="flex items-center space-x-2 bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-xl">
           <div className="w-6 h-6 rounded-full bg-blue-100 dark:bg-slate-700 flex items-center justify-center text-aero-blue font-bold font-mono">
             <UserCheck className="w-3.5 h-3.5" />
           </div>
-          <div className="flex flex-col text-[11px] leading-tight">
+          <div className="hidden sm:flex flex-col text-[11px] leading-tight">
             <span className="font-semibold text-slate-900 dark:text-slate-100">{getOperatorName()}</span>
             <span className="text-[9px] font-mono text-emerald-600 dark:text-emerald-400 flex items-center space-x-1 font-bold">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>

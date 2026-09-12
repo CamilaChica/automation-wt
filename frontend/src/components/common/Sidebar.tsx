@@ -1,5 +1,5 @@
 import React from 'react';
-import { ViewMode } from '../../types';
+import { ViewMode, UserRole, ROLE_ALLOWED_VIEWS } from '../../types';
 import { 
   LayoutDashboard, 
   FileText, 
@@ -9,16 +9,18 @@ import {
   Truck, 
   TrendingUp, 
   Settings, 
-  LogOut 
+  LogOut,
+  UserCog
 } from 'lucide-react';
 
 interface SidebarProps {
   currentView: ViewMode;
   onSelectView: (view: ViewMode) => void;
+  userRole: UserRole;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) => {
-  const navItems = [
+export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView, userRole }) => {
+  const allNavItems = [
     {
       id: 'customer' as ViewMode,
       label: 'Dashboard',
@@ -54,17 +56,27 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) =
       label: 'Sales Command',
       icon: TrendingUp,
       badge: '9'
+    },
+    {
+      id: 'admin' as ViewMode,
+      label: 'Admin Console',
+      icon: UserCog,
+      badge: null
     }
   ];
 
+  // Only show sidebar entries the signed-in role is actually allowed to open,
+  // so Customer/Sales/Purchasing/Admin interfaces stay properly delimited.
+  const navItems = allNavItems.filter(item => ROLE_ALLOWED_VIEWS[userRole].includes(item.id));
+
   return (
-    <aside className="w-56 bg-white dark:bg-card-dark border-r border-slate-200 dark:border-slate-800 flex flex-col justify-between select-none transition-colors">
-      <div className="py-4 px-3">
-        <div className="px-2 mb-3 text-[10px] font-mono font-bold tracking-widest text-slate-400 dark:text-slate-500 uppercase">
+    <aside className="w-full md:w-56 shrink-0 bg-white/90 dark:bg-card-dark/95 border-b md:border-b-0 md:border-r border-slate-200 dark:border-slate-800 flex flex-col justify-between select-none transition-colors">
+      <div className="py-3 md:py-4 px-3">
+        <div className="hidden md:block px-2 mb-3 text-[10px] font-mono font-bold tracking-widest text-slate-400 dark:text-slate-500 uppercase">
           Command Hub
         </div>
 
-        <nav className="space-y-1">
+        <nav className="flex md:block gap-1 overflow-x-auto pb-1 md:pb-0">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = currentView === item.id;
@@ -73,7 +85,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) =
               <button
                 key={item.id}
                 onClick={() => onSelectView(item.id)}
-                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all group ${
+                className={`shrink-0 md:w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all group ${
                   isActive
                     ? 'bg-aero-blue text-white shadow-md shadow-aero-blue/20 font-bold'
                     : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/60 hover:text-slate-900 dark:hover:text-slate-200'
@@ -101,15 +113,23 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) =
         </nav>
 
         {/* Secondary section */}
-        <div className="mt-8 px-2 mb-2 text-[10px] font-mono font-bold tracking-widest text-slate-400 dark:text-slate-500 uppercase">
+        <div className="hidden md:block mt-8 px-2 mb-2 text-[10px] font-mono font-bold tracking-widest text-slate-400 dark:text-slate-500 uppercase">
           System Utility
         </div>
-        <div className="space-y-1">
-          <button className="w-full flex items-center space-x-3 px-3 py-2 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors">
+        <div className="hidden md:block space-y-1">
+          <button
+            onClick={() => onSelectView('fulfillment')}
+            disabled={!ROLE_ALLOWED_VIEWS[userRole].includes('fulfillment')}
+            className="w-full flex items-center space-x-3 px-3 py-2 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+          >
             <Truck className="w-4 h-4 text-slate-400" />
             <span>Logistics API</span>
           </button>
-          <button className="w-full flex items-center space-x-3 px-3 py-2 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors">
+          <button
+            onClick={() => onSelectView('admin')}
+            disabled={!ROLE_ALLOWED_VIEWS[userRole].includes('admin')}
+            className="w-full flex items-center space-x-3 px-3 py-2 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+          >
             <Settings className="w-4 h-4 text-slate-400" />
             <span>Account Settings</span>
           </button>
@@ -117,7 +137,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) =
       </div>
 
       {/* Footer System Integrity Status */}
-      <div className="p-3 border-t border-slate-200 dark:border-slate-800">
+      <div className="hidden md:block p-3 border-t border-slate-200 dark:border-slate-800">
         <div className="bg-slate-50 dark:bg-slate-900/90 rounded-xl p-2.5 border border-slate-200 dark:border-slate-800">
           <div className="flex items-center justify-between text-[11px] font-mono font-semibold mb-1">
             <span className="text-slate-600 dark:text-slate-400">SYSTEM HEALTH</span>

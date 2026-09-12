@@ -13,6 +13,26 @@ import {
 
 export const AeroProcurementView: React.FC = () => {
   const [selectedSupplier, setSelectedSupplier] = useState<'A' | 'B' | 'C'>('A');
+  const [notification, setNotification] = useState<string | null>(null);
+  const [quoteGenerated, setQuoteGenerated] = useState(false);
+
+  const notify = (message: string) => {
+    setNotification(message);
+    setTimeout(() => setNotification(null), 4000);
+  };
+
+  const handleGenerateQuote = () => {
+    setQuoteGenerated(true);
+    notify(`Smart quote generated using Supplier ${selectedSupplier} pricing terms.`);
+  };
+
+  const handleSplitPo = () => {
+    notify('Purchase order split across multiple suppliers to satisfy full quantity.');
+  };
+
+  const handleEscalateAog = () => {
+    notify('AOG escalation dispatched — Sales Command and Fulfillment notified immediately.');
+  };
 
   const rfqs = [
     { id: 'WT-29471', part: '32-11-45-01', name: 'Main Landing Gear Actuator', customer: 'GLOBAL AIRLINES', urgency: 'AOG', timer: '0:14:31', status: 'Sourcing' },
@@ -47,7 +67,7 @@ export const AeroProcurementView: React.FC = () => {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-left font-mono text-[11px]">
+            <table className="w-full min-w-[620px] text-left font-mono text-[11px]">
               <thead>
                 <tr className="text-slate-400 border-b border-slate-100 dark:border-slate-800 text-[10px]">
                   <th className="pb-2">RFQ ID</th>
@@ -99,7 +119,7 @@ export const AeroProcurementView: React.FC = () => {
           </div>
 
           {/* Source Matrix Cards */}
-          <div className="grid grid-cols-3 gap-2.5 font-mono text-[11px]">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 font-mono text-[11px]">
             {/* Supplier A */}
             <div 
               onClick={() => setSelectedSupplier('A')}
@@ -191,20 +211,36 @@ export const AeroProcurementView: React.FC = () => {
           </div>
 
           {/* Action Buttons */}
-          <div className="grid grid-cols-3 gap-2 pt-1 font-display">
-            <button className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 font-display">
+            <button
+              onClick={handleGenerateQuote}
+              className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow-sm transition-colors"
+            >
               <FileText className="w-3.5 h-3.5" />
-              <span>GENERATE SMART QUOTE</span>
+              <span>{quoteGenerated ? 'QUOTE GENERATED' : 'GENERATE SMART QUOTE'}</span>
             </button>
-            <button className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1">
+            <button
+              onClick={handleSplitPo}
+              className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1 transition-colors"
+            >
               <Split className="w-3.5 h-3.5" />
               <span>SPLIT PO</span>
             </button>
-            <button className="bg-red-500 hover:bg-red-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow aog-pulse-badge">
+            <button
+              onClick={handleEscalateAog}
+              className="bg-red-500 hover:bg-red-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow aog-pulse-badge transition-colors"
+            >
               <Flame className="w-3.5 h-3.5" />
               <span>ESCALATE AOG</span>
             </button>
           </div>
+
+          {notification && (
+            <div className="bg-emerald-50 dark:bg-emerald-500/20 border border-emerald-300 dark:border-emerald-500 text-emerald-800 dark:text-emerald-300 p-2.5 rounded-xl flex items-center justify-between text-[10px] font-semibold animate-fade-in shadow-sm">
+              <span>{notification}</span>
+              <button onClick={() => setNotification(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-white">✕</button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -217,7 +253,7 @@ export const AeroProcurementView: React.FC = () => {
           </h2>
 
           {/* 3x3 Heatmap grid */}
-          <div className="grid grid-cols-3 gap-2 text-center font-mono text-[10px] font-bold">
+          <div className="grid grid-cols-3 gap-1.5 sm:gap-2 text-center font-mono text-[9px] sm:text-[10px] font-bold">
             <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/30">
               Low Workload
             </div>

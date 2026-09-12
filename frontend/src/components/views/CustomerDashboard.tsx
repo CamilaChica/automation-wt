@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { WorkflowStepper } from '../common/WorkflowStepper';
 import { apiService } from '../../services/api';
-import { RFQ } from '../../types';
+import { RFQ, getAgentProfile } from '../../types';
 import { 
   Send, 
   CheckCircle, 
@@ -209,17 +209,17 @@ export const CustomerDashboard: React.FC = () => {
   };
 
   return (
-    <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans">
+    <div className="customer-interface p-3 sm:p-4 md:p-6 space-y-5 md:space-y-6 max-w-7xl mx-auto font-sans">
       {/* 1. Client Header & Profile Card */}
-      <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm transition-all">
+      <div className="brand-card bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-sm transition-all">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center space-x-3.5">
+          <div className="flex items-start sm:items-center space-x-3.5">
             <div className="w-12 h-12 rounded-xl bg-gradient-to-tr from-blue-600 to-sky-400 flex items-center justify-center text-white font-display font-bold text-lg shadow-md shadow-blue-500/20">
               GA
             </div>
             <div>
-              <div className="flex items-center space-x-2">
-                <h1 className="text-xl font-display font-bold text-slate-900 dark:text-white">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-lg sm:text-xl font-display font-bold text-slate-900 dark:text-white">
                   GLOBAL AIRLINES
                 </h1>
                 <span className="bg-blue-50 dark:bg-blue-950/40 text-aero-blue border border-blue-200 dark:border-blue-800 text-[11px] font-mono font-bold px-2 py-0.5 rounded-full">
@@ -237,10 +237,10 @@ export const CustomerDashboard: React.FC = () => {
           </div>
 
           {/* Action Button */}
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-3 w-full md:w-auto">
             <button
               onClick={() => setActiveTab('new-rfq')}
-              className="bg-aero-blue hover:bg-blue-600 text-white font-display font-bold text-xs px-4 py-2.5 rounded-xl shadow-md shadow-aero-blue/20 flex items-center space-x-2 transition-all transform active:scale-95"
+              className="w-full md:w-auto bg-aero-blue hover:bg-blue-600 text-white font-display font-bold text-xs px-4 py-2.5 rounded-xl shadow-md shadow-aero-blue/20 flex items-center justify-center space-x-2 transition-all transform active:scale-95"
             >
               <Send className="w-4 h-4" />
               <span>+ NEW QUICK RFQ</span>
@@ -302,7 +302,7 @@ export const CustomerDashboard: React.FC = () => {
 
       {/* 3. Client Sub-Navigation Bar (Light & Easy to Navigate) */}
       <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-1">
-        <nav className="flex space-x-2 sm:space-x-4 overflow-x-auto">
+        <nav className="w-full flex space-x-2 sm:space-x-4 overflow-x-auto pb-1">
           {[
             { id: 'quotations', label: 'Quotations & Approvals', icon: FileText, badge: '2 Ready' },
             { id: 'new-rfq', label: 'Submit New RFQ', icon: Send, badge: null },
@@ -696,7 +696,7 @@ export const CustomerDashboard: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 {/* ATA Chapter */}
                 <div className="space-y-1.5">
                   <label className="font-mono font-semibold text-slate-700 dark:text-slate-300">
@@ -887,7 +887,7 @@ export const CustomerDashboard: React.FC = () => {
                 <div className="flex items-start space-x-2.5">
                   <div className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-950 text-aero-blue flex items-center justify-center text-[10px] font-bold shrink-0">1</div>
                   <div>
-                    <span className="font-bold text-slate-800 dark:text-slate-200">PartsIntelligenceAgent</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">{getAgentProfile('PartsIntelligenceAgent').callSign} <span className="font-normal text-slate-400 text-[10px]">· PartsIntelligenceAgent</span></span>
                     <p className="text-slate-500 text-[10px]">Validates ATA chapters, IPC superseded part numbers, and OEM compatibility.</p>
                   </div>
                 </div>
@@ -895,7 +895,7 @@ export const CustomerDashboard: React.FC = () => {
                 <div className="flex items-start space-x-2.5">
                   <div className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-950 text-aero-blue flex items-center justify-center text-[10px] font-bold shrink-0">2</div>
                   <div>
-                    <span className="font-bold text-slate-800 dark:text-slate-200">ComplianceAgent</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">{getAgentProfile('ComplianceAgent').callSign} <span className="font-normal text-slate-400 text-[10px]">· ComplianceAgent</span></span>
                     <p className="text-slate-500 text-[10px]">Scans FAA 8130-3 release tags, 121 air carrier pedigree, and non-incident statements.</p>
                   </div>
                 </div>
@@ -903,7 +903,7 @@ export const CustomerDashboard: React.FC = () => {
                 <div className="flex items-start space-x-2.5">
                   <div className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-950 text-aero-blue flex items-center justify-center text-[10px] font-bold shrink-0">3</div>
                   <div>
-                    <span className="font-bold text-slate-800 dark:text-slate-200">DynamicPricingAgent</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">{getAgentProfile('DynamicPricingAgent').callSign} <span className="font-normal text-slate-400 text-[10px]">· DynamicPricingAgent</span></span>
                     <p className="text-slate-500 text-[10px]">Calculates wholesale margin, core charges, and hot-shot freight premiums.</p>
                   </div>
                 </div>
@@ -1019,7 +1019,7 @@ export const CustomerDashboard: React.FC = () => {
 
           {/* Trace Document Table */}
           <div className="overflow-x-auto">
-            <table className="w-full text-left font-mono text-xs">
+            <table className="w-full min-w-[720px] text-left font-mono text-xs">
               <thead>
                 <tr className="text-slate-400 border-b border-slate-100 dark:border-slate-800 text-[11px]">
                   <th className="pb-3">Certificate Type</th>
@@ -1266,7 +1266,7 @@ export const CustomerDashboard: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-2 border-b border-slate-300 dark:border-slate-700 pb-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 border-b border-slate-300 dark:border-slate-700 pb-2">
                 <div>
                   <span className="text-slate-500">6. Item Description:</span>
                   <div className="font-bold">Main Landing Gear Actuator</div>

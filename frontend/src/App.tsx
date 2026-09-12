@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ViewMode, ThemeMode, AgentAuditLog } from './types';
+import { ViewMode, ThemeMode, AgentAuditLog, UserRole, ROLE_ALLOWED_VIEWS } from './types';
 import { TopBar } from './components/common/TopBar';
 import { Sidebar } from './components/common/Sidebar';
 import { AuditLogDrawer } from './components/common/AuditLogDrawer';
@@ -9,11 +9,23 @@ import { AeroProcurementView } from './components/views/AeroProcurementView';
 import { TraceVaultView } from './components/views/TraceVaultView';
 import { FulfillmentHubView } from './components/views/FulfillmentHubView';
 import { SalesCommandView } from './components/views/SalesCommandView';
+import { AdminView } from './components/views/AdminView';
 
 export const App: React.FC = () => {
+  const [userRole, setUserRole] = useState<UserRole>('admin');
   const [currentView, setCurrentView] = useState<ViewMode>('customer');
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [isAuditLogOpen, setIsAuditLogOpen] = useState(false);
+
+  // Keep the active view valid whenever the signed-in role changes so a
+  // user can never land on (or stay on) an interface outside their role.
+  useEffect(() => {
+    const allowed = ROLE_ALLOWED_VIEWS[userRole];
+    if (!allowed.includes(currentView)) {
+      setCurrentView(allowed[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userRole]);
 
   const sampleLogs: AgentAuditLog[] = [
     {
@@ -96,13 +108,15 @@ export const App: React.FC = () => {
         return <FulfillmentHubView />;
       case 'sales':
         return <SalesCommandView />;
+      case 'admin':
+        return <AdminView />;
       default:
         return <CustomerDashboard />;
     }
   };
 
   return (
-    <div className={`min-h-screen flex flex-col font-sans transition-colors duration-200 ${
+    <div className={`brand-shell min-h-screen flex flex-col font-sans transition-colors duration-200 ${
       theme === 'dark' ? 'bg-canvas-dark text-slate-100' : 'bg-canvas-light text-slate-900'
     }`}>
       {/* Global Top App Bar */}
@@ -112,16 +126,19 @@ export const App: React.FC = () => {
         onToggleTheme={toggleTheme}
         onSelectView={setCurrentView}
         onOpenAuditLog={() => setIsAuditLogOpen(true)}
+        userRole={userRole}
+        onChangeRole={setUserRole}
       />
 
       {/* Main Content Layout (Sidebar + Active View) */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
         <Sidebar
           currentView={currentView}
           onSelectView={setCurrentView}
+          userRole={userRole}
         />
 
-        <main className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950/60">
+        <main className="flex-1 min-w-0 overflow-y-auto bg-transparent">
           {renderActiveView()}
         </main>
       </div>

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { 
   QrCode, 
@@ -11,8 +11,33 @@ import {
 } from 'lucide-react';
 
 export const FulfillmentHubView: React.FC = () => {
+  const [notification, setNotification] = useState<string | null>(null);
+  const [printed, setPrinted] = useState(false);
+  const [stampsIssued, setStampsIssued] = useState(false);
+
+  const notify = (message: string) => {
+    setNotification(message);
+    setTimeout(() => setNotification(null), 4000);
+  };
+
+  const handlePrintTags = () => {
+    setPrinted(true);
+    notify('ATA 300 Category I packaging tags sent to warehouse printer.');
+  };
+
+  const handleIssueStamps = () => {
+    setStampsIssued(true);
+    notify('Serialized tamper-evident stamps generated and logged to trace record.');
+  };
+
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
+      {notification && (
+        <div className="bg-emerald-50 dark:bg-emerald-500/20 border border-emerald-300 dark:border-emerald-500 text-emerald-800 dark:text-emerald-300 p-3 rounded-xl flex items-center justify-between text-[11px] font-semibold animate-fade-in shadow-sm">
+          <span>{notification}</span>
+          <button onClick={() => setNotification(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-white">✕</button>
+        </div>
+      )}
       {/* Stage Progress Breadcrumb Tracker */}
       <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between font-mono text-[11px] gap-2">
@@ -125,9 +150,12 @@ export const FulfillmentHubView: React.FC = () => {
               </div>
             </div>
 
-            <button className="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-display font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 transition-colors">
+            <button
+              onClick={handlePrintTags}
+              className="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-display font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 transition-colors"
+            >
               <Printer className="w-4 h-4 text-aero-blue" />
-              <span>PRINT ATA 300 CAT I TAGS</span>
+              <span>{printed ? 'TAGS SENT TO PRINTER' : 'PRINT ATA 300 CAT I TAGS'}</span>
             </button>
           </div>
 
@@ -157,8 +185,12 @@ export const FulfillmentHubView: React.FC = () => {
               <div className="text-emerald-700 dark:text-emerald-400 font-bold">DIGITAL TAMPER-EVIDENT STAMPS</div>
             </div>
 
-            <button className="w-full bg-blue-50 hover:bg-blue-100 dark:bg-aero-blue/20 dark:hover:bg-aero-blue text-aero-blue dark:text-aero-blue dark:hover:text-white border border-blue-200 dark:border-aero-blue/40 font-bold py-2.5 px-3 rounded-xl text-xs transition-colors">
-              SERIALIZED TAMPER-EVIDENT STAMPS
+            <button
+              onClick={handleIssueStamps}
+              disabled={stampsIssued}
+              className="w-full bg-blue-50 hover:bg-blue-100 dark:bg-aero-blue/20 dark:hover:bg-aero-blue text-aero-blue dark:text-aero-blue dark:hover:text-white border border-blue-200 dark:border-aero-blue/40 font-bold py-2.5 px-3 rounded-xl text-xs transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {stampsIssued ? 'STAMPS ISSUED' : 'SERIALIZED TAMPER-EVIDENT STAMPS'}
             </button>
 
             <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">

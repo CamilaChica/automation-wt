@@ -4,9 +4,32 @@ export type ViewMode =
   | 'aero-procurement' 
   | 'trace-vault' 
   | 'fulfillment' 
-  | 'sales';
+  | 'sales'
+  | 'admin';
 
 export type ThemeMode = 'dark' | 'light';
+
+/**
+ * Coarse-grained user roles used to delimit which interfaces (ViewMode)
+ * each type of user may access from the sidebar. This keeps the
+ * customer-facing, sales, purchasing, and admin surfaces properly
+ * separated instead of allowing free navigation between all views.
+ */
+export type UserRole = 'customer' | 'sales' | 'purchasing' | 'admin';
+
+export const ROLE_ALLOWED_VIEWS: Record<UserRole, ViewMode[]> = {
+  customer: ['customer'],
+  sales: ['sales', 'customer'],
+  purchasing: ['sourcing', 'aero-procurement', 'trace-vault', 'fulfillment'],
+  admin: ['customer', 'sourcing', 'aero-procurement', 'trace-vault', 'fulfillment', 'sales', 'admin'],
+};
+
+export const ROLE_LABELS: Record<UserRole, string> = {
+  customer: 'Customer',
+  sales: 'Sales Team',
+  purchasing: 'Purchasing / MRO Ops',
+  admin: 'Administrator',
+};
 
 export interface RFQItem {
   id: string;
@@ -124,6 +147,30 @@ export interface AgentAuditLog {
   payload_json?: string;
   timestamp: string;
 }
+
+/**
+ * Human-readable call-sign profile for each autonomous agent, so the
+ * Multi-Agent Reasoning Timeline (and any panel referencing the same
+ * agent classes) can display a named "crew member" instead of a raw
+ * class name.
+ */
+export interface AgentProfile {
+  callSign: string;
+  role: string;
+}
+
+export const AGENT_PROFILES: Record<string, AgentProfile> = {
+  RFQIntakeAgent: { callSign: 'ATLAS', role: 'Intake & Parsing' },
+  PartsIntelligenceAgent: { callSign: 'COMPASS', role: 'Parts Intelligence' },
+  InventoryAgent: { callSign: 'VECTOR', role: 'Inventory & ATP' },
+  ComplianceAgent: { callSign: 'SENTINEL', role: 'Airworthiness Compliance' },
+  PricingAgent: { callSign: 'LEDGER', role: 'Dynamic Pricing' },
+  DynamicPricingAgent: { callSign: 'LEDGER', role: 'Dynamic Pricing' },
+  CustomerCommunicationAgent: { callSign: 'HERALD', role: 'Customer Communication' },
+};
+
+export const getAgentProfile = (agentName: string): AgentProfile =>
+  AGENT_PROFILES[agentName] ?? { callSign: 'UNIT', role: 'Autonomous Agent' };
 
 export interface RFQDetailResponse {
   rfq: RFQ;

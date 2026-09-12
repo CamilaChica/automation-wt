@@ -1,5 +1,5 @@
 import React from 'react';
-import { AgentAuditLog } from '../../types';
+import { AgentAuditLog, getAgentProfile } from '../../types';
 import { X, CheckCircle, AlertTriangle, XCircle, Bot, Cpu, ShieldCheck, DollarSign, Send, Search } from 'lucide-react';
 
 interface AuditLogDrawerProps {
@@ -93,7 +93,12 @@ export const AuditLogDrawer: React.FC<AuditLogDrawerProps> = ({
               <div className="flex items-center justify-between mb-1.5">
                 <div className="flex items-center space-x-2 font-bold">
                   {getAgentIcon(log.agent_name)}
-                  <span className="text-slate-900 dark:text-slate-100">{log.agent_name}</span>
+                  <span className="text-slate-900 dark:text-slate-100">
+                    {getAgentProfile(log.agent_name).callSign}
+                    <span className="ml-1.5 font-normal text-slate-400 dark:text-slate-500 text-[10px]">
+                      {getAgentProfile(log.agent_name).role}
+                    </span>
+                  </span>
                 </div>
                 {getStatusBadge(log.status)}
               </div>

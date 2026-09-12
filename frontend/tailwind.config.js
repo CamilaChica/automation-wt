@@ -19,9 +19,9 @@ export default {
           'light-elevated': '#F1F5F9'
         },
         aero: {
-          blue: '#006BFF',
-          'blue-light': '#0284C7',
-          dark: '#0052CC'
+          blue: '#12304A',
+          'blue-light': '#C9A227',
+          dark: '#0B1F33'
         },
         aog: {
           red: '#EF4444',
@@ -32,13 +32,13 @@ export default {
           'green-light': '#059669'
         },
         warning: {
-          amber: '#F59E0B',
-          'amber-light': '#D97706'
+          amber: '#C9A227',
+          'amber-light': '#A88313'
         }
       },
       fontFamily: {
-        display: ['"Space Grotesk"', 'sans-serif'],
-        sans: ['Inter', 'sans-serif'],
+        display: ['Montserrat', 'sans-serif'],
+        sans: ['Montserrat', 'sans-serif'],
         mono: ['"JetBrains Mono"', 'monospace']
       },
       animation: {

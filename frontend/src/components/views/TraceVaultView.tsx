@@ -15,6 +15,30 @@ import {
 export const TraceVaultView: React.FC = () => {
   const [activeTab, setActiveTab] = useState('WT-29471');
   const [verificationPassed, setVerificationPassed] = useState(true);
+  const [docStatus, setDocStatus] = useState<'pending' | 'certified' | 'rejected' | 'rescanning'>('pending');
+  const [notification, setNotification] = useState<string | null>(null);
+
+  const notify = (message: string) => {
+    setNotification(message);
+    setTimeout(() => setNotification(null), 4000);
+  };
+
+  const handleAccept = () => {
+    setDocStatus('certified');
+    setVerificationPassed(true);
+    notify(`Document for ${activeTab} accepted & certified.`);
+  };
+
+  const handleReject = () => {
+    setDocStatus('rejected');
+    setVerificationPassed(false);
+    notify(`Document for ${activeTab} rejected. Supplier notified to resubmit.`);
+  };
+
+  const handleRescan = () => {
+    setDocStatus('rescanning');
+    notify(`Re-scan requested for ${activeTab}. OCR pipeline queued.`);
+  };
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
@@ -33,7 +57,7 @@ export const TraceVaultView: React.FC = () => {
             </div>
 
             <div className="overflow-x-auto font-mono text-[10px]">
-              <table className="w-full text-left">
+              <table className="w-full min-w-[480px] text-left">
                 <thead>
                   <tr className="text-slate-400 border-b border-slate-100 dark:border-slate-800">
                     <th className="pb-2">Order ID</th>
@@ -159,7 +183,7 @@ export const TraceVaultView: React.FC = () => {
                 </div>
 
                 {/* Form Fields with Bounding Box Highlights */}
-                <div className="grid grid-cols-4 gap-2 pt-1 text-[9px]">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-[9px]">
                   <div className="border border-slate-200 p-1.5 rounded bg-slate-50">
                     <div className="text-[7px] text-slate-500 uppercase">1. Serial Number</div>
                     <div className="font-bold text-slate-900">MLG-9840</div>
@@ -202,20 +226,38 @@ export const TraceVaultView: React.FC = () => {
           </div>
 
           {/* Action Buttons */}
-          <div className="grid grid-cols-3 gap-3 font-display pt-2">
-            <button className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 font-display pt-2">
+            <button
+              onClick={handleAccept}
+              disabled={docStatus === 'certified'}
+              className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 text-xs transition-colors"
+            >
               <CheckCircle2 className="w-4 h-4" />
-              <span>ACCEPT & CERTIFY</span>
+              <span>{docStatus === 'certified' ? 'CERTIFIED' : 'ACCEPT & CERTIFY'}</span>
             </button>
-            <button className="bg-red-500 hover:bg-red-600 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-red-500/20 flex items-center justify-center space-x-2 text-xs">
+            <button
+              onClick={handleReject}
+              disabled={docStatus === 'rejected'}
+              className="bg-red-500 hover:bg-red-600 disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-red-500/20 flex items-center justify-center space-x-2 text-xs transition-colors"
+            >
               <XCircle className="w-4 h-4" />
-              <span>REJECT DOC</span>
+              <span>{docStatus === 'rejected' ? 'REJECTED' : 'REJECT DOC'}</span>
             </button>
-            <button className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 text-xs">
+            <button
+              onClick={handleRescan}
+              className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 text-xs transition-colors"
+            >
               <FileSearch className="w-4 h-4" />
               <span>REQUEST RE-SCAN</span>
             </button>
           </div>
+
+          {notification && (
+            <div className="bg-emerald-50 dark:bg-emerald-500/20 border border-emerald-300 dark:border-emerald-500 text-emerald-800 dark:text-emerald-300 p-3 rounded-xl flex items-center justify-between text-[11px] font-semibold animate-fade-in shadow-sm">
+              <span>{notification}</span>
+              <button onClick={() => setNotification(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-white">✕</button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -272,7 +314,7 @@ export const TraceVaultView: React.FC = () => {
             COMPLIANCE DASHBOARD OVERVIEW
           </h2>
 
-          <div className="grid grid-cols-3 gap-3 text-center font-mono">
+          <div className="grid grid-cols-3 gap-2 sm:gap-3 text-center font-mono">
             <div className="bg-slate-50 dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800">
               <div className="text-emerald-600 dark:text-emerald-400 font-extrabold text-xl">100%</div>
               <div className="text-[9px] text-slate-500 mt-1 uppercase leading-tight font-semibold">
