@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import axios from 'axios';
 import { LockKeyhole, ShieldCheck } from 'lucide-react';
 import { apiService } from '../../services/api';
 
@@ -15,6 +16,39 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated })
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const isCustomer = role === 'customer';
+
+  const friendlyAuthError = (error: unknown): string => {
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status;
+      const detail = typeof error.response?.data?.detail === 'string'
+        ? error.response.data.detail
+        : undefined;
+
+      if (status === 400) {
+        if (detail?.includes('Winged Tycoons staff')) {
+          return 'Use the internal sign-in screen for @wingedtycoons.com accounts.';
+        }
+        if (detail?.includes('Internal users must use')) {
+          return 'Internal sign-in requires a @wingedtycoons.com email address.';
+        }
+        return detail ?? 'Sign-in request is invalid. Please check your email and role.';
+      }
+      if (status === 401) {
+        return 'Your one-time code is invalid or expired. Request a new code.';
+      }
+      if (status === 403) {
+        return detail ?? 'Your account is not authorized for this application.';
+      }
+      if (status === 429) {
+        return detail ?? 'Too many attempts. Please wait and try again.';
+      }
+    }
+
+    if (error instanceof Error && error.message.trim().length > 0) {
+      return error.message;
+    }
+    return 'Sign-in failed. Check your credentials.';
+  };
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -37,7 +71,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated })
         onAuthenticated();
       }
     } catch (loginError) {
-      setError(loginError instanceof Error ? loginError.message : 'Sign-in failed. Check your credentials.');
+      setError(friendlyAuthError(loginError));
     } finally {
       setLoading(false);
     }

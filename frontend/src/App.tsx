@@ -15,9 +15,6 @@ import { apiService } from './services/api';
 
 const InternalApp: React.FC = () => {
   const [authenticated, setAuthenticated] = useState(apiService.getRole() === 'internal');
-  if (!authenticated) {
-    return <AuthScreen role="internal" onAuthenticated={() => setAuthenticated(true)} />;
-  }
   const [currentView, setCurrentView] = useState<ViewMode>('customer');
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [isAuditLogOpen, setIsAuditLogOpen] = useState(false);
@@ -107,6 +104,10 @@ const InternalApp: React.FC = () => {
         return <CustomerDashboard />;
     }
   };
+
+  if (!authenticated) {
+    return <AuthScreen role="internal" onAuthenticated={() => setAuthenticated(true)} />;
+  }
 
   return (
     <div className={`min-h-screen flex flex-col font-sans transition-colors duration-200 ${

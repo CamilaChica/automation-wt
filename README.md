@@ -130,6 +130,7 @@ The tests cover the clean inventory flow, supplier sourcing fallback, compliance
 - Repository-level automation instructions are in `AGENTS.md`.
 - Third-party services (FedEx, DHL, and e-signature) are mocked with MSW handlers in `frontend/src/testing/msw`.
 - Persona E2E coverage exists for Customer, Sales, Procurement, Admin, and Full Autonomous Flow in `frontend/tests/e2e`.
+- Copilot browser-testing usage and capability boundaries are documented in `COPILOT_BROWSER_TESTING.md`.
 
 ## Mock Testing Quick Start
 
