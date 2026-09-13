@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { seedSession } from './helpers/session';
 
 test('customer uploads compliance PDF and submits urgent request', async ({ page }) => {
   let intakeCalls = 0;
@@ -29,30 +30,8 @@ test('customer uploads compliance PDF and submits urgent request', async ({ page
       }),
     });
   });
-  await page.route('**/api/auth/otp/request', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ challenge_id: 'challenge-1', development_otp: '123456' }),
-    });
-  });
-  await page.route('**/api/auth/otp/verify', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        access_token: 'token-customer',
-        role: 'ROLE_CUSTOMER',
-        email: 'procurement@delta-mro.com',
-      }),
-    });
-  });
-
+  await seedSession(page, 'customer');
   await page.goto('/customer-portal');
-  await page.getByLabel('Work email').fill('procurement@delta-mro.com');
-  await page.getByRole('button', { name: 'Send one-time code' }).click();
-  await page.getByPlaceholder('6-digit code').fill('123456');
-  await page.getByRole('button', { name: 'Verify code' }).click();
   await expect(page.getByText('Customer parts portal')).toBeVisible();
   await page.getByPlaceholder('Company or contact name').fill('Delta MRO Services');
   await page.getByPlaceholder('Work email').fill('procurement@delta-mro.com');
@@ -67,7 +46,9 @@ test('customer uploads compliance PDF and submits urgent request', async ({ page
     mimeType: 'application/pdf',
     buffer: Buffer.from('%PDF-1.4\n%mock-euc\n'),
   });
-  await page.locator('input[type="checkbox"]').nth(1).check();
+  await page
+    .getByLabel(/I confirm this order and compliance documentation are valid for export screening\./)
+    .check();
   await page.getByRole('button', { name: 'Send request' }).click();
 
   await expect.poll(() => intakeCalls).toBeGreaterThan(0);

@@ -30,30 +30,8 @@ test('zero-human-in-the-loop autonomous flow across all interfaces', async ({ pa
       }),
     });
   });
-  await page.route('**/api/auth/otp/request', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ challenge_id: 'challenge-2', development_otp: '123456' }),
-    });
-  });
-  await page.route('**/api/auth/otp/verify', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        access_token: 'token-customer',
-        role: 'ROLE_CUSTOMER',
-        email: 'mro.ops@globalairlines.com',
-      }),
-    });
-  });
-
+  await seedSession(page, 'customer');
   await page.goto('/customer-portal');
-  await page.getByLabel('Work email').fill('mro.ops@globalairlines.com');
-  await page.getByRole('button', { name: 'Send one-time code' }).click();
-  await page.getByPlaceholder('6-digit code').fill('123456');
-  await page.getByRole('button', { name: 'Verify code' }).click();
   await expect(page.getByText('Customer parts portal')).toBeVisible();
 
   await page.getByPlaceholder('Company or contact name').fill('Global Airlines');
@@ -68,7 +46,9 @@ test('zero-human-in-the-loop autonomous flow across all interfaces', async ({ pa
     mimeType: 'application/pdf',
     buffer: Buffer.from('%PDF-1.4\n%signed-export-compliance\n'),
   });
-  await page.locator('input[type="checkbox"]').nth(1).check();
+  await page
+    .getByLabel(/I confirm this order and compliance documentation are valid for export screening\./)
+    .check();
   await page.getByRole('button', { name: 'Send request' }).click();
 
   await expect.poll(() => intakeCalls).toBeGreaterThan(0);
@@ -76,14 +56,14 @@ test('zero-human-in-the-loop autonomous flow across all interfaces', async ({ pa
   await seedSession(page, 'internal');
   await page.goto('/');
 
-  await page.getByRole('button', { name: 'Sales Command' }).click();
+  await page.locator('aside button').filter({ hasText: 'Sales Command' }).first().click();
   await page.getByRole('button', { name: 'ISSUE QUOTE' }).click();
   await expect(page.getByText(/issued to Global Airlines/i)).toBeVisible();
 
-  await page.getByRole('button', { name: 'Proc Command' }).click();
+  await page.locator('aside button').filter({ hasText: 'Proc Command' }).first().click();
   await expect(page.getByText('RFQ DETAIL & SOURCING')).toBeVisible();
 
-  await page.getByRole('button', { name: 'Trace Vault' }).click();
+  await page.locator('aside button').filter({ hasText: 'Trace Vault' }).first().click();
   await expect(page.getByText('DOCUMENT REVIEW & VERIFICATION TERMINAL')).toBeVisible();
   await page.getByRole('button', { name: 'ACCEPT & CERTIFY' }).click();
   await expect(page.getByText('Verification state: CERTIFIED')).toBeVisible();
