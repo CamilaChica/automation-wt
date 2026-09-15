@@ -20,6 +20,12 @@ services:
         sync: false
       - key: FRONTEND_ORIGIN
         sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
 
   - type: worker
     name: winged-tycoons-mailbox-worker
@@ -39,6 +45,12 @@ services:
         sync: false
       - key: MAILBOX_POLL_INTERVAL_SECONDS
         value: "60"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
 
   - type: web
     name: winged-tycoons-frontend

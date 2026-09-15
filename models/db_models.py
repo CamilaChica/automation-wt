@@ -84,6 +84,7 @@ class SupplierQuote(BaseModel):
     quantity_available: int = Field(description="Supplier inventory count")
     lead_time_days: int = Field(description="Estimated days to deliver to Winged Tycoons")
     certificate_type: str = Field(description="Certificate type: FAA 8130-3, EASA Form 1, CoC, None")
+    status: str = Field("RECEIVED", description="RECEIVED | PENDING_SUPPLIER_RESPONSE | EXPIRED | REJECTED")
 
 class QuoteItem(BaseModel):
     id: str = Field(description="Unique quote item ID")

@@ -113,6 +113,104 @@ class MockDatabaseService:
         for sup in suppliers_data:
             self.suppliers[sup.id] = sup
 
+    def get_supplier_by_email(self, supplier_email: str) -> Optional[Supplier]:
+        normalized = supplier_email.strip().lower()
+        for supplier in self.suppliers.values():
+            if supplier.email.lower() == normalized:
+                return supplier
+            if supplier.email_quotes and supplier.email_quotes.lower() == normalized:
+                return supplier
+        return None
+
+    def get_or_create_supplier_by_email(self, supplier_email: str) -> Supplier:
+        existing = self.get_supplier_by_email(supplier_email)
+        if existing:
+            return existing
+
+        supplier_id = f"SUP-{uuid.uuid4().hex[:6].upper()}"
+        local_part = supplier_email.split("@", 1)[0].replace(".", " ").replace("-", " ").replace("_", " ").title()
+        supplier = Supplier(
+            id=supplier_id,
+            company_name=f"{local_part} Aviation",
+            contact_name=local_part or "Supplier Contact",
+            phone="+1-000-000-0000",
+            email=supplier_email.lower(),
+            email_quotes=supplier_email.lower(),
+            address_line1="Unknown",
+            city="Unknown",
+            state_province="NA",
+            postal_code="00000",
+            country="US",
+            approval_status="Approved",
+        )
+        self.suppliers[supplier_id] = supplier
+        return supplier
+
+    def upsert_inventory_item_by_part_condition(
+        self,
+        *,
+        part_number: str,
+        condition_code: str,
+        unit_cost: float,
+        quantity_available: int,
+        certificate_type: str,
+        supplier_id: Optional[str] = None,
+        lead_time_days: Optional[int] = None,
+    ) -> InventoryItem:
+        del supplier_id
+        del lead_time_days
+        for item in self.inventory.values():
+            if item.part_number == part_number and item.condition_code == condition_code:
+                item.unit_cost = unit_cost
+                item.quantity_available = quantity_available
+                item.certificate_type = certificate_type
+                return item
+
+        inventory_id = f"INV-{uuid.uuid4().hex[:6].upper()}"
+        new_item = InventoryItem(
+            id=inventory_id,
+            part_number=part_number,
+            serial_number=f"AUTO-{uuid.uuid4().hex[:8].upper()}",
+            quantity_available=quantity_available,
+            condition_code=condition_code,
+            warehouse_location="Supplier feed",
+            unit_cost=unit_cost,
+            certificate_type=certificate_type,
+            has_full_trace=certificate_type.upper() in {"FAA 8130-3", "EASA FORM 1", "DUAL RELEASE"},
+        )
+        self.inventory[new_item.id] = new_item
+        return new_item
+
+    def get_available_quantity(self, part_number: str, condition_code: Optional[str] = None) -> int:
+        quantity = 0
+        for item in self.inventory.values():
+            if item.part_number != part_number:
+                continue
+            if condition_code and item.condition_code != condition_code:
+                continue
+            quantity += item.quantity_available
+        return quantity
+
+    def get_lowest_inventory_unit_cost(self, part_number: str, condition_code: Optional[str] = None) -> Optional[float]:
+        costs: List[float] = []
+        for item in self.inventory.values():
+            if item.part_number != part_number:
+                continue
+            if condition_code and item.condition_code != condition_code:
+                continue
+            costs.append(item.unit_cost)
+        return min(costs) if costs else None
+
+    def get_inventory_items_for_part(self, part_number: str, condition_code: Optional[str] = None) -> List[InventoryItem]:
+        matches: List[InventoryItem] = []
+        for item in self.inventory.values():
+            if item.part_number != part_number:
+                continue
+            if condition_code and item.condition_code != condition_code:
+                continue
+            matches.append(item)
+        return matches
+
     # RFQ Operations
     def create_rfq(self, customer_name: str, customer_email: str, raw_text: str) -> RFQ:
         rfq_id = f"RFQ-{uuid.uuid4().hex[:6].upper()}"
@@ -158,6 +256,65 @@ class MockDatabaseService:
 
     def get_rfq_items(self, rfq_id: str) -> List[RFQItem]:
         return self.rfq_items.get(rfq_id, [])
+
+    def add_supplier_quote(self, supplier_quote: SupplierQuote) -> SupplierQuote:
+        if supplier_quote.rfq_item_id not in self.supplier_quotes:
+            self.supplier_quotes[supplier_quote.rfq_item_id] = []
+
+        for index, existing in enumerate(self.supplier_quotes[supplier_quote.rfq_item_id]):
+            if existing.id == supplier_quote.id:
+                self.supplier_quotes[supplier_quote.rfq_item_id][index] = supplier_quote
+                return supplier_quote
+
+        self.supplier_quotes[supplier_quote.rfq_item_id].append(supplier_quote)
+        return supplier_quote
+
+    def create_supplier_quote_request(
+        self,
+        *,
+        rfq_item_id: str,
+        supplier_id: str,
+        supplier_name: str,
+        contact_email: str,
+        part_number: str,
+        quantity_available: int,
+        status: str = "PENDING_SUPPLIER_RESPONSE",
+        unit_cost: float = 0.0,
+        lead_time_days: int = 0,
+        certificate_type: str = "Unknown",
+    ) -> SupplierQuote:
+        quote = SupplierQuote(
+            id=f"SQ-{uuid.uuid4().hex[:6].upper()}",
+            rfq_item_id=rfq_item_id,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+            contact_email=contact_email,
+            part_number=part_number,
+            unit_cost=unit_cost,
+            quantity_available=quantity_available,
+            lead_time_days=lead_time_days,
+            certificate_type=certificate_type,
+            status=status,
+        )
+        return self.add_supplier_quote(quote)
+
+    def list_pending_supplier_quotes(self) -> List[SupplierQuote]:
+        pending: List[SupplierQuote] = []
+        for quotes in self.supplier_quotes.values():
+            for quote in quotes:
+                if quote.status == "PENDING_SUPPLIER_RESPONSE":
+                    pending.append(quote)
+        return pending
+
+    def get_supplier_quotes_for_part(self, part_number: str, include_pending: bool = True) -> List[SupplierQuote]:
+        matches: List[SupplierQuote] = []
+        for quotes in self.supplier_quotes.values():
+            for quote in quotes:
+                if quote.part_number == part_number:
+                    if not include_pending and quote.status == "PENDING_SUPPLIER_RESPONSE":
+                        continue
+                    matches.append(quote)
+        return matches
 
     # Audit Log Operations
     def add_audit_log(self, rfq_id: str, agent_name: str, action: str, message: str, status: str = "SUCCESS", payload: str = None) -> AgentAuditLog:

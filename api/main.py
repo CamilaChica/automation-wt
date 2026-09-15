@@ -7,6 +7,10 @@ from models.db_models import RFQ, RFQItem, Quote, QuoteItem, AgentAuditLog, Supp
 from services.db_service import db_service
 from services.orchestration_service import orchestration_service
 from services.mailbox_service import fetch_inbox_headers, send_message, send_otp_email
+from services.supplier_ingestion import ingest_supplier_quote_email
+from services.procurement_service import procurement_service
+from services.sales_automation_service import sales_automation_service
+from services.agentic_sales_coordinator import agentic_sales_coordinator
 from api.auth import current_user, init_auth_db, request_otp, require_roles, verify_otp
 
 app = FastAPI(
@@ -73,6 +77,23 @@ class MailboxMessageRequest(BaseModel):
     subject: str
     body: str
     reply_to: Optional[str] = None
+
+
+class SupplierIngestionRequest(BaseModel):
+    source_email_id: str
+    raw_quote_text: str
+
+
+class SupplierIngestionBatchRequest(BaseModel):
+    entries: List[SupplierIngestionRequest]
+
+
+class RFQStatusUpdateRequest(BaseModel):
+    status: str
+
+
+class AgenticRunRequest(BaseModel):
+    rfq_id: str
 
 # Endpoints
 
@@ -319,3 +340,90 @@ async def mailbox_send(
         raise HTTPException(403, "You do not have send access to this mailbox.")
     send_message(mailbox, request.recipient, request.subject, request.body, request.reply_to)
     return {"status": "sent", "mailbox": mailbox, "sent_by": user["email"]}
+
+
+@app.post("/api/internal/purchasing/ingest-quote")
+async def ingest_supplier_quote(
+    request: SupplierIngestionRequest,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+):
+    try:
+        result = ingest_supplier_quote_email(
+            source_email_id=request.source_email_id,
+            raw_quote_text=request.raw_quote_text,
+        )
+        return {"status": "success", "result": result}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/internal/purchasing/ingest-batch")
+async def ingest_supplier_quote_batch(
+    request: SupplierIngestionBatchRequest,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+):
+    results = []
+    for entry in request.entries:
+        try:
+            row = ingest_supplier_quote_email(
+                source_email_id=entry.source_email_id,
+                raw_quote_text=entry.raw_quote_text,
+            )
+            results.append({"source_email_id": entry.source_email_id, "status": "success", "result": row})
+        except ValueError as exc:
+            results.append({"source_email_id": entry.source_email_id, "status": "error", "error": str(exc)})
+    return {"count": len(results), "results": results}
+
+
+@app.post("/api/internal/procurement/trigger/{rfq_id}")
+async def trigger_procurement(
+    rfq_id: str,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+):
+    try:
+        actions = procurement_service.trigger_out_of_stock_procurement(rfq_id)
+        return {"rfq_id": rfq_id, "actions": actions}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/internal/procurement/pending")
+async def get_pending_procurement(
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+):
+    return {"items": procurement_service.get_pending_procurement_items()}
+
+
+@app.post("/api/internal/sales/quote/{rfq_id}")
+async def generate_sales_quote(
+    rfq_id: str,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES")),
+):
+    try:
+        result = sales_automation_service.generate_customer_quote(rfq_id)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/internal/sales/rfq/{rfq_id}/status")
+async def update_sales_rfq_status(
+    rfq_id: str,
+    request: RFQStatusUpdateRequest,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES")),
+):
+    try:
+        return sales_automation_service.advance_rfq_status(rfq_id, request.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/internal/sales/agentic/run")
+async def run_agentic_sales_cycle(
+    request: AgenticRunRequest,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
+):
+    try:
+        return agentic_sales_coordinator.run_rfq_cycle(request.rfq_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

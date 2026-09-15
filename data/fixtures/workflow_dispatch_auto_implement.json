@@ -1,0 +1,7 @@
+{
+  "inputs": {
+    "task": "Validate RFQ approval path and tighten audit visibility for customer-safe responses.",
+    "allow_writes": "false",
+    "dry_run": "true"
+  }
+}

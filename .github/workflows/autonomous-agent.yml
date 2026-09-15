@@ -1,0 +1,70 @@
+name: Autonomous Developer Agent
+
+on:
+  issues:
+    types: [labeled]
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "Task statement for autonomous run"
+        required: false
+        default: ""
+      allow_writes:
+        description: "Allow branch writes and PR creation"
+        required: false
+        default: "false"
+      dry_run:
+        description: "Force dry run"
+        required: false
+        default: "true"
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  run-autonomous-agent:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'issues' || github.event.label.name == 'auto-implement'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run autonomous agent
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_BRANCH: main
+          CODEX_COMMAND: ${{ secrets.CODEX_COMMAND }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          ALLOW_SCHEDULED_WRITES: "false"
+        run: python -m agent_runner
+
+      - name: Upload agent artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autonomous-agent-runs
+          path: artifacts/agent-runs
+          if-no-files-found: ignore

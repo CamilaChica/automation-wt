@@ -122,6 +122,111 @@ python -m unittest discover -s tests -p "test_*.py"
 
 The tests cover the clean inventory flow, supplier sourcing fallback, compliance escalation, RFQ intake, parts intelligence, and agent behavior.
 
+## Relational procurement database architecture
+
+The repository now includes a SQLite relational layer for supplier-linked inventory and client RFQ/PO history:
+
+- Migration: `src/db/migrations/002_relational_schema.sql`
+- Seed script: `src/db/seed.py`
+- Relational helpers: `services/relational_db.py`
+- Autonomous purchasing parser: `services/purchasing_email_parser.py`
+- Role-specific query services: `services/role_queries.py`
+- Database inspection CLI: `scripts/inspect_database.py`
+
+### Schema entities
+
+- `suppliers`
+- `clients`
+- `inventory_items` (`supplier_id` FK)
+- `client_rfqs` (`client_id` FK, optional `inventory_item_id` FK)
+- `purchase_orders` (`client_rfq_id` FK, `supplier_id` FK)
+- `purchasing_email_ingestion` (idempotent source-email processing log)
+
+### Local commands
+
+Seed relational schema and mock data:
+
+```powershell
+python src/db/seed.py
+```
+
+Run parser and role-query tests:
+
+```powershell
+python -m unittest tests/test_purchasing_email_parser.py tests/test_role_queries.py
+```
+
+Inspect relational database summary:
+
+```powershell
+python scripts/inspect_database.py --seed-if-empty
+```
+
+Watch the summary refresh every 5 seconds:
+
+```powershell
+python scripts/inspect_database.py --watch --seed-if-empty
+```
+
+## Autonomous developer agent workflow
+
+This repository includes a first-pass autonomous runner:
+
+- Context and constraints: `AGENTS.md`
+- Guardrail policy: `config/autonomous_agent_policy.json`
+- Runner package: `agent_runner/`
+- GitHub workflow: `.github/workflows/autonomous-agent.yml`
+
+Supported trigger modes:
+
+- Issue label trigger (`auto-implement`) on GitHub issues
+- Scheduled cron run (weekly, Monday 04:00 UTC by default)
+- Manual dispatch (`workflow_dispatch`)
+
+Required runtime settings:
+
+- `CODEX_COMMAND` (GitHub Actions secret): shell command template used to invoke your Codex executor. It can reference `{prompt_file}` and `{workspace}` placeholders.
+- `GITHUB_TOKEN`: provided by GitHub Actions.
+- Optional:
+  - `DRY_RUN=true|false`
+  - `ALLOW_SCHEDULED_WRITES=true|false` (defaults to false for safe scheduled runs)
+
+Behavior notes:
+
+- The runner never writes to protected branches and creates `codex/feature-update-*` branches.
+- Verification is enforced after agent edits:
+  1. `python -m unittest discover -s tests -p "test_*.py"`
+  2. `npm run lint` (frontend)
+  3. `npm run build` (frontend)
+- If verification fails, the runner retries with diagnostic feedback up to the configured attempt limit.
+
+### Local dry-run simulation (no push / no PR)
+
+Use this to test trigger parsing and artifact generation before enabling writes:
+
+1. Ensure dependencies are installed:
+   - Backend: `python -m pip install -r requirements.txt`
+   - Frontend: `cd frontend && npm ci`
+2. From repository root, run:
+   - Issue-label mode: `python scripts/run_agent_dry_run.py --mode issues`
+   - Manual dispatch mode: `python scripts/run_agent_dry_run.py --mode workflow_dispatch`
+   - Schedule mode: `python scripts/run_agent_dry_run.py --mode schedule`
+3. Optional: provide a custom event payload file:
+   - `python scripts/run_agent_dry_run.py --mode issues --event data/fixtures/issues_labeled_auto_implement.json`
+
+What this does:
+
+- Uses mode-specific fixtures:
+  - `issues`: `data/fixtures/issues_labeled_auto_implement.json`
+  - `workflow_dispatch`: `data/fixtures/workflow_dispatch_auto_implement.json`
+  - `schedule`: `data/fixtures/schedule_auto_implement.json`
+- Forces `DRY_RUN=true`
+- Skips git branch writes, push, and PR creation
+- Still runs verification commands and writes artifacts under `artifacts/agent-runs/`
+- Run summaries should report:
+  - `"writes_enabled": false`
+  - `"pr_url": null`
+
 ## API Overview
 
 - `GET /` - Health and service information

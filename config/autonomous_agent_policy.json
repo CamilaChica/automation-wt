@@ -1,0 +1,11 @@
+{
+  "protected_branches": ["main", "master"],
+  "allowed_branch_prefixes": ["codex/"],
+  "allowed_verify_commands": [
+    "python -m unittest discover -s tests -p \"test_*.py\"",
+    "npm run lint",
+    "npm run build"
+  ],
+  "max_attempts": 3,
+  "trigger_label": "auto-implement"
+}

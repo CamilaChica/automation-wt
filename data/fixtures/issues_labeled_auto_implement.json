@@ -1,0 +1,11 @@
+{
+  "action": "labeled",
+  "label": {
+    "name": "auto-implement"
+  },
+  "issue": {
+    "number": 101,
+    "title": "Connect customer purchase flow to inventory tracking service",
+    "body": "Wire the purchase submission flow so inventory allocations are updated and reflected in RFQ audit logs."
+  }
+}
