@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowRight, CheckCircle2, Clock3, FileSearch, Plane, Search, ShieldCheck } from 'lucide-react';
 import { apiService } from '../../services/api';
+import { BrandMark } from '../common/BrandMark';
 
 type CatalogResult = Awaited<ReturnType<typeof apiService.searchCatalog>>[number];
 
@@ -56,7 +57,7 @@ export const CustomerPortal: React.FC = () => {
       <header className="border-b border-slate-800 bg-slate-950/95">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
           <a href="/" className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-aero-blue to-cyan-400 font-display font-bold">WT</span>
+            <BrandMark />
             <span className="font-display text-lg font-bold tracking-wide">WINGED TYCOONS</span>
           </a>
           <a href="mailto:parts@wingedtycoons.com" className="text-sm text-slate-300 hover:text-white">Need help? Contact parts desk</a>

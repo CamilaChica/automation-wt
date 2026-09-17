@@ -10,14 +10,14 @@ services:
         sync: false
       - key: WT_AUTH_SECRET
         sync: false
-      - key: SALES_EMAIL_USERNAME
+      - key: GRAPH_TENANT_ID
         sync: false
-      - key: SALES_EMAIL_PASSWORD
+      - key: GRAPH_CLIENT_ID
         sync: false
-      - key: PURCHASING_EMAIL_USERNAME
+      - key: GRAPH_CLIENT_SECRET
         sync: false
-      - key: PURCHASING_EMAIL_PASSWORD
-        sync: false
+      - key: GRAPH_TIMEOUT_SECONDS
+        value: "30"
       - key: FRONTEND_ORIGIN
         sync: false
 
@@ -29,14 +29,14 @@ services:
     envVars:
       - key: WT_AUTH_SECRET
         sync: false
-      - key: SALES_EMAIL_USERNAME
+      - key: GRAPH_TENANT_ID
         sync: false
-      - key: SALES_EMAIL_PASSWORD
+      - key: GRAPH_CLIENT_ID
         sync: false
-      - key: PURCHASING_EMAIL_USERNAME
+      - key: GRAPH_CLIENT_SECRET
         sync: false
-      - key: PURCHASING_EMAIL_PASSWORD
-        sync: false
+      - key: GRAPH_TIMEOUT_SECONDS
+        value: "30"
       - key: MAILBOX_POLL_INTERVAL_SECONDS
         value: "60"
 

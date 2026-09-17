@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import { LockKeyhole, ShieldCheck } from 'lucide-react';
 import { apiService } from '../../services/api';
+import { BrandMark } from './BrandMark';
 
 interface AuthScreenProps {
   role: 'customer' | 'internal';
@@ -81,7 +82,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated })
     <div className={`min-h-screen ${isCustomer ? 'bg-slate-950 text-white' : 'bg-slate-100 text-slate-900'} flex items-center justify-center p-6`}>
       <form onSubmit={submit} className={`w-full max-w-md rounded-3xl border p-8 shadow-xl ${isCustomer ? 'border-slate-800 bg-slate-900' : 'border-slate-200 bg-white'}`}>
         <div className="mb-8 flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-aero-blue text-lg font-bold text-white">WT</div>
+          <BrandMark />
           <div><p className="font-display text-lg font-bold">WINGED TYCOONS</p><p className="text-xs uppercase tracking-wider text-slate-400">{isCustomer ? 'Customer portal' : 'Internal command center'}</p></div>
         </div>
         <div className="mb-6 flex items-start gap-3"><LockKeyhole className="mt-1 h-5 w-5 text-aero-blue" /><div><h1 className="font-display text-2xl font-bold">Secure sign in</h1><p className="mt-1 text-sm text-slate-500">Your access is restricted to the {isCustomer ? 'customer portal' : 'internal operations workspace'}.</p></div></div>
