@@ -1,7 +1,10 @@
 import axios from 'axios';
 import { RFQ, RFQDetailResponse, InventoryItem, Supplier, Quote, QuoteItem, AgentAuditLog } from '../types';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
+const hostedApiBase = window.location.hostname === 'winged-tycoons-frontend.onrender.com'
+  ? 'https://winged-tycoons-api.onrender.com/api'
+  : '/api';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || hostedApiBase;
 
 axios.interceptors.request.use(config => {
   const token = localStorage.getItem('wt_access_token');
