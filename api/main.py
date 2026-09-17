@@ -14,9 +14,17 @@ app = FastAPI(
     description="Automated multi-agent processing pipeline with Human-in-the-Loop approval gates.",
     version="1.0.0"
 )
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "FRONTEND_ORIGIN",
+        "http://localhost:3000,https://winged-tycoons-frontend.onrender.com",
+    ).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[origin.strip() for origin in os.getenv("FRONTEND_ORIGIN", "http://localhost:3000").split(",") if origin.strip()],
+    allow_origins=allowed_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["Authorization", "Content-Type"],
@@ -80,10 +88,13 @@ class MailboxMessageRequest(BaseModel):
 async def otp_request(request: OtpRequest):
     challenge_id, code = request_otp(request.email, request.role, request.full_name)
     response = {"challenge_id": challenge_id, "message": "If eligible, an OTP has been sent."}
-    if os.getenv("WT_AUTH_ENV", "development") == "production":
+    auth_env = os.getenv("WT_AUTH_ENV", "development").strip().lower()
+    if auth_env == "production":
         send_otp_email(request.email, code)
-    else:
+    elif auth_env == "development":
         response["development_otp"] = code
+    else:
+        raise HTTPException(status_code=500, detail="WT_AUTH_ENV must be 'development' or 'production'.")
     return response
 
 @app.post("/api/auth/otp/verify", response_model=LoginResponse)

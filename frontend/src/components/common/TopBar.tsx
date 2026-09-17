@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ViewMode, ThemeMode } from '../../types';
 import { Search, Sun, Moon, Bell, ShieldCheck, UserCheck, AlertTriangle, Bot } from 'lucide-react';
+import { BrandMark } from './BrandMark';
 
 interface TopBarProps {
   currentView: ViewMode;
@@ -66,9 +67,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       {/* Brand & Page Title */}
       <div className="flex items-center space-x-3">
         <div className="flex items-center space-x-2 bg-slate-100 dark:bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700/80">
-          <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-aero-blue to-cyan-400 flex items-center justify-center font-display font-bold text-white text-xs shadow-md">
-            WT
-          </div>
+          <BrandMark compact />
           <span className="font-display font-bold text-sm tracking-wider text-slate-900 dark:text-slate-100">
             WINGED TYCOONS
           </span>

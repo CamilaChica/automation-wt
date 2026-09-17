@@ -15,6 +15,7 @@ import {
 export const TraceVaultView: React.FC = () => {
   const [activeTab, setActiveTab] = useState('WT-29471');
   const [verificationPassed, setVerificationPassed] = useState(true);
+  const [hardFreezeEnabled, setHardFreezeEnabled] = useState(false);
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
@@ -191,10 +192,18 @@ export const TraceVaultView: React.FC = () => {
               </div>
 
               {/* OCR Scan Status Banner */}
-              <div className="mt-2 bg-white dark:bg-slate-900/90 border border-emerald-200 dark:border-emerald-500/40 p-2.5 rounded-xl flex items-center justify-between text-[11px] shadow-sm">
+              <div className={`mt-2 bg-white dark:bg-slate-900/90 p-2.5 rounded-xl flex items-center justify-between text-[11px] shadow-sm ${
+                hardFreezeEnabled
+                  ? 'border border-red-300 dark:border-red-500/50'
+                  : 'border border-emerald-200 dark:border-emerald-500/40'
+              }`}>
                 <div className="flex items-center space-x-2 text-emerald-600 dark:text-emerald-400 font-bold">
                   <ShieldCheck className="w-4 h-4" />
-                  <span>OCR Scan: 100% Verified (0 Trace Gaps)</span>
+                  <span>
+                    {hardFreezeEnabled
+                      ? 'Order hard freeze active: suspicious transaction blocked.'
+                      : 'OCR Scan: 100% Verified (0 Trace Gaps)'}
+                  </span>
                 </div>
                 <div className="text-[10px] text-slate-500 font-mono">Confidence: 99.8%</div>
               </div>
@@ -202,12 +211,24 @@ export const TraceVaultView: React.FC = () => {
           </div>
 
           {/* Action Buttons */}
-          <div className="grid grid-cols-3 gap-3 font-display pt-2">
-            <button className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 text-xs">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 font-display pt-2">
+            <button
+              onClick={() => {
+                setVerificationPassed(true);
+                setHardFreezeEnabled(false);
+              }}
+              className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 text-xs"
+            >
               <CheckCircle2 className="w-4 h-4" />
               <span>ACCEPT & CERTIFY</span>
             </button>
-            <button className="bg-red-500 hover:bg-red-600 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-red-500/20 flex items-center justify-center space-x-2 text-xs">
+            <button
+              onClick={() => {
+                setVerificationPassed(false);
+                setHardFreezeEnabled(false);
+              }}
+              className="bg-red-500 hover:bg-red-600 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-red-500/20 flex items-center justify-center space-x-2 text-xs"
+            >
               <XCircle className="w-4 h-4" />
               <span>REJECT DOC</span>
             </button>
@@ -215,7 +236,20 @@ export const TraceVaultView: React.FC = () => {
               <FileSearch className="w-4 h-4" />
               <span>REQUEST RE-SCAN</span>
             </button>
+            <button
+              onClick={() => {
+                setVerificationPassed(false);
+                setHardFreezeEnabled(true);
+              }}
+              className="bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 px-4 rounded-xl border border-red-500/60 flex items-center justify-center space-x-2 text-xs"
+            >
+              <AlertOctagon className="w-4 h-4 text-red-300" />
+              <span>HARD FREEZE ORDER</span>
+            </button>
           </div>
+          <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+            Verification state: {verificationPassed ? 'CERTIFIED' : 'REVIEW_REQUIRED'}
+          </p>
         </div>
       </div>
 

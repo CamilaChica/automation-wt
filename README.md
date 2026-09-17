@@ -21,6 +21,7 @@ Winged Tycoons is a prototype aerospace parts procurement platform. It turns an 
 - `data/` - Seed data and mock database storage
 - `frontend/` - React, TypeScript, Vite, and Tailwind dashboard
 - `models/` - Database models and API data structures
+- `scripts/` - Utility scripts for local setup and testing workflows
 - `services/` - Database and orchestration services
 - `tests/` - Backend workflow and agent tests
 - `tools/` - Shared tool interfaces
@@ -55,14 +56,15 @@ The repository includes `render.yaml` for the FastAPI web service and a separate
 mailbox worker. Create a Render Blueprint from the repository, set every
 `sync: false` variable in the Render dashboard, and do not commit a `.env` file.
 Set `WT_AUTH_ENV=production` and generate a unique `WT_AUTH_SECRET`. The worker
-requires a long-running worker plan; a serverless-only plan cannot poll IMAP.
+requires a long-running worker plan. Do not enable production mode until Graph
+mail delivery has passed a smoke test.
 Set `FRONTEND_ORIGIN` to the deployed frontend URL and set the frontend
 `VITE_API_BASE_URL` to the deployed API URL plus `/api`, for example
 `https://winged-tycoons-api.onrender.com/api`.
 
-The current worker validates mailbox connectivity and logs header counts. Message
-persistence, assignment, and outbound attribution should be enabled only after
-the first safe IMAP smoke test succeeds.
+The mailbox worker validates Graph mailbox connectivity and logs header counts.
+It must remain suspended while the API uses development OTP or while Graph
+credentials have not been validated.
 
 ## Run the Frontend
 
@@ -91,18 +93,37 @@ The API returns `401` for missing/invalid sessions and `403` when a valid user a
 to cross role boundaries; internal inventory, suppliers, approvals, and RFQ operations
 are not exposed to customer-role tokens.
 
-The local mailbox adapter is in `services/mailbox_service.py`. Copy `.env.example`
-to a local `.env` or configure equivalent process environment variables. Set
-`SALES_EMAIL_PASSWORD` and `PURCHASING_EMAIL_PASSWORD` for the two separate
-mailboxes; passwords are never written to SQLite or source code. It reads each
-`INBOX` over IMAP on `outlook.office365.com:993` and sends through
-`smtp.office365.com:587`. In production, set `WT_AUTH_ENV=production` so OTPs
-are sent through the Sales mailbox instead of being returned in API responses.
+The mailbox adapter in `services/mailbox_service.py` uses the Graph client in
+`services/graph_client.py`. Configure `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, and
+`GRAPH_CLIENT_SECRET` only in the process environment or Render secret store.
+The app uses Graph `Mail.Read` and `Mail.Send` application permissions for the
+two shared mailboxes; it does not use IMAP/SMTP Basic Authentication.
 
-For local mailbox testing, set the four mailbox variables in the process
-environment, then run `python worker.py`. Stop the worker after confirming both
-mailboxes can be read. Do not test against production mailboxes until you have
-verified the credentials and Microsoft 365 tenant policy.
+For local mailbox testing, register an Entra application, grant admin consent,
+set the three Graph variables in the process environment, then run
+`python worker.py`. Stop the worker after confirming both mailboxes can be read.
+Never commit these values or paste them into chat.
+
+### Temporary hosted testing mode
+
+The deployed API may use `WT_AUTH_ENV=development` only for controlled testing.
+In that mode the OTP is returned in the API response and displayed in the sign-in
+screen, so it is not suitable for real customers. Keep the mailbox worker
+suspended in this mode. Before launch, configure Graph OAuth, switch the API to
+`WT_AUTH_ENV=production`, verify real OTP delivery, and only then resume the
+worker.
+
+### Production launch checklist
+
+1. Register an Entra app and grant least-privilege Graph application permissions
+   (`Mail.Read` and `Mail.Send`), then grant admin consent.
+2. Enter the tenant ID, client ID, and client secret directly into the Render API
+   and worker environment settings.
+3. Deploy the API and verify customer and internal OTP delivery by email.
+4. Verify sales and purchasing inbox reads and an outbound test message.
+5. Resume the worker and monitor its logs through a complete polling interval.
+6. Confirm HTTPS/CORS, persistent database storage or backups, health checks,
+   support ownership, and a documented rollback to the previous deployment.
 
 Useful frontend commands:
 
@@ -110,6 +131,8 @@ Useful frontend commands:
 npm run build    # Type-check and create a production build
 npm run lint     # Run the TypeScript compiler checks
 npm run preview  # Preview the production build locally
+npm run test:unit # Run Vitest unit/integration suites (frontend/tests)
+npm run test:e2e  # Run Playwright browser E2E suites (frontend/tests/e2e)
 ```
 
 ## Run Tests
@@ -121,6 +144,26 @@ python -m unittest discover -s tests -p "test_*.py"
 ```
 
 The tests cover the clean inventory flow, supplier sourcing fallback, compliance escalation, RFQ intake, parts intelligence, and agent behavior.
+
+## Autonomous Testing Architecture
+
+- Repository-level automation instructions are in `AGENTS.md`.
+- Third-party services (FedEx, DHL, and e-signature) are mocked with MSW handlers in `frontend/src/testing/msw`.
+- Persona E2E coverage exists for Customer, Sales, Procurement, Admin, and Full Autonomous Flow in `frontend/tests/e2e`.
+- Copilot browser-testing usage and capability boundaries are documented in `COPILOT_BROWSER_TESTING.md`.
+
+## Mock Testing Quick Start
+
+To run mock testing with mock customers and internal team members:
+
+1. Seed/reset the auth test users:
+
+```powershell
+python scripts/seed_mock_test_env.py --reset
+```
+
+2. Start backend and frontend (see sections above).
+3. Follow the persona runbooks and scenario matrix in `MOCK_TESTING_GUIDE.md`.
 
 ## API Overview
 

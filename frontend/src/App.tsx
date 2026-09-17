@@ -15,9 +15,6 @@ import { apiService } from './services/api';
 
 const InternalApp: React.FC = () => {
   const [authenticated, setAuthenticated] = useState(apiService.getRole() === 'internal');
-  if (!authenticated) {
-    return <AuthScreen role="internal" onAuthenticated={() => setAuthenticated(true)} />;
-  }
   const [currentView, setCurrentView] = useState<ViewMode>('customer');
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [isAuditLogOpen, setIsAuditLogOpen] = useState(false);
@@ -108,6 +105,10 @@ const InternalApp: React.FC = () => {
     }
   };
 
+  if (!authenticated) {
+    return <AuthScreen role="internal" onAuthenticated={() => setAuthenticated(true)} />;
+  }
+
   return (
     <div className={`min-h-screen flex flex-col font-sans transition-colors duration-200 ${
       theme === 'dark' ? 'bg-canvas-dark text-slate-100' : 'bg-canvas-light text-slate-900'
@@ -149,10 +150,12 @@ const CustomerPortalRoute: React.FC = () => {
   return authenticated ? <CustomerPortal /> : <AuthScreen role="customer" onAuthenticated={() => setAuthenticated(true)} />;
 };
 
-export const App: React.FC = () => (
-  window.location.pathname === '/customer-portal' || window.location.pathname === '/portal'
-    ? <CustomerPortalRoute />
-    : <InternalApp />
-);
+export const App: React.FC = () => {
+  const isCustomerPath =
+    window.location.pathname.startsWith('/customer-portal') ||
+    window.location.pathname.startsWith('/portal');
+  const isCustomerSession = apiService.getRole() === 'customer';
+  return isCustomerPath || isCustomerSession ? <CustomerPortalRoute /> : <InternalApp />;
+};
 
 export default App;

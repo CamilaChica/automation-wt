@@ -1,91 +1,82 @@
-"""Separate Outlook mailbox access for the local MVP.
+"""Microsoft Graph mailbox access for the shared sales and purchasing mailboxes."""
 
-Each shared mailbox has its own IMAP/SMTP username and password. Passwords are
-read only from environment variables and are never stored in the repository,
-SQLite, or API responses. OAuth2 should replace this adapter if basic
-authentication is disabled by Microsoft 365.
-"""
-
-import email
-import imaplib
-import os
-import smtplib
 from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Optional
+
+from services.graph_client import GraphClient, GraphClientError
 
 
 @dataclass(frozen=True)
 class MailboxConfig:
     address: str
-    username_env: str
-    password_env: str
 
 
 MAILBOXES = {
-    "sales": MailboxConfig("sales@wingedtycoons.com", "SALES_EMAIL_USERNAME", "SALES_EMAIL_PASSWORD"),
-    "purchasing": MailboxConfig("purchasing@wingedtycoons.com", "PURCHASING_EMAIL_USERNAME", "PURCHASING_EMAIL_PASSWORD"),
+    "sales": MailboxConfig("sales@wingedtycoons.com"),
+    "purchasing": MailboxConfig("purchasing@wingedtycoons.com"),
 }
 
 
-def _credentials(mailbox: str) -> tuple[str, str]:
+def _mailbox(mailbox: str) -> MailboxConfig:
     config = MAILBOXES.get(mailbox)
     if not config:
         raise ValueError("Unknown mailbox.")
-    username = os.getenv(config.username_env, config.address)
-    password = os.getenv(config.password_env)
-    if not password:
-        raise RuntimeError(f"Missing {config.password_env}; mailbox access is not configured.")
-    return username, password
+    return config
+
+
+def _client() -> GraphClient:
+    return GraphClient()
 
 
 def fetch_inbox_headers(mailbox: str, limit: int = 25) -> list[dict[str, str]]:
-    username, password = _credentials(mailbox)
-    client = imaplib.IMAP4_SSL("outlook.office365.com", 993)
-    try:
-        client.login(username, password)
-        status, _ = client.select("INBOX", readonly=True)
-        if status != "OK":
-            raise RuntimeError("Unable to open mailbox INBOX.")
-        status, data = client.search(None, "ALL")
-        if status != "OK":
-            raise RuntimeError("Unable to search mailbox.")
-        message_ids = data[0].split()[-limit:]
-        results = []
-        for message_id in reversed(message_ids):
-            status, message_data = client.fetch(message_id, "(BODY.PEEK[HEADER])")
-            if status != "OK":
-                continue
-            raw_header = b"".join(part for part in message_data if isinstance(part, tuple))
-            message = email.message_from_bytes(raw_header)
-            results.append({
-                "mailbox": mailbox,
-                "message_id": message_id.decode(),
-                "from": message.get("From", ""),
-                "subject": message.get("Subject", ""),
-                "date": message.get("Date", ""),
-            })
-        return results
-    finally:
-        try:
-            client.logout()
-        except imaplib.IMAP4.error:
-            pass
+    config = _mailbox(mailbox)
+    if limit <= 0:
+        return []
+    payload = _client().request(
+        "GET",
+        f"/users/{config.address}/mailFolders/inbox/messages"
+        f"?$top={min(limit, 100)}&$select=id,from,subject,receivedDateTime",
+    )
+    values = payload.get("value")
+    if not isinstance(values, list):
+        raise GraphClientError("Microsoft Graph returned an invalid mailbox message list.")
+    results = []
+    for message in values:
+        if not isinstance(message, dict) or not isinstance(message.get("id"), str):
+            raise GraphClientError("Microsoft Graph returned an invalid mailbox message.")
+        sender = message.get("from", {})
+        sender_address = sender.get("emailAddress", {}).get("address", "") if isinstance(sender, dict) else ""
+        results.append({
+            "mailbox": mailbox,
+            "message_id": message["id"],
+            "from": sender_address,
+            "subject": str(message.get("subject", "")),
+            "date": str(message.get("receivedDateTime", "")),
+        })
+    return results
 
 
-def send_message(mailbox: str, recipient: str, subject: str, body: str, reply_to: Optional[str] = None) -> None:
-    username, password = _credentials(mailbox)
-    message = EmailMessage()
-    message["From"] = MAILBOXES[mailbox].address
-    message["To"] = recipient
-    message["Subject"] = subject
+def send_message(
+    mailbox: str,
+    recipient: str,
+    subject: str,
+    body: str,
+    reply_to: Optional[str] = None,
+) -> None:
+    config = _mailbox(mailbox)
+    message_body: dict[str, object] = {
+            "subject": subject,
+            "body": {"contentType": "Text", "content": body},
+            "toRecipients": [{"emailAddress": {"address": recipient}}],
+    }
+    message: dict[str, object] = {
+        "message": message_body,
+        "saveToSentItems": True,
+    }
     if reply_to:
-        message["In-Reply-To"] = reply_to
-    message.set_content(body)
-    with smtplib.SMTP("smtp.office365.com", 587, timeout=30) as client:
-        client.starttls()
-        client.login(username, password)
-        client.send_message(message)
+        message_body["replyTo"] = [{"emailAddress": {"address": reply_to}}]
+    _client().request("POST", f"/users/{config.address}/sendMail", message)
 
 
 def send_otp_email(recipient: str, code: str) -> None:
