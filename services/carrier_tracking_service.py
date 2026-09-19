@@ -24,7 +24,7 @@ STATUS_MAP = {
 
 class CarrierTrackingService:
     def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None):
-        self.api_key = api_key or os.getenv("AFTERSHIP_API_KEY", "")
+        self.api_key = os.getenv("AFTERSHIP_API_KEY", "") if api_key is None else api_key
         self.base_url = (base_url or os.getenv("AFTERSHIP_BASE_URL", "https://api.aftership.com/tracking/2026-07")).rstrip("/")
 
     def _headers(self) -> Dict[str, str]:

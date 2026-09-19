@@ -138,7 +138,11 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         {/* Notification Bell */}
         <div className="relative">
-          <button className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800/80 text-slate-700 dark:text-slate-300 hover:text-slate-900 hover:border-aero-blue transition-all">
+          <button
+            onClick={onOpenAuditLog}
+            aria-label="Open operational notifications"
+            className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800/80 text-slate-700 dark:text-slate-300 hover:text-slate-900 hover:border-aero-blue transition-all"
+          >
             <Bell className="w-4 h-4" />
           </button>
           <span className="absolute -top-1 -right-1 w-4 h-4 bg-aero-blue text-white font-mono text-[9px] font-bold rounded-full flex items-center justify-center shadow">

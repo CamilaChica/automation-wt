@@ -1,5 +1,6 @@
 import React from 'react';
 import { ViewMode } from '../../types';
+import { apiService } from '../../services/api';
 import { 
   LayoutDashboard, 
   FileText, 
@@ -105,13 +106,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) =
           System Utility
         </div>
         <div className="space-y-1">
-          <button className="w-full flex items-center space-x-3 px-3 py-2 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors">
+          <button
+            onClick={() => onSelectView('fulfillment')}
+            className="w-full flex items-center space-x-3 px-3 py-2 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors"
+          >
             <Truck className="w-4 h-4 text-slate-400" />
             <span>Logistics API</span>
           </button>
-          <button className="w-full flex items-center space-x-3 px-3 py-2 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors">
+          <button
+            onClick={() => onSelectView('fulfillment')}
+            className="w-full flex items-center space-x-3 px-3 py-2 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors"
+          >
             <Settings className="w-4 h-4 text-slate-400" />
-            <span>Account Settings</span>
+            <span>Fulfillment Settings</span>
           </button>
           <a href="/customer-portal" className="w-full flex items-center space-x-3 px-3 py-2 text-xs text-aero-blue hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors">
             <Search className="w-4 h-4" />
@@ -136,7 +143,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) =
           </div>
         </div>
 
-        <button className="mt-2 w-full flex items-center justify-center space-x-2 py-1.5 rounded text-xs text-slate-400 hover:text-aog-red transition-colors">
+        <button
+          onClick={() => {
+            apiService.logout();
+            window.location.href = '/internal';
+          }}
+          className="mt-2 w-full flex items-center justify-center space-x-2 py-1.5 rounded text-xs text-slate-400 hover:text-aog-red transition-colors"
+        >
           <LogOut className="w-3.5 h-3.5" />
           <span>Exit Command Center</span>
         </button>

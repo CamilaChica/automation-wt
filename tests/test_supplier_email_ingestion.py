@@ -13,7 +13,26 @@ from services.supplier_database import supplier_db
 
 class TestSupplierEmailIngestion(unittest.TestCase):
     def setUp(self):
+        self._email_send_enabled = os.environ.get("EMAIL_SEND_ENABLED")
+        self._graph_environment = {
+            name: os.environ.get(name)
+            for name in ("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "GRAPH_MAILBOX_USER")
+        }
+        os.environ["EMAIL_SEND_ENABLED"] = "false"
+        for name in self._graph_environment:
+            os.environ.pop(name, None)
         db_service.reset_supplier_data()
+
+    def tearDown(self):
+        if self._email_send_enabled is None:
+            os.environ.pop("EMAIL_SEND_ENABLED", None)
+        else:
+            os.environ["EMAIL_SEND_ENABLED"] = self._email_send_enabled
+        for name, value in self._graph_environment.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
     def test_ingest_supplier_email_stores_real_offer_data(self):
         email_text = """

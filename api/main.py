@@ -66,6 +66,30 @@ class CatalogItem(BaseModel):
     certificate_type: str
     has_full_trace: bool
 
+class CustomerQuoteItem(BaseModel):
+    part_number: str
+    quantity: int
+    unit_price: float
+    certificate_type: str
+    compliance_status: str
+
+class CustomerQuote(BaseModel):
+    id: str
+    rfq_id: str
+    subtotal: float
+    shipping_cost: float
+    total_amount: float
+    status: str
+
+class CustomerQuoteDetails(BaseModel):
+    quote: CustomerQuote
+    items: List[CustomerQuoteItem]
+
+class CustomerRFQDetail(BaseModel):
+    rfq: RFQ
+    items: List[RFQItem]
+    quote_details: Optional[CustomerQuoteDetails] = None
+
 class IntakeResponse(BaseModel):
     rfq_id: str
     status: str
@@ -206,14 +230,19 @@ async def trigger_process(rfq_id: str, _user: dict = Depends(require_roles("ROLE
     return res
 
 @app.get("/api/rfqs", response_model=List[RFQ])
-async def list_rfqs(_user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"))):
+async def list_rfqs(user: dict = Depends(current_user)):
     """
     Retrieves all RFQs.
     """
-    return db_service.list_rfqs()
+    rfqs = db_service.list_rfqs()
+    if user["role"] == "ROLE_CUSTOMER":
+        return [rfq for rfq in rfqs if rfq.customer_email.lower() == user["email"].lower()]
+    if user["role"] not in ("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions.")
+    return rfqs
 
 @app.get("/api/rfqs/{rfq_id}")
-async def get_rfq_detail(rfq_id: str, user: dict = Depends(current_user)):
+async def get_rfq_detail(rfq_id: str, user: dict = Depends(current_user)) -> CustomerRFQDetail | dict:
     """
     Retrieves complete status details, items, audit logs, and associated quotes.
     """
@@ -224,8 +253,37 @@ async def get_rfq_detail(rfq_id: str, user: dict = Depends(current_user)):
         raise HTTPException(status_code=403, detail="You can only access your own requests.")
         
     items = db_service.get_rfq_items(rfq_id)
-    logs = db_service.get_audit_logs(rfq_id)
     quote = db_service.get_quote_by_rfq(rfq_id)
+
+    if user["role"] == "ROLE_CUSTOMER":
+        quote_details = None
+        if quote:
+            quote_details = CustomerQuoteDetails(
+                quote=CustomerQuote(
+                    id=quote.id,
+                    rfq_id=quote.rfq_id,
+                    subtotal=quote.subtotal,
+                    shipping_cost=quote.shipping_cost,
+                    total_amount=quote.total_amount,
+                    status=quote.status,
+                ),
+                items=[
+                    CustomerQuoteItem(
+                        part_number=item.part_number,
+                        quantity=item.quantity,
+                        unit_price=item.unit_price,
+                        certificate_type=item.certificate_type,
+                        compliance_status=item.compliance_status,
+                    )
+                    for item in db_service.get_quote_items(quote.id)
+                ],
+            )
+        return CustomerRFQDetail(rfq=rfq, items=items, quote_details=quote_details)
+
+    if user["role"] not in ("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions.")
+
+    logs = db_service.get_audit_logs(rfq_id)
     
     quote_details = None
     if quote:

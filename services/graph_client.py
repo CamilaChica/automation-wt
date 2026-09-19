@@ -29,10 +29,13 @@ class GraphSettings:
 
     @classmethod
     def from_environment(cls) -> "GraphSettings":
+        tenant_id = os.getenv("AZURE_TENANT_ID", os.getenv("GRAPH_TENANT_ID", "")).strip()
+        client_id = os.getenv("AZURE_CLIENT_ID", os.getenv("GRAPH_CLIENT_ID", "")).strip()
+        client_secret = os.getenv("AZURE_CLIENT_SECRET", os.getenv("GRAPH_CLIENT_SECRET", ""))
         values = {
-            "GRAPH_TENANT_ID": os.getenv("GRAPH_TENANT_ID", "").strip(),
-            "GRAPH_CLIENT_ID": os.getenv("GRAPH_CLIENT_ID", "").strip(),
-            "GRAPH_CLIENT_SECRET": os.getenv("GRAPH_CLIENT_SECRET", ""),
+            "AZURE_TENANT_ID": tenant_id,
+            "AZURE_CLIENT_ID": client_id,
+            "AZURE_CLIENT_SECRET": client_secret,
         }
         missing = [name for name, value in values.items() if not value]
         if missing:
@@ -45,7 +48,7 @@ class GraphSettings:
             raise GraphClientError("GRAPH_TIMEOUT_SECONDS must be a number.") from exc
         if timeout <= 0:
             raise GraphClientError("GRAPH_TIMEOUT_SECONDS must be greater than zero.")
-        return cls(values["GRAPH_TENANT_ID"], values["GRAPH_CLIENT_ID"], values["GRAPH_CLIENT_SECRET"], timeout)
+        return cls(values["AZURE_TENANT_ID"], values["AZURE_CLIENT_ID"], values["AZURE_CLIENT_SECRET"], timeout)
 
 
 class GraphClient:

@@ -174,8 +174,12 @@ export const App: React.FC = () => {
   const isCustomerPath =
     window.location.pathname.startsWith('/customer-portal') ||
     window.location.pathname.startsWith('/portal');
+  const isInternalPath = window.location.pathname.startsWith('/internal');
   const isCustomerSession = apiService.getRole() === 'customer';
-  return isCustomerPath || isCustomerSession ? <CustomerPortalRoute /> : <InternalApp />;
+  const isInternalSession = apiService.getRole() === 'internal';
+  if (isInternalPath || isInternalSession) return <InternalApp />;
+  if (isCustomerPath || isCustomerSession || window.location.pathname === '/') return <CustomerPortalRoute />;
+  return <CustomerPortalRoute />;
 };
 
 export default App;

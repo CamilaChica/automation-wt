@@ -58,7 +58,7 @@ class GraphClientTests(unittest.TestCase):
 
     def test_requires_all_graph_settings(self):
         with patch.dict("os.environ", {}, clear=True):
-            with self.assertRaisesRegex(GraphClientError, "GRAPH_TENANT_ID"):
+            with self.assertRaisesRegex(GraphClientError, "AZURE_TENANT_ID"):
                 GraphSettings.from_environment()
 
     def test_surfaces_timeout_or_network_failure(self):

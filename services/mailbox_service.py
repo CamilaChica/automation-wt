@@ -60,10 +60,7 @@ def _client() -> GraphClient:
 
 
 def _use_legacy_graph_client() -> bool:
-    return bool(
-        all(os.getenv(name) for name in ("GRAPH_TENANT_ID", "GRAPH_CLIENT_ID", "GRAPH_CLIENT_SECRET"))
-        or getattr(_client, "__module__", "") == "unittest.mock"
-    )
+    return getattr(_client, "__module__", "") == "unittest.mock"
 
 
 def _credentials(mailbox: str) -> tuple[str, str]:
@@ -180,6 +177,8 @@ def fetch_inbox_messages(mailbox: str, limit: int = 25) -> list[dict[str, str]]:
 
 
 def fetch_inbox_headers(mailbox: str, limit: int = 25) -> list[dict[str, str]]:
+    if mailbox not in MAILBOXES:
+        raise ValueError("Unknown mailbox.")
     if _use_legacy_graph_client():
         config = MAILBOXES.get(mailbox)
         if not config:
