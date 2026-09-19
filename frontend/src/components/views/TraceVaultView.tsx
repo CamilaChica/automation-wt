@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { apiService } from '../../services/api';
+import { RFQ } from '../../types';
 import { 
   ShieldCheck, 
   AlertOctagon, 
@@ -13,9 +15,17 @@ import {
 } from 'lucide-react';
 
 export const TraceVaultView: React.FC = () => {
-  const [activeTab, setActiveTab] = useState('WT-29471');
-  const [verificationPassed, setVerificationPassed] = useState(true);
+  const [activeTab, setActiveTab] = useState('');
+  const [rfqs, setRfqs] = useState<RFQ[]>([]);
+  const [verificationPassed, setVerificationPassed] = useState(false);
   const [hardFreezeEnabled, setHardFreezeEnabled] = useState(false);
+
+  useEffect(() => {
+    void apiService.getRFQs().then(items => {
+      setRfqs(items);
+      if (items[0]) setActiveTab(items[0].id);
+    }).catch(() => setRfqs([]));
+  }, []);
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
@@ -30,7 +40,7 @@ export const TraceVaultView: React.FC = () => {
                 <span className="w-2 h-2 rounded-full bg-aero-blue animate-ping" />
                 <span>DOCUMENTATION STATUS PIPELINE</span>
               </h2>
-              <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-bold">REAL TIME DATA</span>
+              <span className="text-[10px] font-mono text-aero-blue font-bold">LIVE RFQ DATA</span>
             </div>
 
             <div className="overflow-x-auto font-mono text-[10px]">
@@ -44,36 +54,15 @@ export const TraceVaultView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
-                  <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/40 text-slate-700 dark:text-slate-200">
-                    <td className="py-2.5 text-aero-blue font-bold">WT-29471</td>
-                    <td className="py-2.5">32-11-45-01</td>
-                    <td className="py-2.5 text-slate-500">Back-to-Birth</td>
-                    <td className="py-2.5 text-right">
-                      <span className="px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-500/40 font-bold">
-                        In Progress
-                      </span>
-                    </td>
-                  </tr>
-                  <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/40 text-slate-700 dark:text-slate-200">
-                    <td className="py-2.5 text-aero-blue font-bold">WT-29472</td>
-                    <td className="py-2.5">32-11-45-01</td>
-                    <td className="py-2.5 text-slate-500">Dual Trace</td>
-                    <td className="py-2.5 text-right">
-                      <span className="px-2 py-0.5 rounded-full bg-red-50 dark:bg-aog-red/20 text-aog-red border border-red-200 dark:border-aog-red/40 font-bold">
-                        Gap Identified
-                      </span>
-                    </td>
-                  </tr>
-                  <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/40 text-slate-700 dark:text-slate-200">
-                    <td className="py-2.5 text-aero-blue font-bold">WT-29473</td>
-                    <td className="py-2.5">32-11-45-01</td>
-                    <td className="py-2.5 text-slate-500">Dual Trace</td>
-                    <td className="py-2.5 text-right">
-                      <span className="px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/40 font-bold">
-                        Approved
-                      </span>
-                    </td>
-                  </tr>
+                  {rfqs.length === 0 && <tr><td colSpan={4} className="py-8 text-center text-slate-400">No RFQ documentation records available.</td></tr>}
+                  {rfqs.map(rfq => (
+                    <tr key={rfq.id} onClick={() => setActiveTab(rfq.id)} className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40 text-slate-700 dark:text-slate-200">
+                      <td className="py-2.5 text-aero-blue font-bold">{rfq.id}</td>
+                      <td className="py-2.5">{rfq.part_number || 'Pending extraction'}</td>
+                      <td className="py-2.5 text-slate-500">Awaiting document data</td>
+                      <td className="py-2.5 text-right"><span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700 font-bold">{rfq.status}</span></td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

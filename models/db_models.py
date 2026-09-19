@@ -37,6 +37,7 @@ class RFQ(BaseModel):
     customer_email: str = Field(description="Contact email")
     status: str = Field("Intake", description="Intake, Validating, Supplier_Sourcing, Compliance_Check, Pricing, Pending_Approval, Quote_Sent, Rejected")
     raw_text: str = Field(description="Raw unstructured text from email or document")
+    thread_id: Optional[str] = Field(None, description="Originating email message ID used for same-thread replies")
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class InventoryItem(BaseModel):
@@ -108,6 +109,29 @@ class Quote(BaseModel):
     comments: Optional[str] = Field(None, description="Review notes or rejection reasons")
     approved_by: Optional[str] = Field(None, description="Authorized human user name")
     approved_at: Optional[datetime] = Field(None, description="Approval timestamp")
+
+class ShipmentEvent(BaseModel):
+    id: str = Field(description="Unique shipment event ID")
+    shipment_id: str = Field(description="Associated shipment ID")
+    status: str = Field(description="Shipment status")
+    location: Optional[str] = Field(None, description="Public-safe event location")
+    description: str = Field(description="Customer-safe event description")
+    occurred_at: datetime = Field(default_factory=datetime.utcnow)
+
+class Shipment(BaseModel):
+    id: str = Field(description="Unique shipment ID")
+    rfq_id: str = Field(description="Associated RFQ ID")
+    quote_id: Optional[str] = Field(None, description="Associated quote ID")
+    customer_email: str = Field(description="Customer contact email")
+    part_numbers: List[str] = Field(default_factory=list)
+    quantity: int = Field(1, description="Total quantity shipped")
+    carrier: Optional[str] = None
+    tracking_number: Optional[str] = None
+    status: str = Field("Preparing Shipment", description="Current shipment status")
+    estimated_delivery: Optional[str] = None
+    public_token: str = Field(description="Opaque customer tracking token")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 class AgentAuditLog(BaseModel):
     id: Optional[int] = Field(None, description="Autoincrement log ID")

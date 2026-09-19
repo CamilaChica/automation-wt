@@ -9,6 +9,7 @@ from agents.compliance_agent import ComplianceAgent
 from agents.pricing_agent import PricingAgent
 from agents.quote_generation_agent import QuoteGenerationAgent
 from agents.customer_communication_agent import CustomerCommunicationAgent
+from services.communication_service import communication_service
 
 class OrchestrationService:
     def __init__(self):
@@ -74,6 +75,25 @@ class OrchestrationService:
                 res = await self.parts_intel_agent.execute({"requested_part_number": item.requested_part_number})
                 
                 if not res.success:
+                    unknown_part = "unknown" in (res.error_message or "").lower() or "not found" in (res.error_message or "").lower()
+                    if unknown_part:
+                        request_results = communication_service.request_part_quotes(
+                            item.requested_part_number,
+                            item.quantity,
+                        )
+                        db_service.update_rfq_status(rfq_id, "Supplier_Sourcing")
+                        db_service.add_audit_log(
+                            rfq_id, "SupplierCommunicationAgent", "supplier_rfq_dispatch",
+                            f"Part '{item.requested_part_number}' is not in the catalog; requested supplier quotations from {len(request_results)} contact(s).",
+                            "SUCCESS" if request_results else "WARNING",
+                            json.dumps(request_results),
+                        )
+                        return {
+                            "status": "Supplier_Request_Sent",
+                            "message": f"Part '{item.requested_part_number}' is not in the internal catalog. Supplier outreach was initiated.",
+                            "supplier_request_count": len(request_results),
+                            "supplier_requests": request_results,
+                        }
                     db_service.update_rfq_status(rfq_id, "Verification_Halted")
                     db_service.add_audit_log(
                         rfq_id, "PartsIntelligenceAgent", "part_validation",
@@ -137,15 +157,27 @@ class OrchestrationService:
                     })
 
                     if not sup_res.success:
+                        request_results = communication_service.request_part_quotes(
+                            item.resolved_part_number,
+                            shortage_qty,
+                        )
                         db_service.update_rfq_status(rfq_id, "Sourcing_Failed")
                         db_service.add_audit_log(
                             rfq_id, "SupplierDiscoveryAgent", "supplier_search",
                             f"Failed to source part '{item.resolved_part_number}': {sup_res.error_message}",
                             "FAILURE", json.dumps(sup_res.dict())
                         )
+                        db_service.add_audit_log(
+                            rfq_id, "SupplierCommunicationAgent", "supplier_rfq_dispatch",
+                            f"Requested quotations for unavailable part '{item.resolved_part_number}' from {len(request_results)} supplier contact(s).",
+                            "SUCCESS" if request_results else "WARNING",
+                            json.dumps(request_results),
+                        )
                         return {
                             "status": "Sourcing_Failed",
                             "error": f"Sourcing failed: {sup_res.error_message}",
+                            "supplier_request_count": len(request_results),
+                            "supplier_requests": request_results,
                             "escalation": sup_res.escalation_triggered
                         }
 
@@ -413,7 +445,8 @@ class OrchestrationService:
                 "quote_id": quote_id,
                 "total_amount": quote.total_amount,
                 "pdf_summary": f"Quote ID: {quote_id}\nTotal: ${quote.total_amount:.2f}\nSubtotal: ${quote.subtotal:.2f}"
-            }
+            },
+            "reply_to": rfq.thread_id,
         })
         
         db_service.add_audit_log(

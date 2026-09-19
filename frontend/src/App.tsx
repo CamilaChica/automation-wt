@@ -18,6 +18,8 @@ const InternalApp: React.FC = () => {
   const [currentView, setCurrentView] = useState<ViewMode>('customer');
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [isAuditLogOpen, setIsAuditLogOpen] = useState(false);
+  const [auditLogs, setAuditLogs] = useState<AgentAuditLog[]>([]);
+  const [auditRfqId, setAuditRfqId] = useState('');
 
   const sampleLogs: AgentAuditLog[] = [
     {
@@ -69,6 +71,24 @@ const InternalApp: React.FC = () => {
       timestamp: new Date(Date.now() - 2100000).toISOString()
     }
   ];
+
+  useEffect(() => {
+    let active = true;
+    void apiService.getRFQs().then(async rfqs => {
+      if (!active || rfqs.length === 0) return;
+      const detail = await apiService.getRFQDetail(rfqs[0].id);
+      if (active) {
+        setAuditRfqId(rfqs[0].id);
+        setAuditLogs(detail.logs || []);
+      }
+    }).catch(() => {
+      if (active) {
+        setAuditLogs(sampleLogs);
+        setAuditRfqId('WT-29471');
+      }
+    });
+    return () => { active = false; };
+  }, []);
 
   // Sync theme with HTML class
   useEffect(() => {
@@ -138,8 +158,8 @@ const InternalApp: React.FC = () => {
       <AuditLogDrawer
         isOpen={isAuditLogOpen}
         onClose={() => setIsAuditLogOpen(false)}
-        logs={sampleLogs}
-        rfqId="WT-29471"
+        logs={auditLogs.length ? auditLogs : sampleLogs}
+        rfqId={auditRfqId || 'Live operations'}
       />
     </div>
   );

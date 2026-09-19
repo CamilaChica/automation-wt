@@ -237,6 +237,26 @@ export const apiService = {
       return this.submitRFQ(raw_text);
     }
   },
+  async submitPurchaseOrder(quote_id: string, po_number: string, customer_email: string): Promise<{ status: string; po_number: string }> {
+    const res = await axios.post(`${API_BASE}/purchase-orders`, {
+      quote_id,
+      po_number,
+      customer_email,
+    });
+    return res.data;
+  },
+  async trackShipment(public_token: string): Promise<any> {
+    const res = await axios.get(`${API_BASE}/shipments/track/${encodeURIComponent(public_token)}`);
+    return res.data;
+  },
+  async getSupplierOffers(part_number: string): Promise<any[]> {
+    const res = await axios.get(`${API_BASE}/supplier-offers`, { params: { part_number } });
+    return res.data;
+  },
+  async getShipments(): Promise<any[]> {
+    const res = await axios.get(`${API_BASE}/internal/shipments`);
+    return res.data;
+  },
 
   async searchCatalog(query: string): Promise<Array<Pick<InventoryItem, 'part_number' | 'condition_code' | 'quantity_available' | 'certificate_type' | 'has_full_trace'>>> {
     try {

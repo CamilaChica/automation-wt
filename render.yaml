@@ -3,46 +3,66 @@ services:
     name: winged-tycoons-api
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    startCommand: python run_service.py
     healthCheckPath: /
+    disk:
+      name: winged-tycoons-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: WT_AUTH_ENV
         sync: false
       - key: WT_AUTH_SECRET
         sync: false
-      - key: GRAPH_TENANT_ID
+      - key: SALES_EMAIL_USERNAME
         sync: false
-      - key: GRAPH_CLIENT_ID
+      - key: SALES_EMAIL_PASSWORD
         sync: false
-      - key: GRAPH_CLIENT_SECRET
+      - key: PURCHASING_EMAIL_USERNAME
         sync: false
-      - key: GRAPH_TIMEOUT_SECONDS
+      - key: PURCHASING_EMAIL_PASSWORD
+        sync: false
+      - key: AZURE_TENANT_ID
+        sync: false
+      - key: AZURE_CLIENT_ID
+        sync: false
+      - key: AZURE_CLIENT_SECRET
+        sync: false
+      - key: GRAPH_MAILBOX_USER
+        sync: false
+      - key: EMAIL_SEND_ENABLED
+        value: "true"
+      - key: MAILBOX_MAX_AGE_DAYS
+        value: "7"
+      - key: CUSTOMER_FOLLOWUP_DELAY_MINUTES
         value: "30"
+      - key: SUPPLIER_DISCOUNT_MAX_ROUNDS
+        value: "2"
+      - key: PURCHASE_ORDER_NOTIFICATION_EMAIL
+        value: "camila@wingedtycoons.com"
+      - key: AFTERSHIP_API_KEY
+        sync: false
+      - key: AFTERSHIP_BASE_URL
+        value: "https://api.aftership.com/tracking/2026-07"
+      - key: CARRIER_WEBHOOK_SECRET
+        sync: false
+      - key: PUBLIC_APP_URL
+        sync: false
+      - key: OPERATIONS_DB_PATH
+        value: "/var/data/operations.db"
+      - key: SUPPLIER_DATABASE_PATH
+        value: "/var/data/supplier_email_store.db"
+      - key: WT_AUTH_DB
+        value: "/var/data/winged_tycoons_auth.db"
+      - key: AZURE_STORAGE_CONNECTION_STRING
+        sync: false
+      - key: AZURE_STORAGE_CONTAINER
+        value: "winged-tycoons-backups"
       - key: FRONTEND_ORIGIN
         sync: false
 
-  - type: worker
-    name: winged-tycoons-mailbox-worker
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python worker.py
-    envVars:
-      - key: WT_AUTH_SECRET
-        sync: false
-      - key: GRAPH_TENANT_ID
-        sync: false
-      - key: GRAPH_CLIENT_ID
-        sync: false
-      - key: GRAPH_CLIENT_SECRET
-        sync: false
-      - key: GRAPH_TIMEOUT_SECONDS
-        value: "30"
-      - key: MAILBOX_POLL_INTERVAL_SECONDS
-        value: "60"
-
-  - type: web
+  - type: static
     name: winged-tycoons-frontend
-    runtime: static
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
     rootDir: frontend

@@ -16,6 +16,12 @@ export const CustomerPortal: React.FC = () => {
   const [agreementSigned, setAgreementSigned] = useState(false);
   const [complianceFileName, setComplianceFileName] = useState<string | null>(null);
   const [trackingStatus, setTrackingStatus] = useState<string | null>(null);
+  const [quoteId, setQuoteId] = useState('');
+  const [poNumber, setPoNumber] = useState('');
+  const [isSubmittingPo, setIsSubmittingPo] = useState(false);
+  const [trackingToken, setTrackingToken] = useState('');
+  const [shipment, setShipment] = useState<any>(null);
+  const [isTracking, setIsTracking] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -51,6 +57,37 @@ export const CustomerPortal: React.FC = () => {
     setTrackingStatus('Processing Autonomous Fulfillment');
     setIsSubmitting(false);
   };
+
+  const handlePurchaseOrder = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setIsSubmittingPo(true);
+    try {
+      await apiService.submitPurchaseOrder(quoteId, poNumber, customerEmail);
+      setNotice(`Purchase order ${poNumber} received. Our purchasing team will confirm the order by email.`);
+      setQuoteId('');
+      setPoNumber('');
+    } finally {
+      setIsSubmittingPo(false);
+    }
+  };
+
+  const handleTrackShipment = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setIsTracking(true);
+    try {
+      setShipment(await apiService.trackShipment(trackingToken));
+    } finally {
+      setIsTracking(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!trackingToken || !shipment) return;
+    const refresh = window.setInterval(() => {
+      void apiService.trackShipment(trackingToken).then(setShipment).catch(() => undefined);
+    }, 60000);
+    return () => window.clearInterval(refresh);
+  }, [trackingToken, shipment]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -146,6 +183,50 @@ export const CustomerPortal: React.FC = () => {
               <p className="mt-3 rounded-xl border border-cyan-400/40 bg-cyan-400/10 p-3 text-xs font-semibold text-cyan-300">
                 Tracking status: {trackingStatus}
               </p>
+            )}
+          </form>
+
+          <form onSubmit={handlePurchaseOrder} className="rounded-3xl border border-emerald-400/30 bg-emerald-400/10 p-6">
+            <h2 className="font-display text-xl font-bold">Send a purchase order</h2>
+            <p className="mt-1 text-sm text-slate-300">Use the quote reference from our email. Supplier details remain confidential.</p>
+            <div className="mt-5 space-y-3">
+              <input required value={quoteId} onChange={event => setQuoteId(event.target.value)} placeholder="Quote reference, e.g. QTE-123456" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-emerald-400" />
+              <input required value={poNumber} onChange={event => setPoNumber(event.target.value)} placeholder="Your purchase order number" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-emerald-400" />
+              <input required type="email" value={customerEmail} onChange={event => setCustomerEmail(event.target.value)} placeholder="Work email" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-emerald-400" />
+              <button disabled={isSubmittingPo} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-400 px-4 py-3 font-bold text-slate-950 hover:bg-emerald-300 disabled:opacity-60">{isSubmittingPo ? 'Sending purchase order...' : 'Submit purchase order'} <ArrowRight className="h-4 w-4" /></button>
+            </div>
+          </form>
+
+          <form onSubmit={handleTrackShipment} className="rounded-3xl border border-slate-700 bg-slate-900 p-6">
+            <h2 className="font-display text-xl font-bold">Track a shipment</h2>
+            <p className="mt-1 text-sm text-slate-400">Enter the private tracking token from our shipment email.</p>
+            <div className="mt-5 flex gap-3">
+              <input required value={trackingToken} onChange={event => setTrackingToken(event.target.value)} placeholder="Tracking token" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-cyan-400" />
+              <button disabled={isTracking} className="rounded-xl bg-cyan-400 px-4 py-3 font-bold text-slate-950 disabled:opacity-60" aria-label="Track shipment">{isTracking ? '...' : 'Track'}</button>
+            </div>
+            {shipment && (
+              <div className="mt-4 rounded-xl border border-slate-700 bg-slate-950 p-4 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="font-display text-lg font-bold text-cyan-300">{shipment.status}</div>
+                  <span className="rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-300">Live status</span>
+                </div>
+                <div className="mt-3 grid gap-2 text-slate-400 sm:grid-cols-2">
+                  <div>Carrier: <span className="text-slate-200">{shipment.carrier || 'Preparing'}</span></div>
+                  <div>Tracking: <span className="font-mono text-slate-200">{shipment.tracking_number || 'Pending'}</span></div>
+                  <div>Latest location: <span className="text-slate-200">{shipment.events?.[shipment.events.length - 1]?.location || 'Pending update'}</span></div>
+                  <div>Estimated delivery: <span className="text-slate-200">{shipment.estimated_delivery || 'To be confirmed'}</span></div>
+                </div>
+                <div className="mt-5 border-l border-slate-700 pl-4">
+                  {(shipment.events || []).slice().reverse().map((event: any, index: number) => (
+                    <div key={`${event.id}-${index}`} className="relative pb-4 last:pb-0">
+                      <span className="absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full bg-cyan-400 ring-4 ring-slate-950" />
+                      <div className="font-semibold text-slate-200">{event.status}</div>
+                      <div className="text-xs text-slate-400">{event.description}</div>
+                      {event.location && <div className="mt-1 text-xs text-cyan-300">{event.location}</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </form>
         </section>

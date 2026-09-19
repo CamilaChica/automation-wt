@@ -1,7 +1,10 @@
+import json
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
-from models.db_models import RFQ, RFQItem, InventoryItem, SupplierQuote, Quote, QuoteItem, AgentAuditLog, Supplier
+from models.db_models import RFQ, RFQItem, InventoryItem, SupplierQuote, Quote, QuoteItem, AgentAuditLog, Supplier, Shipment, ShipmentEvent
+from services.operations_store import operations_store
+from services.supplier_database import supplier_db
 
 class MockDatabaseService:
     def __init__(self):
@@ -13,8 +16,67 @@ class MockDatabaseService:
         self.quotes: Dict[str, Quote] = {}
         self.quote_items: Dict[str, List[QuoteItem]] = {}
         self.audit_logs: Dict[str, List[AgentAuditLog]] = {}
+        self.shipments: Dict[str, Shipment] = {}
+        self.shipment_events: Dict[str, List[ShipmentEvent]] = {}
         
-        self.seed_mock_data()
+        if not self._restore_state():
+            self.seed_mock_data()
+        self.seed_supplier_records()
+
+    @staticmethod
+    def _model_data(model):
+        return model.model_dump(mode="json") if hasattr(model, "model_dump") else model.dict()
+
+    def _persist_state(self) -> None:
+        operations_store.save({
+            "rfqs": {key: self._model_data(value) for key, value in self.rfqs.items()},
+            "rfq_items": {key: [self._model_data(value) for value in values] for key, values in self.rfq_items.items()},
+            "inventory": {key: self._model_data(value) for key, value in self.inventory.items()},
+            "suppliers": {key: self._model_data(value) for key, value in self.suppliers.items()},
+            "quotes": {key: self._model_data(value) for key, value in self.quotes.items()},
+            "quote_items": {key: [self._model_data(value) for value in values] for key, values in self.quote_items.items()},
+            "audit_logs": {key: [self._model_data(value) for value in values] for key, values in self.audit_logs.items()},
+            "shipments": {key: self._model_data(value) for key, value in self.shipments.items()},
+            "shipment_events": {key: [self._model_data(value) for value in values] for key, values in self.shipment_events.items()},
+        })
+
+    def _restore_state(self) -> bool:
+        state = operations_store.load()
+        if not state:
+            return False
+        self.rfqs = {key: RFQ.model_validate(value) for key, value in state.get("rfqs", {}).items()}
+        self.rfq_items = {key: [RFQItem.model_validate(item) for item in values] for key, values in state.get("rfq_items", {}).items()}
+        self.inventory = {key: InventoryItem.model_validate(value) for key, value in state.get("inventory", {}).items()}
+        self.suppliers = {key: Supplier.model_validate(value) for key, value in state.get("suppliers", {}).items()}
+        self.quotes = {key: Quote.model_validate(value) for key, value in state.get("quotes", {}).items()}
+        self.quote_items = {key: [QuoteItem.model_validate(item) for item in values] for key, values in state.get("quote_items", {}).items()}
+        self.audit_logs = {key: [AgentAuditLog.model_validate(item) for item in values] for key, values in state.get("audit_logs", {}).items()}
+        self.shipments = {key: Shipment.model_validate(value) for key, value in state.get("shipments", {}).items()}
+        self.shipment_events = {key: [ShipmentEvent.model_validate(item) for item in values] for key, values in state.get("shipment_events", {}).items()}
+        return True
+
+    def seed_supplier_records(self):
+        relevant_suppliers = [
+            {"supplier_name": "Apex Aero Components LLC", "supplier_email": "quotes@apexaero.com", "part_number": "060-1234-00", "quantity_available": 10, "unit_cost": 1100.0, "certificate_type": "FAA 8130-3", "lead_time_days": 3, "approval_status": "Approved", "condition_code": "NE"},
+            {"supplier_name": "Vanguard Aviation Spares Inc.", "supplier_email": "procurement@vanguardspares.com", "part_number": "060-1234-00", "quantity_available": 3, "unit_cost": 1050.0, "certificate_type": "FAA 8130-3", "lead_time_days": 7, "approval_status": "Approved", "condition_code": "NE"},
+            {"supplier_name": "Horizon MRO Parts Ltd.", "supplier_email": "sales@horizonmro.com", "part_number": "456-789-OH", "quantity_available": 5, "unit_cost": 500.0, "certificate_type": "FAA 8130-3", "lead_time_days": 2, "approval_status": "Approved", "condition_code": "OH"},
+        ]
+        for offer in relevant_suppliers:
+            supplier_db.save_supplier_offer(
+                supplier_name=offer["supplier_name"],
+                supplier_email=offer["supplier_email"],
+                part_number=offer["part_number"],
+                quantity_available=offer["quantity_available"],
+                unit_cost=offer["unit_cost"],
+                certificate_type=offer["certificate_type"],
+                lead_time_days=offer["lead_time_days"],
+                approval_status=offer["approval_status"],
+                condition_code=offer["condition_code"],
+            )
+
+    def reset_supplier_data(self):
+        supplier_db.reset_supplier_data()
+        self.seed_supplier_records()
 
     def seed_mock_data(self):
         # 1. Seed Inventory
@@ -112,9 +174,11 @@ class MockDatabaseService:
         ]
         for sup in suppliers_data:
             self.suppliers[sup.id] = sup
+        self._persist_state()
+        self._persist_state()
 
     # RFQ Operations
-    def create_rfq(self, customer_name: str, customer_email: str, raw_text: str) -> RFQ:
+    def create_rfq(self, customer_name: str, customer_email: str, raw_text: str, thread_id: Optional[str] = None) -> RFQ:
         rfq_id = f"RFQ-{uuid.uuid4().hex[:6].upper()}"
         rfq = RFQ(
             id=rfq_id,
@@ -122,11 +186,13 @@ class MockDatabaseService:
             customer_email=customer_email,
             status="Intake",
             raw_text=raw_text,
+            thread_id=thread_id,
             created_at=datetime.utcnow()
         )
         self.rfqs[rfq_id] = rfq
         self.rfq_items[rfq_id] = []
         self.audit_logs[rfq_id] = []
+        self._persist_state()
         return rfq
 
     def get_rfq(self, rfq_id: str) -> Optional[RFQ]:
@@ -135,9 +201,41 @@ class MockDatabaseService:
     def list_rfqs(self) -> List[RFQ]:
         return list(self.rfqs.values())
 
+    def save_supplier_offer(
+        self,
+        supplier_name: str,
+        supplier_email: Optional[str] = None,
+        part_number: str = "",
+        quantity_available: Optional[int] = None,
+        unit_cost: Optional[float] = None,
+        certificate_type: Optional[str] = None,
+        lead_time_days: Optional[int] = None,
+        approval_status: str = "Pending",
+        condition_code: Optional[str] = None,
+        source_email_id: Optional[str] = None,
+        confidence: float = 1.0,
+    ) -> dict:
+        return supplier_db.save_supplier_offer(
+            supplier_name=supplier_name,
+            supplier_email=supplier_email,
+            part_number=part_number,
+            quantity_available=quantity_available,
+            unit_cost=unit_cost,
+            certificate_type=certificate_type,
+            lead_time_days=lead_time_days,
+            approval_status=approval_status,
+            condition_code=condition_code,
+            source_email_id=source_email_id,
+            confidence=confidence,
+        )
+
+    def get_supplier_offers_for_part(self, part_number: str) -> List[dict]:
+        return supplier_db.get_supplier_offers_for_part(part_number)
+
     def update_rfq_status(self, rfq_id: str, status: str) -> Optional[RFQ]:
         if rfq_id in self.rfqs:
             self.rfqs[rfq_id].status = status
+            self._persist_state()
             return self.rfqs[rfq_id]
         return None
 
@@ -154,6 +252,7 @@ class MockDatabaseService:
             condition_preference=condition
         )
         self.rfq_items[rfq_id].append(item)
+        self._persist_state()
         return item
 
     def get_rfq_items(self, rfq_id: str) -> List[RFQItem]:
@@ -174,6 +273,7 @@ class MockDatabaseService:
         if rfq_id not in self.audit_logs:
             self.audit_logs[rfq_id] = []
         self.audit_logs[rfq_id].append(log)
+        self._persist_state()
         return log
 
     def get_audit_logs(self, rfq_id: str) -> List[AgentAuditLog]:
@@ -192,6 +292,7 @@ class MockDatabaseService:
         )
         self.quotes[quote_id] = quote
         self.quote_items[quote_id] = []
+        self._persist_state()
         return quote
 
     def add_quote_item(self, quote_id: str, rfq_item_id: str, part_number: str, qty: int, source: str, unit_cost: float, unit_price: float, margin: float, cert: str, comp_status: str) -> QuoteItem:
@@ -212,6 +313,7 @@ class MockDatabaseService:
         if quote_id not in self.quote_items:
             self.quote_items[quote_id] = []
         self.quote_items[quote_id].append(item)
+        self._persist_state()
         return item
 
     def get_quote_by_rfq(self, rfq_id: str) -> Optional[Quote]:
@@ -235,7 +337,72 @@ class MockDatabaseService:
                 quote.approved_at = datetime.utcnow()
             if comments:
                 quote.comments = comments
+            self._persist_state()
             return quote
         return None
+
+    def create_shipment(self, rfq_id: str, quote_id: Optional[str], customer_email: str, part_numbers: List[str], quantity: int, public_token: str) -> Shipment:
+        shipment_id = f"SHP-{uuid.uuid4().hex[:8].upper()}"
+        shipment = Shipment(
+            id=shipment_id,
+            rfq_id=rfq_id,
+            quote_id=quote_id,
+            customer_email=customer_email,
+            part_numbers=part_numbers,
+            quantity=quantity,
+            public_token=public_token,
+        )
+        self.shipments[shipment_id] = shipment
+        self.shipment_events[shipment_id] = []
+        self.add_shipment_event(shipment_id, "Preparing Shipment", None, "Order received and awaiting fulfillment processing.")
+        return shipment
+
+    def add_shipment_event(self, shipment_id: str, status: str, location: Optional[str], description: str) -> ShipmentEvent:
+        event = ShipmentEvent(
+            id=f"SHE-{uuid.uuid4().hex[:8].upper()}",
+            shipment_id=shipment_id,
+            status=status,
+            location=location,
+            description=description,
+        )
+        self.shipment_events.setdefault(shipment_id, []).append(event)
+        if shipment_id in self.shipments:
+            self.shipments[shipment_id].status = status
+            self.shipments[shipment_id].updated_at = datetime.utcnow()
+        self._persist_state()
+        return event
+
+    def get_shipment(self, shipment_id: str) -> Optional[Shipment]:
+        return self.shipments.get(shipment_id)
+
+    def get_shipment_by_token(self, public_token: str) -> Optional[Shipment]:
+        return next((shipment for shipment in self.shipments.values() if shipment.public_token == public_token), None)
+
+    def find_shipment_by_tracking(self, carrier: str, tracking_number: str) -> Optional[Shipment]:
+        normalized_carrier = (carrier or "").lower()
+        return next(
+            (
+                shipment for shipment in self.shipments.values()
+                if (shipment.carrier or "").lower() == normalized_carrier
+                and shipment.tracking_number == tracking_number
+            ),
+            None,
+        )
+
+    def get_shipment_events(self, shipment_id: str) -> List[ShipmentEvent]:
+        return self.shipment_events.get(shipment_id, [])
+
+    def list_shipments(self) -> List[Shipment]:
+        return sorted(self.shipments.values(), key=lambda shipment: shipment.updated_at, reverse=True)
+
+    def update_shipment_tracking(self, shipment_id: str, carrier: str, tracking_number: str) -> Optional[Shipment]:
+        shipment = self.shipments.get(shipment_id)
+        if not shipment:
+            return None
+        shipment.carrier = carrier
+        shipment.tracking_number = tracking_number
+        shipment.updated_at = datetime.utcnow()
+        self._persist_state()
+        return shipment
 
 db_service = MockDatabaseService()

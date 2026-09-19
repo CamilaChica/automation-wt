@@ -1,20 +1,14 @@
 from typing import Dict, Any, List, Optional
 from agents.base_agent import BaseAgent, AgentMetadata, AgentResponse, EscalationRule
+from services.supplier_database import supplier_db
 
 
 class SupplierDiscoveryAgent(BaseAgent):
-    """Agent responsible for sourcing parts from external approved suppliers.
+    """Agent responsible for matching RFQ parts to real supplier offers stored in SQLite.
 
-    It provides a ``search_suppliers`` helper that ranks suppliers based on a
-    multi‑criteria score. The ranking criteria (in order of importance) are:
-
-    1. **Availability** – can the supplier meet the required quantity?
-    2. **Approval status** – is the supplier approved for our program?
-    3. **Documentation** – does the supplier provide a valid airworthiness
-       certificate?
-    4. **Lead time** – shorter lead times are preferred.
-    5. **Price** – lower unit cost is favourable but not the sole driver.
-    6. **Reliability** – historical reliability score (0‑100).
+    This version uses persistent supplier records rather than hard-coded mock supplier
+    rankings. The agent filters offers by part_number, quantity, approval status, and
+    certificate quality, then ranks by cost and lead time.
     """
 
     def __init__(self):
@@ -109,117 +103,45 @@ class SupplierDiscoveryAgent(BaseAgent):
         )
 
     def search_suppliers(self, part_number: str, quantity: int) -> List[Dict[str, Any]]:
-        """Return the top three suppliers for *part_number* that can meet *quantity*.
+        """Return the top supplier offers stored in SQLite for a part number."""
+        if not part_number:
+            return []
 
-        The function uses a mock supplier list, computes a composite score based on
-        the six ranking criteria and returns the highest‑scoring candidates.
-        """
-        # -----------------------------------------------------------------
-        # Mock supplier database – in a real system this would be a service call.
-        # -----------------------------------------------------------------
-        mock_suppliers: List[Dict[str, Any]] = [
-            {
-                "supplier_id": "SUP-001",
-                "supplier_name": "Apex Aero Components",
-                "part_number": part_number,
-                "unit_cost": 1100.00,
-                "quantity_available": 10,
-                "lead_time_days": 3,
-                "certificate_type": "FAA 8130-3",
-                "approval_status": "Approved",
-                "reliability_score": 92,
-                "certification_available": True,
-            },
-            {
-                "supplier_id": "SUP-002",
-                "supplier_name": "Vanguard Spares",
-                "part_number": part_number,
-                "unit_cost": 1050.00,
-                "quantity_available": 3,
-                "lead_time_days": 7,
-                "certificate_type": "FAA 8130-3",
-                "approval_status": "Approved",
-                "reliability_score": 88,
-                "certification_available": True,
-            },
-            {
-                "supplier_id": "SUP-003",
-                "supplier_name": "Horizon MRO Parts",
-                "part_number": part_number,
-                "unit_cost": 500.00,
-                "quantity_available": 5,
-                "lead_time_days": 2,
-                "certificate_type": "FAA 8130-3",
-                "approval_status": "Approved",
-                "reliability_score": 80,
-                "certification_available": True,
-            },
-            {
-                "supplier_id": "SUP-004",
-                "supplier_name": "Suspect Supplier Corp",
-                "part_number": part_number,
-                "unit_cost": 300.00,
-                "quantity_available": 1,
-                "lead_time_days": 1,
-                "certificate_type": "None",
-                "approval_status": "Pending",
-                "reliability_score": 60,
-                "certification_available": False,
-            },
-        ]
+        records = supplier_db.find_supplier_offers(part_number, quantity_needed=quantity)
+        ranked: List[Dict[str, Any]] = []
 
-        # Filter suppliers that can meet the required quantity.
-        viable = [s for s in mock_suppliers if s["quantity_available"] >= quantity]
-        if not viable:
-            # If none can fully satisfy, keep all suppliers to still provide quotes.
-            viable = mock_suppliers
+        for record in records:
+            unit_cost = float(record.get("unit_cost") or 0.0)
+            lead_time = int(record.get("lead_time_days") or 0)
+            confidence = float(record.get("confidence") or 0.0)
+            valid_certificate = record.get("certificate_type") not in (None, "", "None")
+            score = 0.0
+            if record.get("approval_status") == "Approved":
+                score += 40
+            if valid_certificate:
+                score += 20
+            if record.get("quantity_available", 0) >= quantity:
+                score += 20
+            if lead_time:
+                score += max(0, 15 - lead_time)
+            if unit_cost:
+                score += max(0, 25 - (unit_cost / 100.0))
+            score += confidence * 10
 
-        # -----------------------------------------------------------------
-        # Scoring – each criterion contributes a weighted number of points.
-        # -----------------------------------------------------------------
-        max_price = max(s["unit_cost"] for s in viable) or 1
-        max_lead = max(s["lead_time_days"] for s in viable) or 1
+            ranked.append({
+                "supplier_id": record.get("supplier_id", ""),
+                "supplier_name": record.get("supplier_name", "Unknown Supplier"),
+                "part_number": part_number.upper(),
+                "unit_cost": unit_cost,
+                "quantity_available": int(record.get("quantity_available") or 0),
+                "lead_time_days": lead_time,
+                "certificate_type": record.get("certificate_type") or "None",
+                "approval_status": record.get("approval_status") or "Pending",
+                "reliability_score": round(confidence * 100, 2),
+                "score": round(score, 2),
+            })
 
-        for s in viable:
-            # Availability – up to 20 points.
-            avail_score = 20 * min(1.0, s["quantity_available"] / quantity)
-            # Approval – 15 points if approved.
-            approval_score = 15 if s["approval_status"] == "Approved" else 0
-            # Documentation – 10 points if certificate is present.
-            doc_score = 10 if s.get("certification_available", False) else 0
-            # Lead time – inverse proportional, up to 15 points.
-            lead_score = 15 * (max_lead - s["lead_time_days"]) / max_lead
-            # Price – inverse proportional, up to 15 points.
-            price_score = 15 * (max_price - s["unit_cost"]) / max_price
-            # Reliability – scaled to 15 points.
-            reliability_score = 15 * (s["reliability_score"] / 100)
-
-            total = (
-                avail_score
-                + approval_score
-                + doc_score
-                + lead_score
-                + price_score
-                + reliability_score
-            )
-            s["score"] = round(total, 2)
-
-        # Sort by descending score and keep top three.
-        ranked = sorted(viable, key=lambda x: x["score"], reverse=True)[:3]
-
-        # Return a clean list of dicts with the required fields.
-        return [
-            {
-                "supplier_id": r["supplier_id"],
-                "supplier_name": r["supplier_name"],
-                "part_number": r["part_number"],
-                "unit_cost": r["unit_cost"],
-                "quantity_available": r["quantity_available"],
-                "lead_time_days": r["lead_time_days"],
-                "certificate_type": r["certificate_type"],
-                "approval_status": r["approval_status"],
-                "reliability_score": r["reliability_score"],
-                "score": r["score"],
-            }
-            for r in ranked
-        ]
+        return sorted(
+            ranked,
+            key=lambda x: (x["unit_cost"], x["lead_time_days"], -x["reliability_score"], -x["score"]),
+        )[:3]

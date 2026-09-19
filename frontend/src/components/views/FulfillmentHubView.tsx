@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { apiService } from '../../services/api';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { 
   QrCode, 
@@ -11,6 +12,12 @@ import {
 } from 'lucide-react';
 
 export const FulfillmentHubView: React.FC = () => {
+  const [shipments, setShipments] = useState<any[]>([]);
+
+  useEffect(() => {
+    void apiService.getShipments().then(setShipments).catch(() => setShipments([]));
+  }, []);
+
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
       {/* Stage Progress Breadcrumb Tracker */}
@@ -44,6 +51,23 @@ export const FulfillmentHubView: React.FC = () => {
             <span className="w-6 h-6 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center font-bold">5</span>
             <span>5. CARRIER TELEMETRY</span>
           </div>
+        </div>
+      </div>
+
+      <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
+        <div className="flex items-center justify-between">
+          <h2 className="font-display font-bold text-xs uppercase tracking-wider">Live Shipments</h2>
+          <span className="font-mono text-[10px] text-aero-blue">{shipments.length} tracked</span>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          {shipments.length === 0 && <p className="text-sm text-slate-400">No shipments are currently registered.</p>}
+          {shipments.slice(0, 6).map(shipment => (
+            <div key={shipment.id} className="rounded-xl border border-slate-200 dark:border-slate-800 p-3 text-xs">
+              <div className="font-mono font-bold text-aero-blue">{shipment.id}</div>
+              <div className="mt-1 font-semibold">{shipment.status}</div>
+              <div className="mt-1 text-slate-500">{shipment.carrier || 'Carrier pending'} {shipment.tracking_number || ''}</div>
+            </div>
+          ))}
         </div>
       </div>
 

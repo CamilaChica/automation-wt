@@ -2,5 +2,8 @@
 .env.*
 !.env.example
 data/*.db
+backups/
+frontend/dist/
+frontend/node_modules/
 __pycache__/
 *.py[cod]

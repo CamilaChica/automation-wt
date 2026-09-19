@@ -1,12 +1,19 @@
 import os
+import secrets
 from typing import List, Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
+
+load_dotenv()
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from models.db_models import RFQ, RFQItem, Quote, QuoteItem, AgentAuditLog, Supplier
 from services.db_service import db_service
 from services.orchestration_service import orchestration_service
-from services.mailbox_service import fetch_inbox_headers, send_message, send_otp_email
+from services.mailbox_service import fetch_inbox_messages, fetch_inbox_headers, send_message, send_otp_email
+from services.communication_service import communication_service
+from services.supplier_database import supplier_db
+from services.carrier_tracking_service import carrier_tracking_service
 from api.auth import current_user, init_auth_db, request_otp, require_roles, verify_otp
 
 app = FastAPI(
@@ -35,6 +42,7 @@ class IntakeRequest(BaseModel):
     raw_text: str = Field(..., description="Raw email or RFQ text submitted by customer")
     customer_name: Optional[str] = Field(None, description="Customer company or contact name")
     customer_email: Optional[str] = Field(None, description="Customer email for quote updates")
+    reply_to: Optional[str] = Field(None, description="Original email message ID for same-thread replies")
 
 class OtpRequest(BaseModel):
     email: str
@@ -81,6 +89,26 @@ class MailboxMessageRequest(BaseModel):
     subject: str
     body: str
     reply_to: Optional[str] = None
+
+class PurchaseOrderRequest(BaseModel):
+    quote_id: str
+    po_number: str
+    customer_email: Optional[str] = None
+
+class ShipmentCreateRequest(BaseModel):
+    rfq_id: str
+    quote_id: Optional[str] = None
+    part_numbers: List[str]
+    quantity: int = Field(..., ge=1)
+
+class ShipmentEventRequest(BaseModel):
+    status: str
+    location: Optional[str] = None
+    description: str
+
+class CarrierTrackingRequest(BaseModel):
+    carrier: str
+    tracking_number: str
 
 # Endpoints
 
@@ -140,7 +168,8 @@ async def submit_rfq(request: IntakeRequest, user: dict = Depends(current_user))
     rfq = db_service.create_rfq(
         customer_name=customer_name,
         customer_email=customer_email,
-        raw_text=request.raw_text
+        raw_text=request.raw_text,
+        thread_id=request.reply_to,
     )
     
     db_service.add_audit_log(
@@ -262,6 +291,199 @@ async def reject_quote(quote_id: str, request: RejectRequest, _user: dict = Depe
     
     return {"status": "Rejected", "quote_id": quote_id}
 
+@app.post("/api/purchase-orders")
+async def submit_purchase_order(request: PurchaseOrderRequest, user: dict = Depends(current_user)):
+    """Receive a customer PO and route its purchasing details to the human team."""
+    quote = db_service.get_quote(request.quote_id)
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found.")
+    rfq = db_service.get_rfq(quote.rfq_id)
+    if not rfq:
+        raise HTTPException(status_code=404, detail="RFQ not found.")
+
+    customer_email = request.customer_email or rfq.customer_email
+    if user["role"] == "ROLE_CUSTOMER" and customer_email.lower() != user["email"].lower():
+        raise HTTPException(status_code=403, detail="You can only submit a purchase order for your own quote.")
+
+    quote_items = db_service.get_quote_items(request.quote_id)
+    internal_items = []
+    supplier_groups: Dict[str, Dict[str, Any]] = {}
+    for item in quote_items:
+        offers = supplier_db.find_supplier_offers(item.part_number, quantity_needed=item.quantity)
+        selected = next(
+            (offer for offer in offers if abs(float(offer.get("unit_cost") or 0) - float(item.unit_cost or 0)) < 0.01),
+            offers[0] if offers else None,
+        )
+        supplier_name = selected.get("supplier_name") if selected else "Internal inventory"
+        supplier_email = selected.get("supplier_email") if selected else ""
+        internal_item = {
+            "part_number": item.part_number,
+            "quantity": item.quantity,
+            "unit_price": item.unit_price,
+            "supplier_name": supplier_name,
+            "supplier_email": supplier_email,
+            "supplier_unit_cost": float(selected.get("unit_cost") or item.unit_cost or 0) if selected else float(item.unit_cost or 0),
+        }
+        internal_items.append(internal_item)
+        if supplier_email:
+            supplier_groups.setdefault(supplier_email, {"supplier_name": supplier_name, "items": []})["items"].append(internal_item)
+
+    notification = communication_service.notify_purchase_order(
+        recipient=os.getenv("PURCHASE_ORDER_NOTIFICATION_EMAIL", "camila@wingedtycoons.com"),
+        po_number=request.po_number,
+        customer_name=rfq.customer_name,
+        customer_email=customer_email,
+        quote_id=request.quote_id,
+        items=internal_items,
+    )
+    confirmations = [
+        communication_service.request_supplier_availability_confirmation(
+            recipient=supplier_email,
+            supplier_name=group["supplier_name"],
+            po_number=request.po_number,
+            items=group["items"],
+            reply_to=None,
+        )
+        for supplier_email, group in supplier_groups.items()
+    ]
+    db_service.update_rfq_status(rfq.id, "Purchase_Order_Received")
+    db_service.add_audit_log(
+        rfq.id,
+        "PurchaseOrderAgent",
+        "purchase_order_received",
+        f"Purchase order {request.po_number} received and routed for human purchasing review.",
+        "SUCCESS",
+    )
+    return {
+        "status": "Purchase_Order_Received",
+        "po_number": request.po_number,
+        "quote_id": request.quote_id,
+        "internal_notification": notification,
+        "supplier_confirmation_count": len(confirmations),
+    }
+
+@app.get("/api/shipments/track/{public_token}")
+async def track_shipment(public_token: str):
+    """Return customer-safe shipment status using an opaque tracking token."""
+    shipment = db_service.get_shipment_by_token(public_token)
+    if not shipment:
+        raise HTTPException(status_code=404, detail="Shipment not found.")
+    return {
+        "shipment_id": shipment.id,
+        "status": shipment.status,
+        "part_numbers": shipment.part_numbers,
+        "quantity": shipment.quantity,
+        "carrier": shipment.carrier,
+        "tracking_number": shipment.tracking_number,
+        "estimated_delivery": shipment.estimated_delivery,
+        "events": [event.model_dump(mode="json") for event in db_service.get_shipment_events(shipment.id)],
+    }
+
+@app.post("/api/internal/shipments")
+async def create_shipment(
+    request: ShipmentCreateRequest,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+):
+    rfq = db_service.get_rfq(request.rfq_id)
+    if not rfq:
+        raise HTTPException(status_code=404, detail="RFQ not found.")
+    shipment = db_service.create_shipment(
+        rfq_id=request.rfq_id,
+        quote_id=request.quote_id,
+        customer_email=rfq.customer_email,
+        part_numbers=request.part_numbers,
+        quantity=request.quantity,
+        public_token=secrets.token_urlsafe(24),
+    )
+    tracking_notification = communication_service.send_shipment_tracking_link(
+        recipient=rfq.customer_email,
+        shipment_id=shipment.id,
+        public_token=shipment.public_token,
+    )
+    return {
+        "shipment_id": shipment.id,
+        "tracking_url": f"/track/{shipment.public_token}",
+        "status": shipment.status,
+        "tracking_notification": tracking_notification["transmission_status"],
+    }
+
+@app.get("/api/internal/shipments")
+async def list_shipments(
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+):
+    return db_service.list_shipments()
+
+@app.post("/api/internal/shipments/{shipment_id}/events")
+async def add_shipment_event(
+    shipment_id: str,
+    request: ShipmentEventRequest,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+):
+    if not db_service.get_shipment(shipment_id):
+        raise HTTPException(status_code=404, detail="Shipment not found.")
+    event = db_service.add_shipment_event(shipment_id, request.status, request.location, request.description)
+    return {"status": "updated", "event": event}
+
+@app.post("/api/internal/shipments/{shipment_id}/tracking")
+async def register_carrier_tracking(
+    shipment_id: str,
+    request: CarrierTrackingRequest,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+):
+    shipment = db_service.update_shipment_tracking(shipment_id, request.carrier, request.tracking_number)
+    if not shipment:
+        raise HTTPException(status_code=404, detail="Shipment not found.")
+    provider_result = carrier_tracking_service.create_tracker(
+        request.carrier,
+        request.tracking_number,
+        title=f"Winged Tycoons shipment {shipment_id}",
+    )
+    return {
+        "shipment_id": shipment_id,
+        "carrier": request.carrier,
+        "tracking_number": request.tracking_number,
+        "provider": provider_result,
+    }
+
+@app.post("/api/internal/shipments/{shipment_id}/tracking/refresh")
+async def refresh_carrier_tracking(
+    shipment_id: str,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+):
+    shipment = db_service.get_shipment(shipment_id)
+    if not shipment or not shipment.carrier or not shipment.tracking_number:
+        raise HTTPException(status_code=404, detail="Shipment tracking is not registered.")
+    payload = carrier_tracking_service.get_tracker(shipment.carrier, shipment.tracking_number)
+    normalized = carrier_tracking_service.normalize_webhook(payload)
+    event = db_service.add_shipment_event(
+        shipment_id,
+        normalized["status"],
+        normalized.get("location"),
+        normalized["description"],
+    )
+    return {"shipment_id": shipment_id, "event": event, "provider": payload}
+
+@app.post("/api/webhooks/carriers/aftership")
+async def carrier_webhook(request: Request):
+    body = await request.body()
+    signature = request.headers.get("aftership-hmac-sha256") or request.headers.get("x-aftership-signature") or request.headers.get("x-webhook-signature")
+    if not carrier_tracking_service.verify_webhook(body, signature):
+        raise HTTPException(status_code=401, detail="Invalid carrier webhook signature.")
+    payload = await request.json()
+    normalized = carrier_tracking_service.normalize_webhook(payload)
+    shipment = db_service.find_shipment_by_tracking(
+        normalized.get("carrier", ""), normalized.get("tracking_number", "")
+    )
+    if not shipment:
+        raise HTTPException(status_code=404, detail="No shipment matches carrier tracking event.")
+    event = db_service.add_shipment_event(
+        shipment.id,
+        normalized["status"],
+        normalized.get("location"),
+        normalized["description"],
+    )
+    return {"status": "accepted", "shipment_id": shipment.id, "event_id": event.id}
+
 @app.get("/api/catalog/search", response_model=List[CatalogItem])
 async def search_catalog(query: str = "", _user: dict = Depends(require_roles("ROLE_CUSTOMER", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"))):
     """Public, customer-safe catalog availability search.
@@ -294,7 +516,29 @@ async def list_suppliers(_user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE
     """
     Returns the full supplier directory with contact information.
     """
-    return list(db_service.suppliers.values())
+    rows = supplier_db.list_suppliers()
+    return [
+        Supplier(
+            id=row["id"],
+            company_name=row["company_name"],
+            contact_name=row["company_name"],
+            phone=row["phone"] or "",
+            email=row["email"] or "",
+            approval_status=row["approval_status"],
+            itar_certified=bool(row.get("itar_certified", 0)),
+            account_manager=None,
+        )
+        for row in rows
+    ]
+
+@app.get("/api/supplier-offers")
+async def list_supplier_offers(
+    part_number: str = "",
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING", "ROLE_SALES")),
+):
+    if not part_number.strip():
+        return []
+    return supplier_db.find_supplier_offers(part_number.strip().upper(), quantity_needed=1)
 
 @app.get("/api/suppliers/{supplier_id}", response_model=Supplier)
 async def get_supplier(supplier_id: str, _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING"))):
@@ -314,7 +558,7 @@ async def mailbox_inbox(mailbox: str, user: dict = Depends(require_roles("ROLE_A
         raise HTTPException(403, "You do not have access to the sales mailbox.")
     if mailbox == "purchasing" and user["role"] not in ("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING"):
         raise HTTPException(403, "You do not have access to the purchasing mailbox.")
-    return {"mailbox": mailbox, "messages": fetch_inbox_headers(mailbox)}
+    return {"mailbox": mailbox, "messages": fetch_inbox_messages(mailbox)}
 
 @app.post("/api/internal/mailboxes/{mailbox}/send")
 async def mailbox_send(

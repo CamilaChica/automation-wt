@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
+import { apiService } from '../../services/api';
+import { RFQ } from '../../types';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import { 
   FileCheck, 
@@ -13,13 +15,11 @@ import {
 
 export const AeroProcurementView: React.FC = () => {
   const [selectedSupplier, setSelectedSupplier] = useState<'A' | 'B' | 'C'>('A');
+  const [rfqs, setRfqs] = useState<RFQ[]>([]);
 
-  const rfqs = [
-    { id: 'WT-29471', part: '32-11-45-01', name: 'Main Landing Gear Actuator', customer: 'GLOBAL AIRLINES', urgency: 'AOG', timer: '0:14:31', status: 'Sourcing' },
-    { id: 'WT-29471', part: '32-11-45-01', name: 'Main Landing Gear Actuator', customer: 'GLOBAL AIRLINES', urgency: 'ROUTINE', timer: '0:14:31', status: 'Quoting' },
-    { id: 'WT-29471', part: '32-11-45-01', name: 'Main Landing Gear Actuator', customer: 'GLOBAL AIRLINES', urgency: 'ROUTINE', timer: '0:14:31', status: 'Sourcing' },
-    { id: 'WT-29471', part: '32-11-45-01', name: 'Main Landing Gear Actuator', customer: 'GLOBAL AIRLINES', urgency: 'ROUTINE', timer: '0:14:31', status: 'Sourcing' }
-  ];
+  useEffect(() => {
+    void apiService.getRFQs().then(setRfqs).catch(() => setRfqs([]));
+  }, []);
 
   const leadTimeData = [
     { month: 'JAN', volume: 120 },
@@ -59,23 +59,24 @@ export const AeroProcurementView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                {rfqs.length === 0 && <tr><td colSpan={6} className="py-8 text-center text-slate-400">No active RFQs.</td></tr>}
                 {rfqs.map((rfq, idx) => (
                   <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors">
                     <td className="py-2.5 text-aero-blue font-bold">{rfq.id}</td>
                     <td className="py-2.5">
-                      <div className="font-bold text-slate-900 dark:text-slate-200">{rfq.part}</div>
-                      <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate w-24">{rfq.name}</div>
+                      <div className="font-bold text-slate-900 dark:text-slate-200">{rfq.part_number || 'Pending extraction'}</div>
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate w-24">{rfq.status}</div>
                     </td>
-                    <td className="py-2.5 text-slate-600 dark:text-slate-300 text-[10px]">{rfq.customer}</td>
+                    <td className="py-2.5 text-slate-600 dark:text-slate-300 text-[10px]">{rfq.customer_name}</td>
                     <td className="py-2.5">
                       <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
                         rfq.urgency === 'AOG' ? 'bg-red-50 dark:bg-aog-red/20 text-aog-red border border-red-200 dark:border-aog-red/40 aog-pulse-badge' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
                       }`}>
-                        {rfq.urgency}
+                        {rfq.urgency || 'Routine'}
                       </span>
                     </td>
                     <td className="py-2.5 text-aog-red font-mono text-[10px] font-bold">
-                      T-Minus {rfq.timer}
+                      {rfq.created_at ? new Date(rfq.created_at).toLocaleDateString() : 'Recent'}
                     </td>
                     <td className="py-2.5 text-right font-bold text-emerald-600 dark:text-emerald-400">{rfq.status}</td>
                   </tr>

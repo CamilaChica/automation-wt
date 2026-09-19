@@ -1,5 +1,6 @@
 from typing import Dict, Any, Optional
 from agents.base_agent import BaseAgent, AgentMetadata, AgentResponse
+from services.communication_service import communication_service
 
 class CustomerCommunicationAgent(BaseAgent):
     def __init__(self):
@@ -48,6 +49,7 @@ class CustomerCommunicationAgent(BaseAgent):
         email = inputs.get("customer_email", "")
         name = inputs.get("customer_name", "")
         details = inputs.get("quote_details", {})
+        reply_to = inputs.get("reply_to")
         
         quote_id = details.get("quote_id", "")
         total = details.get("total_amount", 0.0)
@@ -64,14 +66,19 @@ class CustomerCommunicationAgent(BaseAgent):
             f"Winged Tycoons Sales Team"
         )
         
-        # Simulate outbound email transmission
-        print(f"[Outbound Email Service] Sending email to {email}...")
+        transmission = communication_service.send_customer_quote(
+            recipient=email,
+            customer_name=name,
+            quote_id=quote_id,
+            quote_summary=f"Quote ID: {quote_id}\nTotal: ${total:,.2f}\n\n{pdf}".strip(),
+            reply_to=reply_to,
+        )
         
         return AgentResponse(
             success=True,
             data={
                 "communication_logged": True,
-                "transmission_status": "SENT",
+                "transmission_status": transmission["transmission_status"],
                 "formatted_body": email_body
             }
         )

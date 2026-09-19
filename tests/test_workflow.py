@@ -84,6 +84,21 @@ class TestRFQQuoteWorkflow(unittest.TestCase):
             
         asyncio.run(run_scenario())
 
+    def test_unknown_part_starts_supplier_outreach(self):
+        async def run_scenario():
+            raw_email = "Part Number: 999-UNKNOWN-01 | Qty: 2. Please source this item."
+            rfq = db_service.create_rfq("Delta MRO Services", "procurement@deltamro.com", raw_email)
+
+            pipeline_res = await orchestration_service.process_rfq_pipeline(rfq.id)
+
+            self.assertEqual(pipeline_res["status"], "Supplier_Request_Sent")
+            self.assertGreaterEqual(pipeline_res["supplier_request_count"], 0)
+            self.assertEqual(db_service.get_rfq(rfq.id).status, "Supplier_Sourcing")
+            logs = db_service.get_audit_logs(rfq.id)
+            self.assertIn("SupplierCommunicationAgent", [log.agent_name for log in logs])
+
+        asyncio.run(run_scenario())
+
     def test_scenario_c_compliance_halt(self):
         """
         Scenario C: Part has a compliance exception (e.g. missing trace in inventory).

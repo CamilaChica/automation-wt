@@ -1,4 +1,9 @@
 fastapi
 uvicorn[standard]
 pydantic
+python-dotenv
+requests
+azure-identity
+azure-storage-blob
+httpx2
 

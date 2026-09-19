@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
+import { apiService } from '../../services/api';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip } from 'recharts';
 import { 
   CheckCircle, 
@@ -13,20 +14,22 @@ import {
 
 export const SupplierSourcingView: React.FC = () => {
   const [selectedPn, setSelectedPn] = useState('32-11-45-01');
+  const [liveOffers, setLiveOffers] = useState<any[]>([]);
+  const [activeRfqs, setActiveRfqs] = useState<any[]>([]);
 
-  const activeRfqs = [
-    { id: 'WT-29471', part: '32-11-45-01', name: 'Main Landing Gear Actuator', customer: 'GLOBAL AIRLINES', urgency: 'AOG', timer: '0:14:31' },
-    { id: 'WT-29472', part: '32-11-45-01', name: 'Main Landing Gear Actuator', customer: 'GLOBAL AIRLINES', urgency: 'AOG', timer: '0:14:31' },
-    { id: 'WT-29473', part: '32-11-45-01', name: 'Main Landing Gear Actuator', customer: 'GLOBAL AIRLINES', urgency: 'AOG', timer: '0:14:31' },
-    { id: 'WT-29474', part: '32-11-45-01', name: 'Main Landing Gear Actuator', customer: 'GLOBAL AIRLINES', urgency: 'AOG', timer: '0:14:31' }
-  ];
+  useEffect(() => {
+    void apiService.getSupplierOffers(selectedPn).then(setLiveOffers).catch(() => setLiveOffers([]));
+    void apiService.getRFQs().then(setActiveRfqs).catch(() => setActiveRfqs([]));
+  }, [selectedPn]);
 
-  const compareMatrix = [
-    { name: 'Supplier A', rel: '96%', returnRate: '1.5%', cage: '1S300', loc: 'DFW', qty: 300, price: 14200, lead: '2 Days', cond: 'SV' },
-    { name: 'Supplier B', rel: '96%', returnRate: '1.5%', cage: '1S300', loc: 'MIA', qty: 1200, price: 12300, lead: '2 Days', cond: 'SV' },
-    { name: 'Supplier C', rel: '96%', returnRate: '1.5%', cage: '1S300', loc: 'FRA', qty: 300, price: 1300, lead: '3 Days', cond: 'OH' },
-    { name: 'Supplier D', rel: '96%', returnRate: '1.5%', cage: '1S250', loc: 'NFO', qty: 1000, price: 1350, lead: '2 Days', cond: 'NEW' }
-  ];
+  const compareMatrix = liveOffers.map(offer => ({
+    name: offer.supplier_name,
+    rel: `${Math.round((offer.confidence || 0) * 100)}%`,
+    loc: offer.supplier_email || 'Unknown',
+    qty: offer.quantity_available || 0,
+    price: offer.unit_cost || 0,
+    lead: `${offer.lead_time_days || '?'} Days`,
+  }));
 
   const otdData = [
     { month: 'JAN', otd: 88, quality: 94 },
@@ -69,14 +72,14 @@ export const SupplierSourcingView: React.FC = () => {
                   <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors">
                     <td className="py-2.5 text-aero-blue font-bold">{rfq.id}</td>
                     <td className="py-2.5">
-                      <div className="font-bold text-slate-900 dark:text-slate-200">{rfq.part}</div>
-                      <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate w-28">{rfq.name}</div>
+                      <div className="font-bold text-slate-900 dark:text-slate-200">{rfq.part_number || 'Pending extraction'}</div>
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate w-28">{rfq.status}</div>
                     </td>
-                    <td className="py-2.5 text-slate-600 dark:text-slate-300 text-[10px]">{rfq.customer}</td>
+                    <td className="py-2.5 text-slate-600 dark:text-slate-300 text-[10px]">{rfq.customer_name}</td>
                     <td className="py-2.5">
                       <div className="flex flex-col">
                         <span className="px-2 py-0.5 rounded-full bg-red-50 dark:bg-aog-red/20 text-aog-red text-[9px] font-bold border border-red-200 dark:border-aog-red/40 w-max aog-pulse-badge">
-                          {rfq.urgency}
+                          {rfq.urgency || 'Routine'}
                         </span>
                         <span className="text-[9px] text-aog-red font-mono font-semibold mt-0.5">
                           T-Minus {rfq.timer}

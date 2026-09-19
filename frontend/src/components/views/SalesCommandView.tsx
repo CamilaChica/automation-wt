@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { apiService } from '../../services/api';
+import { RFQ } from '../../types';
 import { 
   Send, 
   FileText, 
@@ -12,12 +13,24 @@ import {
 } from 'lucide-react';
 
 export const SalesCommandView: React.FC = () => {
-  const [selectedRfqId, setSelectedRfqId] = useState('WT-31005');
+  const [selectedRfqId, setSelectedRfqId] = useState('');
+  const [rfqInbox, setRfqInbox] = useState<RFQ[]>([]);
+  const [selectedQuoteId, setSelectedQuoteId] = useState('');
   const [unitPrice, setUnitPrice] = useState<number>(14200);
   const [marginPercent, setMarginPercent] = useState<number>(20);
   const [shippingOption, setShippingOption] = useState<'NFO' | 'HotShot'>('HotShot');
   const [issuing, setIssuing] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
+
+  useEffect(() => {
+    void apiService.getRFQs().then(rfqs => {
+      setRfqInbox(rfqs);
+      if (rfqs[0]) {
+        setSelectedRfqId(rfqs[0].id);
+        void apiService.getRFQDetail(rfqs[0].id).then(detail => setSelectedQuoteId(detail.quote_details?.quote.id || ''));
+      }
+    });
+  }, []);
 
   const calculateTotal = () => {
     const shipping = shippingOption === 'HotShot' ? 250 : 120;
@@ -26,23 +39,14 @@ export const SalesCommandView: React.FC = () => {
 
   const handleIssueQuote = async () => {
     setIssuing(true);
-    await apiService.approveQuote(selectedRfqId.replace('WT-', 'QTE-'), 'Alex R. (Sales Lead)', [
+    if (!selectedQuoteId) return;
+    await apiService.approveQuote(selectedQuoteId, 'Alex R. (Sales Lead)', [
       { quote_item_id: 'QITEM-01', unit_price: unitPrice }
     ]);
     setIssuing(false);
     setNotification(`Quote ${selectedRfqId} issued to Global Airlines! Customer communication dispatched.`);
     setTimeout(() => setNotification(null), 5000);
   };
-
-  const rfqInbox = [
-    { id: 'WT-31005', customer: 'Global Airlines', part: '32-11-45-01', ata: '32', urgency: 'AOG', timer: '0:14:31', status: 'Sourcing' },
-    { id: 'WT-31006', customer: 'Global Airlines', part: '32-11-45-01', ata: '1', urgency: 'SV', timer: '0:14:31', status: 'Quoted' },
-    { id: 'WT-31007', customer: 'Charter Fleet', part: '747-1011-00', ata: '32', urgency: 'AOG', timer: '0:14:31', status: 'Quoted' },
-    { id: 'WT-31008', customer: 'Global Airlines', part: '32-11-45-01', ata: '32', urgency: 'AOG', timer: '0:14:33', status: 'Sourcing' },
-    { id: 'WT-31002', customer: 'Charter Fleet', part: '32-11-45-01', ata: '1', urgency: 'AOG', timer: '0:14:33', status: 'Quoted' },
-    { id: 'WT-31003', customer: 'Charter Fleet', part: '32-11-45-01', ata: '1', urgency: 'OH', timer: '0:14:33', status: 'Quoted' },
-    { id: 'WT-31004', customer: 'MRO Ops', part: '747-1011-00', ata: '1', urgency: 'OH', timer: '0:14:33', status: 'Pending Customer' }
-  ];
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
@@ -83,10 +87,16 @@ export const SalesCommandView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                {rfqInbox.length === 0 && (
+                  <tr><td colSpan={5} className="py-8 text-center text-slate-400">No RFQs currently require attention.</td></tr>
+                )}
                 {rfqInbox.map((rfq) => (
                   <tr
                     key={rfq.id}
-                    onClick={() => setSelectedRfqId(rfq.id)}
+                    onClick={() => {
+                      setSelectedRfqId(rfq.id);
+                      void apiService.getRFQDetail(rfq.id).then(detail => setSelectedQuoteId(detail.quote_details?.quote.id || ''));
+                    }}
                     className={`cursor-pointer transition-colors ${
                       selectedRfqId === rfq.id
                         ? 'bg-blue-50/80 dark:bg-aero-blue/20 text-slate-900 dark:text-white font-semibold'
@@ -94,13 +104,13 @@ export const SalesCommandView: React.FC = () => {
                     }`}
                   >
                     <td className="py-2.5 font-bold text-aero-blue">{rfq.id}</td>
-                    <td className="py-2.5 text-slate-800 dark:text-slate-200 text-[10px]">{rfq.customer}</td>
-                    <td className="py-2.5 font-mono text-[10px]">{rfq.part}</td>
+                    <td className="py-2.5 text-slate-800 dark:text-slate-200 text-[10px]">{rfq.customer_name}</td>
+                    <td className="py-2.5 font-mono text-[10px]">{rfq.part_number || 'Pending extraction'}</td>
                     <td className="py-2.5">
                       <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
                         rfq.urgency === 'AOG' ? 'bg-red-50 dark:bg-aog-red/20 text-aog-red border border-red-200 dark:border-aog-red/40 aog-pulse-badge' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
                       }`}>
-                        {rfq.urgency}
+                        {rfq.urgency || 'Routine'}
                       </span>
                     </td>
                     <td className="py-2.5 text-right text-emerald-600 dark:text-emerald-400 font-bold">{rfq.status}</td>
