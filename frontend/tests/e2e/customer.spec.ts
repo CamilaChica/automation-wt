@@ -33,10 +33,11 @@ test('customer uploads compliance PDF and submits urgent request', async ({ page
   await seedSession(page, 'customer');
   await page.goto('/customer-portal');
   await expect(page.getByText('Customer parts portal')).toBeVisible();
+  const quoteForm = page.getByRole('form', { name: 'Request a quote form' });
   await page.getByPlaceholder('Company or contact name').fill('Delta MRO Services');
-  await page.getByPlaceholder('Work email').fill('procurement@delta-mro.com');
-  await page.getByPlaceholder('Part number', { exact: true }).fill('AOG-9981');
-  await page.getByLabel('Quantity').fill('1');
+  await quoteForm.getByPlaceholder('Work email').fill('procurement@delta-mro.com');
+  await quoteForm.getByPlaceholder('Part number', { exact: true }).fill('AOG-9981');
+  await quoteForm.getByLabel('Quantity').fill('1');
   await page
     .getByPlaceholder('Condition, aircraft type, certification, delivery location...')
     .fill('Urgent AOG request. Need factory-new with full export docs.');

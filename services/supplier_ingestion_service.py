@@ -1,4 +1,5 @@
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -10,7 +11,7 @@ class SupplierEmailIngestionService:
     def __init__(self):
         self.extractor = SupplierEmailExtractor()
 
-    def ingest_email(self, email_text: str, mailbox: str = "purchasing") -> Dict[str, Any]:
+    def ingest_email(self, email_text: str, mailbox: str = "purchasing", message_id: Optional[str] = None) -> Dict[str, Any]:
         try:
             extracted = self.extractor.extract(email_text)
             if not extracted.get("part_number"):
@@ -32,7 +33,7 @@ class SupplierEmailIngestionService:
             certificate = extracted.get("certificate_type")
             lead_time = extracted.get("lead_time_days") or 3
             condition = extracted.get("condition_code") or "NE"
-            source_email_id = f"EMAIL-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+            source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
 
             supplier_db.save_email(
                 mailbox=mailbox,

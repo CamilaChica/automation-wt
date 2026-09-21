@@ -6,4 +6,5 @@ requests
 azure-identity
 azure-storage-blob
 httpx2
+tzdata
 

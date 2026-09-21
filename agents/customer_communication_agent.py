@@ -8,7 +8,7 @@ class CustomerCommunicationAgent(BaseAgent):
             name="CustomerCommunicationAgent",
             role="Customer Relationship Communication Specialist",
             objective="Draft and transmit professional communications regarding quote details to clients.",
-            system_instructions=(
+            system_instruction=(
                 "You draft commercial correspondences. Be courteous, clear, and professional. "
                 "Include breakdown of items, price, lead time, and reference ID. "
                 "Output transmission log and email draft content."
@@ -41,39 +41,78 @@ class CustomerCommunicationAgent(BaseAgent):
             },
             available_tools=["email_sender_service"],
             permissions=["send_emails"],
-            escalation_rules=[]
+            escalation_rules=[],
+            prompt_templates={
+                "default": "You draft commercial correspondences. Be courteous, clear, and professional. Include breakdown of items, price, lead time, and reference ID. Output transmission log and email draft content.",
+                "customer_quote": "Compose a polished customer quote email with any required attachments and price summary.",
+            }
         )
         super().__init__(metadata)
+
+    def _format_quote_summary(self, quote_details: Dict[str, Any]) -> str:
+        quote_id = quote_details.get("quote_id", "")
+        total = float(quote_details.get("total_amount", 0.0) or 0.0)
+        subtotal = float(quote_details.get("subtotal", total) or 0.0)
+        items = quote_details.get("items") or []
+
+        lines = [
+            f"Quote ID: {quote_id}",
+            f"Subtotal: ${subtotal:,.2f}",
+            "Shipping: customer-selected, not quoted by Winged Tycoons",
+            f"Total: ${total:,.2f}",
+            "",
+            "Line items:",
+        ]
+
+        for item in items:
+            part = item.get("part_number", "N/A")
+            qty = item.get("quantity", 0)
+            uom = item.get("uom") or "EA"
+            unit = float(item.get("unit_price", 0.0) or 0.0)
+            line_total = float(qty) * unit
+            attachments = item.get("attachments") or []
+            attachment_text = ""
+            if attachments:
+                attachment_text = " | Attachments: " + ", ".join(str(doc) for doc in attachments)
+            lines.append(f"- {part} | Qty {qty} {uom} | Unit price ${unit:,.2f} | Line total ${line_total:,.2f}{attachment_text}")
+
+        if not items:
+            summary = quote_details.get("pdf_summary") or quote_details.get("formatted_pdf_summary")
+            if summary:
+                lines.extend(["", summary])
+
+        return "\n".join(lines).strip()
 
     async def execute(self, inputs: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> AgentResponse:
         email = inputs.get("customer_email", "")
         name = inputs.get("customer_name", "")
         details = inputs.get("quote_details", {})
         reply_to = inputs.get("reply_to")
-        
+
         quote_id = details.get("quote_id", "")
         total = details.get("total_amount", 0.0)
-        pdf = details.get("pdf_summary", "")
-        
+        summary = self._format_quote_summary(details)
+
         email_body = (
             f"Dear {name},\n\n"
             f"Thank you for contacting Winged Tycoons. We are pleased to provide you with the requested "
             f"sales quote details. Please see proposal reference {quote_id} below:\n\n"
-            f"{pdf}\n\n"
+            f"{summary}\n\n"
             f"Should you wish to place this order, please reply directly to this email or contact us at "
             f"sales@wingedtycoons.com.\n\n"
             f"Best regards,\n\n"
             f"Winged Tycoons Sales Team"
         )
-        
+
         transmission = communication_service.send_customer_quote(
             recipient=email,
             customer_name=name,
             quote_id=quote_id,
-            quote_summary=f"Quote ID: {quote_id}\nTotal: ${total:,.2f}\n\n{pdf}".strip(),
+            quote_summary=summary,
             reply_to=reply_to,
+            quote_items=details.get("items") or None,
         )
-        
+
         return AgentResponse(
             success=True,
             data={

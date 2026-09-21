@@ -1,10 +1,14 @@
 import json
+import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from models.db_models import RFQ, RFQItem, InventoryItem, SupplierQuote, Quote, QuoteItem, AgentAuditLog, Supplier, Shipment, ShipmentEvent
 from services.operations_store import operations_store
 from services.supplier_database import supplier_db
+from services.workflow_states import canonical_state, validate_transition
+
+_inventory_lock = threading.Lock()
 
 class MockDatabaseService:
     def __init__(self):
@@ -45,6 +49,8 @@ class MockDatabaseService:
         if not state:
             return False
         self.rfqs = {key: RFQ.model_validate(value) for key, value in state.get("rfqs", {}).items()}
+        for rfq in self.rfqs.values():
+            rfq.workflow_state = canonical_state(rfq.status)
         self.rfq_items = {key: [RFQItem.model_validate(item) for item in values] for key, values in state.get("rfq_items", {}).items()}
         self.inventory = {key: InventoryItem.model_validate(value) for key, value in state.get("inventory", {}).items()}
         self.suppliers = {key: Supplier.model_validate(value) for key, value in state.get("suppliers", {}).items()}
@@ -177,6 +183,26 @@ class MockDatabaseService:
         self._persist_state()
         self._persist_state()
 
+    def reserve_inventory(self, part_number: str, quantity: int) -> bool:
+        if quantity < 1:
+            raise ValueError("Reservation quantity must be positive.")
+        with _inventory_lock:
+            matching = sorted(
+                (item for item in self.inventory.values() if item.part_number.upper() == part_number.upper()),
+                key=lambda item: item.id,
+            )
+            if sum(item.quantity_available for item in matching) < quantity:
+                return False
+            remaining = quantity
+            for item in matching:
+                allocation = min(item.quantity_available, remaining)
+                item.quantity_available -= allocation
+                remaining -= allocation
+                if remaining == 0:
+                    break
+            self._persist_state()
+            return True
+
     # RFQ Operations
     def create_rfq(self, customer_name: str, customer_email: str, raw_text: str, thread_id: Optional[str] = None) -> RFQ:
         rfq_id = f"RFQ-{uuid.uuid4().hex[:6].upper()}"
@@ -190,6 +216,25 @@ class MockDatabaseService:
             created_at=datetime.utcnow()
         )
         self.rfqs[rfq_id] = rfq
+        operations_store.upsert_customer(
+            customer_id=f"CUS-{customer_email.lower()}",
+            company_name=customer_name,
+            contact_name=customer_name,
+            email=customer_email,
+        )
+        operations_store.insert_rfq(
+            rfq_id=rfq_id,
+            customer_id=f"CUS-{customer_email.lower()}",
+            part_number=None,
+            description=raw_text[:500],
+            quantity=1,
+            condition=None,
+            certification=None,
+            destination=None,
+            status=rfq.status,
+            raw_text=raw_text,
+            thread_id=thread_id,
+        )
         self.rfq_items[rfq_id] = []
         self.audit_logs[rfq_id] = []
         self._persist_state()
@@ -197,6 +242,15 @@ class MockDatabaseService:
 
     def get_rfq(self, rfq_id: str) -> Optional[RFQ]:
         return self.rfqs.get(rfq_id)
+
+    def set_rfq_automation_paused(self, rfq_id: str, paused: bool, reason: Optional[str] = None) -> Optional[RFQ]:
+        rfq = self.rfqs.get(rfq_id)
+        if not rfq:
+            return None
+        rfq.automation_paused = paused
+        rfq.pause_reason = reason.strip() if paused and reason else None
+        self._persist_state()
+        return rfq
 
     def list_rfqs(self) -> List[RFQ]:
         return list(self.rfqs.values())
@@ -232,9 +286,16 @@ class MockDatabaseService:
     def get_supplier_offers_for_part(self, part_number: str) -> List[dict]:
         return supplier_db.get_supplier_offers_for_part(part_number)
 
-    def update_rfq_status(self, rfq_id: str, status: str) -> Optional[RFQ]:
+    def update_rfq_status(self, rfq_id: str, status: str, expected_version: Optional[int] = None) -> Optional[RFQ]:
         if rfq_id in self.rfqs:
+            if expected_version is not None and self.rfqs[rfq_id].version != expected_version:
+                raise ValueError(f"RFQ {rfq_id} was updated by another operation.")
+            current_status = self.rfqs[rfq_id].status
+            validate_transition(current_status, status)
             self.rfqs[rfq_id].status = status
+            self.rfqs[rfq_id].workflow_state = canonical_state(status)
+            self.rfqs[rfq_id].version += 1
+            operations_store.update_rfq_status(rfq_id, status)
             self._persist_state()
             return self.rfqs[rfq_id]
         return None
@@ -252,6 +313,21 @@ class MockDatabaseService:
             condition_preference=condition
         )
         self.rfq_items[rfq_id].append(item)
+        rfq = self.rfqs.get(rfq_id)
+        if rfq:
+            operations_store.insert_rfq(
+                rfq_id=rfq_id,
+                customer_id=f"CUS-{rfq.customer_email.lower()}",
+                part_number=requested_part,
+                description=rfq.raw_text[:500],
+                quantity=qty,
+                condition=condition,
+                certification=None,
+                destination=None,
+                status=rfq.status,
+                raw_text=rfq.raw_text,
+                thread_id=rfq.thread_id,
+            )
         self._persist_state()
         return item
 
@@ -280,7 +356,15 @@ class MockDatabaseService:
         return self.audit_logs.get(rfq_id, [])
 
     # Quote Operations
-    def create_quote(self, rfq_id: str, subtotal: float, shipping: float, total: float) -> Quote:
+    def create_quote(
+        self,
+        rfq_id: str,
+        subtotal: float,
+        shipping: float,
+        total: float,
+        lead_time_days: Optional[int] = None,
+        valid_until: Optional[str] = None,
+    ) -> Quote:
         quote_id = f"QTE-{uuid.uuid4().hex[:6].upper()}"
         quote = Quote(
             id=quote_id,
@@ -288,31 +372,77 @@ class MockDatabaseService:
             subtotal=subtotal,
             shipping_cost=shipping,
             total_amount=total,
+            lead_time_days=lead_time_days,
+            valid_until=valid_until,
             status="Draft"
         )
         self.quotes[quote_id] = quote
         self.quote_items[quote_id] = []
+        operations_store.insert_customer_quote(
+            quote_id=quote_id,
+            rfq_id=rfq_id,
+            unit_price=0.0,
+            quantity=1,
+            total_price=total,
+            lead_time=lead_time_days,
+            condition=None,
+            certification=None,
+            valid_until=valid_until,
+            status=quote.status,
+        )
         self._persist_state()
         return quote
 
-    def add_quote_item(self, quote_id: str, rfq_item_id: str, part_number: str, qty: int, source: str, unit_cost: float, unit_price: float, margin: float, cert: str, comp_status: str) -> QuoteItem:
+    def add_quote_item(self, quote_id: str, rfq_item_id: str, part_number: str, qty: int, source: str, unit_cost: float, unit_price: float, margin: float, cert: str, comp_status: str, uom: str = "EA", attachments: Optional[List[str]] = None, description: str = "", condition: Optional[str] = None, lead_time_days: Optional[int] = None) -> QuoteItem:
         qi_id = f"QITM-{uuid.uuid4().hex[:6].upper()}"
         item = QuoteItem(
             id=qi_id,
             quote_id=quote_id,
             rfq_item_id=rfq_item_id,
             part_number=part_number,
+            description=description or part_number,
             quantity=qty,
+            uom=uom,
             source=source,
             unit_cost=unit_cost,
             unit_price=unit_price,
             margin_percent=margin,
             certificate_type=cert,
-            compliance_status=comp_status
+            condition=condition,
+            lead_time_days=lead_time_days,
+            compliance_status=comp_status,
+            attachments=list(attachments or [])
         )
         if quote_id not in self.quote_items:
             self.quote_items[quote_id] = []
         self.quote_items[quote_id].append(item)
+        quote = self.quotes.get(quote_id)
+        if quote:
+            operations_store.insert_customer_quote(
+                quote_id=quote_id,
+                rfq_id=quote.rfq_id,
+                unit_price=unit_price,
+                quantity=qty,
+                total_price=quote.total_amount,
+                lead_time=lead_time_days,
+                condition=condition,
+                certification=cert,
+                valid_until=quote.valid_until,
+                status=quote.status,
+            )
+            operations_store.insert_customer_quote_item(
+                item_id=qi_id,
+                quote_id=quote_id,
+                rfq_item_id=rfq_item_id,
+                part_number=part_number,
+                description=description or part_number,
+                quantity=qty,
+                condition=condition,
+                certification=cert,
+                unit_price=unit_price,
+                lead_time=lead_time_days,
+                attachments=json.dumps(list(attachments or [])),
+            )
         self._persist_state()
         return item
 
@@ -323,20 +453,29 @@ class MockDatabaseService:
         return None
 
     def get_quote(self, quote_id: str) -> Optional[Quote]:
-        return self.quotes.get(quote_id)
+        quote = self.quotes.get(quote_id)
+        if quote and quote.valid_until and quote.status in {"Sent", "Approved"}:
+            if quote.valid_until < datetime.now(timezone.utc).date().isoformat():
+                quote.status = "Expired"
+                supplier_db.cancel_communication_task(f"customer-followup:{quote_id}")
+                self._persist_state()
+        return quote
 
     def get_quote_items(self, quote_id: str) -> List[QuoteItem]:
         return self.quote_items.get(quote_id, [])
 
-    def update_quote_status(self, quote_id: str, status: str, approved_by: str = None, comments: str = None) -> Optional[Quote]:
+    def update_quote_status(self, quote_id: str, status: str, approved_by: str = None, comments: str = None, expected_version: Optional[int] = None) -> Optional[Quote]:
         if quote_id in self.quotes:
             quote = self.quotes[quote_id]
+            if expected_version is not None and quote.version != expected_version:
+                raise ValueError(f"Quote {quote_id} was updated by another operation.")
             quote.status = status
             if approved_by:
                 quote.approved_by = approved_by
                 quote.approved_at = datetime.utcnow()
             if comments:
                 quote.comments = comments
+            quote.version += 1
             self._persist_state()
             return quote
         return None

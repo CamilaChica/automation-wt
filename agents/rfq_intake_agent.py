@@ -128,8 +128,8 @@ def _extract_part_number(text: str) -> Optional[str]:
     """
     # Explicit label patterns — stop at newline, pipe, comma, semicolon
     label_re = re.compile(
-        r"(?:Part\s*(?:Number|No\.?|#)|P/?N|PN)[:\s#]*([A-Z0-9][A-Z0-9\- ]{2,30}?)(?:\s*[\n\r|,;]|\s+(?:Qty|Quantity|Condition|Cert|Required|Delivery|Additional|UOM)|\s*$)",
-        re.IGNORECASE,
+        r"(?:Part\s*(?:Number|No\.?|#)|P/?N|PN)[:\s#]*([A-Z0-9][A-Z0-9\- ]{2,30}?)(?:\s*[\n\r|,;.]|\s+(?:Qty|Quantity|Condition|Cert|Required|Delivery|Additional|UOM)|\s*$)",
+            re.IGNORECASE,
     )
     m = label_re.search(text)
     if m:
@@ -293,7 +293,7 @@ class RFQIntakeAgent(BaseAgent):
                 "Identify mandatory fields, detect ambiguity, assign priority, and "
                 "generate a unique RFQ ID without inventing information."
             ),
-            system_instructions=(
+            system_instruction=(
                 "Analyze the raw customer RFQ text. "
                 "Extract: customer_name, company, part_number (normalize to uppercase), "
                 "quantity (integer), condition (NE/NS/OH/AR), required_date, "
@@ -349,6 +349,10 @@ class RFQIntakeAgent(BaseAgent):
                     escalate_to="human_operator",
                 ),
             ],
+            prompt_templates={
+                "default": "Analyze the raw customer RFQ text. Extract: customer_name, company, part_number (normalize to uppercase), quantity (integer), condition (NE/NS/OH/AR), required_date, delivery_location, AOG_status, certification_requirements, and additional_requirements. Flag missing mandatory fields (part_number, quantity, customer identity). Flag ambiguous condition when multiple codes appear. Set priority: AOG > Urgent > Routine. NEVER invent or guess missing fields.",
+                "rfq_parse": "Normalize the inbound RFQ and return only confirmed fields; escalate when required information is missing or ambiguous.",
+            },
         )
         super().__init__(metadata)
 
@@ -417,7 +421,7 @@ class RFQIntakeAgent(BaseAgent):
             delivery_location=delivery_location,
             AOG_status=aog_status,
             certification_requirements=certifications,
-            additional_requirements=additional_req,
+            additional_requirements=additional_req or "",
             priority=priority,
             missing_fields=missing_fields,
             ambiguous_fields=ambiguous_fields,

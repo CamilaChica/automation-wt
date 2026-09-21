@@ -1,10 +1,12 @@
 import axios from 'axios';
-import { RFQ, RFQDetailResponse, InventoryItem, Supplier, Quote, QuoteItem, AgentAuditLog } from '../types';
+import { RFQ, RFQDetailResponse, InventoryItem, Supplier, Quote, QuoteItem, AgentAuditLog, AutomationEvent } from '../types';
 
 const hostedApiBase = window.location.hostname === 'winged-tycoons-frontend.onrender.com'
   ? 'https://winged-tycoons-api.onrender.com/api'
   : '/api';
 const API_BASE = import.meta.env.VITE_API_BASE_URL || hostedApiBase;
+const allowMockFallbacks = import.meta.env.VITE_ALLOW_MOCK_FALLBACKS === 'true';
+axios.defaults.timeout = 5000;
 
 axios.interceptors.request.use(config => {
   const token = localStorage.getItem('wt_access_token');
@@ -209,8 +211,16 @@ export const apiService = {
       return res.data;
     } catch (error) {
       if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
+      if (!allowMockFallbacks) throw error;
       return mockRFQs;
     }
+  },
+
+  async getAutomationEvents(status?: string): Promise<AutomationEvent[]> {
+    const res = await axios.get(`${API_BASE}/internal/automation-events`, {
+      params: { status, limit: 100 },
+    });
+    return res.data;
   },
 
   async submitRFQ(raw_text: string): Promise<{ rfq_id: string; status: string; message: string }> {
@@ -219,6 +229,7 @@ export const apiService = {
       return res.data;
     } catch (error) {
       if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
+      if (!allowMockFallbacks) throw error;
       const newId = `WT-${Math.floor(10000 + Math.random() * 90000)}`;
       return {
         rfq_id: newId,
@@ -234,6 +245,7 @@ export const apiService = {
       return res.data;
     } catch (error) {
       if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
+      if (!allowMockFallbacks) throw error;
       return this.submitRFQ(raw_text);
     }
   },
@@ -264,6 +276,7 @@ export const apiService = {
       return res.data;
     } catch (error) {
       if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
+      if (!allowMockFallbacks) throw error;
       const normalizedQuery = query.trim().toLowerCase();
       return mockInventory
         .filter(item => !normalizedQuery || item.part_number.toLowerCase().includes(normalizedQuery))
@@ -277,7 +290,8 @@ export const apiService = {
     try {
       const res = await axios.get(`${API_BASE}/rfqs/${rfq_id}`);
       return res.data;
-    } catch {
+    } catch (error) {
+      if (!allowMockFallbacks) throw error;
       const match = mockRFQs.find(r => r.id === rfq_id) || mockRFQs[0];
       const mockLogs: AgentAuditLog[] = [
         {
@@ -373,6 +387,7 @@ export const apiService = {
       return res.data;
     } catch (error) {
       if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
+      if (!allowMockFallbacks) throw error;
       return mockInventory;
     }
   },
@@ -383,6 +398,7 @@ export const apiService = {
       return res.data;
     } catch (error) {
       if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
+      if (!allowMockFallbacks) throw error;
       return mockSuppliers;
     }
   },
@@ -394,7 +410,8 @@ export const apiService = {
         items_override: overrides
       });
       return res.data;
-    } catch {
+    } catch (error) {
+      if (!allowMockFallbacks) throw error;
       return {
         status: 'Sent',
         quote_id,
@@ -410,7 +427,8 @@ export const apiService = {
         comments
       });
       return res.data;
-    } catch {
+    } catch (error) {
+      if (!allowMockFallbacks) throw error;
       return {
         status: 'Rejected',
         quote_id,

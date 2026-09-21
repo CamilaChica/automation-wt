@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import os
 import base64
+import json
 from typing import Any, Dict, Optional
 
 import requests
@@ -78,6 +79,7 @@ class CarrierTrackingService:
         latest = checkpoints[-1] if checkpoints else {}
         raw_status = tracking.get("tag") or tracking.get("status") or tracking.get("tag") or latest.get("tag")
         return {
+            "event_id": tracking.get("id") or payload.get("event_id") or hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest(),
             "carrier": tracking.get("slug") or tracking.get("carrier") or tracking.get("courier_tracking_link"),
             "tracking_number": tracking.get("tracking_number") or tracking.get("trackingNumber"),
             "status": cls.normalize_status(raw_status),

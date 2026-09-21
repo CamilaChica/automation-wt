@@ -12,7 +12,7 @@ class SupplierEmailLoader:
     def __init__(self):
         self.ingestion_service = SupplierEmailIngestionService()
 
-    def load_raw_email_text(self, raw_email_text: str) -> Dict[str, Any]:
+    def load_raw_email_text(self, raw_email_text: str, mailbox: str = "purchasing", message_id: str | None = None) -> Dict[str, Any]:
         normalized = raw_email_text or ""
         normalized = re.sub(r"<br\s*/?>", "\n", normalized, flags=re.IGNORECASE)
         normalized = re.sub(r"</?(p|div|tr|td|table|body|html|span|font)[^>]*>", "\n", normalized, flags=re.IGNORECASE)
@@ -21,7 +21,7 @@ class SupplierEmailLoader:
         normalized = normalized.replace("&#65279;", " ")
         normalized = "\n".join(line.strip() for line in normalized.splitlines())
         normalized = re.sub(r"[ \t]+", " ", normalized)
-        return self.ingestion_service.ingest_email(normalized)
+        return self.ingestion_service.ingest_email(normalized, mailbox=mailbox, message_id=message_id)
 
     def load_from_message_bytes(self, raw_message: bytes) -> Dict[str, Any]:
         message = BytesParser(policy=policy.default).parsebytes(raw_message)

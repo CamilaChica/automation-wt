@@ -16,7 +16,7 @@ class SupplierDiscoveryAgent(BaseAgent):
             name="SupplierDiscoveryAgent",
             role="Strategic Supplier Sourcing Agent",
             objective="Query mock supplier networks to source parts and obtain pricing, availability, and certification details.",
-            system_instructions=(
+            system_instruction=(
                 "You search external supplier databases when parts are out of stock. Collect prices, quantity, lead times, and certification information. "
                 "If no suppliers have the part, escalate to human review."
             ),
@@ -73,9 +73,60 @@ class SupplierDiscoveryAgent(BaseAgent):
                     action="halt_for_review",
                     escalate_to="human_operator"
                 )
-            ]
+            ],
+            prompt_templates={
+                "default": "You search external supplier databases when parts are out of stock. Collect prices, quantity, lead times, and certification information. If no suppliers have the part, escalate to human review.",
+                "supplier_search": "Find the best available suppliers for the requested part and rank offers by cost, lead time, and certificate quality.",
+            }
         )
         super().__init__(metadata)
+        self._event_quotes: Dict[str, List[Dict[str, Any]]] = {}
+
+    REQUIRED_TRACE_CERTIFICATES = {"FAA 8130-3", "EASA Form 1", "FAA_8130_3", "EASA_FORM_1"}
+
+    def select_vendor(self, quotes: List[Dict[str, Any]], max_lead_time_days: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """Filter unsafe offers and rank remaining vendors by 60/20/20 score."""
+        eligible = [
+            quote for quote in quotes
+            if quote.get("certificate_type") in self.REQUIRED_TRACE_CERTIFICATES
+            and int(quote.get("quantity_available", 0)) > 0
+            and (max_lead_time_days is None or int(quote.get("lead_time_days", 0)) <= max_lead_time_days)
+        ]
+        if not eligible:
+            return None
+
+        costs = [float(quote["unit_cost"]) for quote in eligible]
+        leads = [float(quote["lead_time_days"]) for quote in eligible]
+        ratings = [float(quote.get("vendor_rating", quote.get("reliability_score", 0))) for quote in eligible]
+
+        def normalized(value: float, values: List[float], inverse: bool = False) -> float:
+            low, high = min(values), max(values)
+            if high == low:
+                return 1.0
+            score = (value - low) / (high - low)
+            return 1.0 - score if inverse else score
+
+        ranked = []
+        for quote in eligible:
+            score = (
+                0.60 * normalized(float(quote["unit_cost"]), costs, inverse=True)
+                + 0.20 * normalized(float(quote["lead_time_days"]), leads, inverse=True)
+                + 0.20 * normalized(float(quote.get("vendor_rating", quote.get("reliability_score", 0))), ratings)
+            )
+            ranked.append({**quote, "weighted_score": round(score, 6)})
+        return max(ranked, key=lambda quote: quote["weighted_score"])
+
+    async def handle_supplier_rfq_broadcast(self, event: Any) -> None:
+        self._event_quotes[event.correlation_id] = []
+
+    async def handle_supplier_quote_received(self, event: Any) -> Optional[Dict[str, Any]]:
+        quotes = self._event_quotes.setdefault(event.correlation_id, [])
+        quotes.append(dict(event.payload))
+        expected = int(event.payload.get("expected_supplier_count", 0))
+        if expected and len(quotes) < expected:
+            return None
+        selected = self.select_vendor(quotes, event.payload.get("max_lead_time_days"))
+        return selected
 
     async def execute(self, inputs: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> AgentResponse:
         """Entry point called by the orchestrator.

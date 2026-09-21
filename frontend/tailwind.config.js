@@ -9,7 +9,7 @@ export default {
     extend: {
       colors: {
         canvas: {
-          dark: '#0B0F19',
+          dark: '#0B192C',
           light: '#F8FAFC'
         },
         card: {
@@ -19,9 +19,15 @@ export default {
           'light-elevated': '#F1F5F9'
         },
         aero: {
-          blue: '#006BFF',
-          'blue-light': '#0284C7',
-          dark: '#0052CC'
+          blue: '#1E3E62',
+          'blue-light': '#2C5E8A',
+          dark: '#0B192C'
+        },
+        brand: {
+          navy: '#0B192C',
+          gold: '#D4AF37',
+          'gold-dark': '#B8860B',
+          'gold-tint': '#FFF9E6'
         },
         aog: {
           red: '#EF4444',
@@ -37,8 +43,8 @@ export default {
         }
       },
       fontFamily: {
-        display: ['"Space Grotesk"', 'sans-serif'],
-        sans: ['Inter', 'sans-serif'],
+        display: ['Montserrat', 'sans-serif'],
+        sans: ['Montserrat', 'sans-serif'],
         mono: ['"JetBrains Mono"', 'monospace']
       },
       animation: {

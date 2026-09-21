@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -24,8 +25,20 @@ class SupplierDatabase:
         conn.row_factory = sqlite3.Row
         return conn
 
+    @contextmanager
+    def _connection(self):
+        conn = self._connect()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def _init_db(self) -> None:
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS suppliers (
@@ -99,7 +112,7 @@ class SupplierDatabase:
             )
 
     def upsert_supplier(self, supplier_name: str, supplier_email: Optional[str] = None, phone: Optional[str] = None, approval_status: str = "Pending") -> str:
-        with self._connect() as conn:
+        with self._connection() as conn:
             existing = conn.execute(
                 "SELECT id FROM suppliers WHERE company_name = ? OR email = ?",
                 (supplier_name, supplier_email or ""),
@@ -123,12 +136,20 @@ class SupplierDatabase:
         if not received_at:
             received_at = _now_iso()
         email_id = f"EML-{uuid.uuid4().hex[:8].upper()}"
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO inbound_emails (id, mailbox, message_id, sender, subject, body, received_at, processing_status) VALUES (?, ?, ?, ?, ?, ?, ?, 'processed')",
                 (email_id, mailbox, message_id, sender, subject, body, received_at),
             )
         return email_id
+
+    def is_email_processed(self, mailbox: str, message_id: str) -> bool:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT processing_status FROM inbound_emails WHERE mailbox = ? AND message_id = ?",
+                (mailbox, message_id),
+            ).fetchone()
+        return bool(row and row["processing_status"] == "processed")
 
     def save_supplier_offer(
         self,
@@ -147,7 +168,7 @@ class SupplierDatabase:
         supplier_id = self.upsert_supplier(supplier_name, supplier_email=supplier_email, approval_status=approval_status)
         offer_id = f"SPO-{uuid.uuid4().hex[:8].upper()}"
         now = _now_iso()
-        with self._connect() as conn:
+        with self._connection() as conn:
             existing = conn.execute(
                 "SELECT id FROM supplier_parts WHERE supplier_id = ? AND part_number = ?",
                 (supplier_id, part_number.upper()),
@@ -180,7 +201,7 @@ class SupplierDatabase:
         }
 
     def find_supplier_offers(self, part_number: str, quantity_needed: int = 1) -> List[Dict[str, Any]]:
-        with self._connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 """
                 SELECT sp.id AS supplier_part_id, sp.supplier_id, sp.part_number, sp.quantity_available, sp.unit_cost,
@@ -207,7 +228,7 @@ class SupplierDatabase:
         return self.find_supplier_offers(part_number, quantity_needed=1)
 
     def list_suppliers(self) -> List[Dict[str, Any]]:
-        with self._connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 "SELECT * FROM suppliers ORDER BY company_name ASC"
             ).fetchall()
@@ -226,7 +247,7 @@ class SupplierDatabase:
     ) -> Dict[str, Any]:
         task_id = f"COM-{uuid.uuid4().hex[:8].upper()}"
         now = _now_iso()
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 INSERT OR IGNORE INTO communication_tasks
@@ -242,7 +263,7 @@ class SupplierDatabase:
 
     def list_due_communication_tasks(self, now: Optional[str] = None) -> List[Dict[str, Any]]:
         now = now or _now_iso()
-        with self._connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(
                 "SELECT * FROM communication_tasks WHERE status = 'pending' AND due_at <= ? ORDER BY due_at ASC",
                 (now,),
@@ -250,21 +271,28 @@ class SupplierDatabase:
         return [dict(row) for row in rows]
 
     def mark_communication_task_sent(self, task_id: str) -> None:
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 "UPDATE communication_tasks SET status = 'sent', attempts = attempts + 1, sent_at = ? WHERE id = ?",
                 (_now_iso(), task_id),
             )
 
     def mark_communication_task_failed(self, task_id: str) -> None:
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 "UPDATE communication_tasks SET status = 'failed', attempts = attempts + 1 WHERE id = ?",
                 (task_id,),
             )
 
+    def cancel_communication_task(self, task_key: str) -> None:
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE communication_tasks SET status = 'cancelled' WHERE task_key = ? AND status = 'pending'",
+                (task_key,),
+            )
+
     def reset_supplier_data(self) -> None:
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute("DELETE FROM communication_tasks")
             conn.execute("DELETE FROM supplier_parts")
             conn.execute("DELETE FROM suppliers")

@@ -147,7 +147,7 @@ export const CustomerPortal: React.FC = () => {
             </div>
           </div>
 
-          <form onSubmit={handleRequest} className="rounded-3xl border border-cyan-400/30 bg-cyan-400/10 p-6">
+          <form aria-label="Request a quote form" onSubmit={handleRequest} className="rounded-3xl border border-cyan-400/30 bg-cyan-400/10 p-6">
             <h2 className="font-display text-xl font-bold">Request a quote</h2>
             <p className="mt-1 text-sm text-slate-300">Can’t find the exact part? Tell us what you need.</p>
             <div className="mt-5 space-y-3">
@@ -186,7 +186,7 @@ export const CustomerPortal: React.FC = () => {
             )}
           </form>
 
-          <form onSubmit={handlePurchaseOrder} className="rounded-3xl border border-emerald-400/30 bg-emerald-400/10 p-6">
+          <form aria-label="Purchase order form" onSubmit={handlePurchaseOrder} className="rounded-3xl border border-emerald-400/30 bg-emerald-400/10 p-6">
             <h2 className="font-display text-xl font-bold">Send a purchase order</h2>
             <p className="mt-1 text-sm text-slate-300">Use the quote reference from our email. Supplier details remain confidential.</p>
             <div className="mt-5 space-y-3">

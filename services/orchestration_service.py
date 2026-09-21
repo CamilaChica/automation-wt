@@ -1,4 +1,6 @@
 import json
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 from services.db_service import db_service
 from agents.rfq_intake_agent import RFQIntakeAgent
@@ -11,6 +13,15 @@ from agents.quote_generation_agent import QuoteGenerationAgent
 from agents.customer_communication_agent import CustomerCommunicationAgent
 from services.communication_service import communication_service
 
+
+def _lead_time_days(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    match = re.search(r"\d+", str(value))
+    return int(match.group()) if match else None
+
 class OrchestrationService:
     def __init__(self):
         self.intake_agent = RFQIntakeAgent()
@@ -22,6 +33,17 @@ class OrchestrationService:
         self.quote_agent = QuoteGenerationAgent()
         self.comm_agent = CustomerCommunicationAgent()
 
+    @staticmethod
+    def _requested_certification(raw_text: str) -> str:
+        text = (raw_text or "").lower()
+        if "easa form 1" in text:
+            return "EASA Form 1"
+        if "coc" in text or "certificate of conformity" in text:
+            return "CoC"
+        if "8130" in text:
+            return "FAA 8130-3"
+        return "Applicable airworthiness certification"
+
     async def process_rfq_pipeline(self, rfq_id: str) -> Dict[str, Any]:
         """
         Executes the RFQ automated pipeline.
@@ -31,6 +53,12 @@ class OrchestrationService:
         rfq = db_service.get_rfq(rfq_id)
         if not rfq:
             return {"error": f"RFQ {rfq_id} not found."}
+        if rfq.automation_paused:
+            return {
+                "status": "Automation_Paused",
+                "rfq_id": rfq_id,
+                "reason": rfq.pause_reason or "Paused by an operator.",
+            }
 
         # 1. RFQ Intake Check
         if rfq.status == "Intake":
@@ -80,6 +108,8 @@ class OrchestrationService:
                         request_results = communication_service.request_part_quotes(
                             item.requested_part_number,
                             item.quantity,
+                            condition_requested=item.condition_preference or "NE",
+                            certification_requested=self._requested_certification(rfq.raw_text),
                         )
                         db_service.update_rfq_status(rfq_id, "Supplier_Sourcing")
                         db_service.add_audit_log(
@@ -160,6 +190,8 @@ class OrchestrationService:
                         request_results = communication_service.request_part_quotes(
                             item.resolved_part_number,
                             shortage_qty,
+                            condition_requested=item.condition_preference or "NE",
+                            certification_requested=self._requested_certification(rfq.raw_text),
                         )
                         db_service.update_rfq_status(rfq_id, "Sourcing_Failed")
                         db_service.add_audit_log(
@@ -236,6 +268,9 @@ class OrchestrationService:
                     "supplier_name": source_details.get("details", {}).get("supplier_name", "Winged Tycoons Internal"),
                     "certificate_type": source_details.get("certificate_type"),
                     "has_full_trace": source_details.get("has_full_trace", True)
+                    ,"requested_certificate_type": self._requested_certification(rfq.raw_text)
+                    ,"requested_condition": item.condition_preference
+                    ,"condition": source_details.get("details", {}).get("condition") or item.condition_preference
                 })
                 
                 source_details["compliance_status"] = comp_res.data.get("compliance_status", "Pass")
@@ -296,7 +331,6 @@ class OrchestrationService:
                 })
                 
                 p_data = price_res.data
-                shipping_total = max(shipping_total, p_data["shipping_estimate"])
                 
                 # Check low-margin warning
                 if price_res.escalation_triggered and price_res.escalation_triggered.condition == "margin_below_threshold":
@@ -317,13 +351,21 @@ class OrchestrationService:
                 quote_items_draft.append({
                     "rfq_item_id": item.id,
                     "part_number": item.resolved_part_number,
+                    "description": item.resolved_part_number,
                     "quantity": item.quantity,
+                    "uom": getattr(item, "uom", "EA"),
                     "unit_price": p_data["suggested_unit_price"],
                     "source": source_details.get("source"),
                     "certificate_type": source_details.get("certificate_type"),
+                    "condition": getattr(item, "condition_preference", None),
+                    "lead_time_days": _lead_time_days(
+                        source_details.get("details", {}).get("lead_time")
+                        or source_details.get("details", {}).get("lead_time_days")
+                    ),
                     "unit_cost": p_data["unit_cost"],
                     "margin_percent": p_data["margin_percent"],
-                    "compliance_status": source_details.get("compliance_status", "Pass")
+                    "compliance_status": source_details.get("compliance_status", "Pass"),
+                    "attachments": getattr(item, "attachments", [])
                 })
                 
             # Generate actual Quote structures
@@ -332,7 +374,7 @@ class OrchestrationService:
             # Save state context to proceed to Quote Gen
             context = {
                 "quote_items_draft": quote_items_draft,
-                "shipping_total": shipping_total,
+                "shipping_total": 0.0,
                 "has_low_margin_escalation": has_low_margin_escalation,
                 "margin_esc_rule": margin_esc_rule
             }
@@ -344,7 +386,7 @@ class OrchestrationService:
             db_service.add_audit_log(rfq_id, "Orchestrator", "transition", "Assembling formal Quote proposal document.")
             
             draft_items = context["quote_items_draft"]
-            ship_cost = context["shipping_total"]
+            ship_cost = 0.0
             
             q_res = await self.quote_agent.execute({
                 "rfq_id": rfq_id,
@@ -358,7 +400,9 @@ class OrchestrationService:
                 rfq_id=rfq_id,
                 subtotal=q_data["subtotal"],
                 shipping=q_data["shipping_cost"],
-                total=q_data["total_amount"]
+                total=q_data["total_amount"],
+                lead_time_days=min((item.get("lead_time_days") or 0 for item in draft_items), default=None),
+                valid_until=(datetime.now(timezone.utc) + timedelta(days=int(q_data.get("quote_validity_days", 30)))).date().isoformat(),
             )
             
             # Save items
@@ -373,7 +417,12 @@ class OrchestrationService:
                     unit_price=item["unit_price"],
                     margin=item["margin_percent"],
                     cert=item["certificate_type"],
-                    comp_status=item["compliance_status"]
+                    comp_status=item["compliance_status"],
+                    uom=item.get("uom", "EA"),
+                    attachments=item.get("attachments", [])
+                    ,description=item.get("description", item["part_number"])
+                    ,condition=item.get("condition")
+                    ,lead_time_days=item.get("lead_time_days")
                 )
                 
             # Log success
@@ -438,13 +487,25 @@ class OrchestrationService:
         
         # Trigger outbound email via CustomerCommunicationAgent
         rfq = db_service.get_rfq(rfq_id)
+        quote_items = db_service.get_quote_items(quote_id)
         comm_res = await self.comm_agent.execute({
             "customer_email": rfq.customer_email,
             "customer_name": rfq.customer_name,
             "quote_details": {
                 "quote_id": quote_id,
+                "subtotal": quote.subtotal,
+                "shipping_cost": quote.shipping_cost,
                 "total_amount": quote.total_amount,
-                "pdf_summary": f"Quote ID: {quote_id}\nTotal: ${quote.total_amount:.2f}\nSubtotal: ${quote.subtotal:.2f}"
+                "items": [
+                    {
+                        "part_number": item.part_number,
+                        "quantity": item.quantity,
+                        "uom": getattr(item, "uom", "EA"),
+                        "unit_price": item.unit_price,
+                        "attachments": getattr(item, "attachments", []),
+                    }
+                    for item in quote_items
+                ],
             },
             "reply_to": rfq.thread_id,
         })

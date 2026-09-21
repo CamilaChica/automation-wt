@@ -1,14 +1,13 @@
-"""Run the API and mailbox worker together for the single-disk SQLite deployment."""
+"""Run only the FastAPI service.
 
-import threading
+Mailbox polling runs in the dedicated Render worker service so messages cannot
+be processed twice by both the API process and the worker process.
+"""
+
 import os
 
 import uvicorn
 
-from worker import run as run_mailbox_worker
-
 
 if __name__ == "__main__":
-    worker_thread = threading.Thread(target=run_mailbox_worker, name="mailbox-worker", daemon=True)
-    worker_thread.start()
     uvicorn.run("api.main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")))

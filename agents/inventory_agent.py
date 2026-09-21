@@ -41,7 +41,7 @@ class InventoryAgent(BaseAgent):
                 "Query and report physical warehouse stock against RFQ item demands "
                 "using Available-To-Promise (ATP) logic. Never fabricate inventory."
             ),
-            system_instructions=(
+            system_instruction=(
                 "You query the internal warehouse database via the check_inventory tool. "
                 "Compute ATP = quantity_on_hand - quantity_reserved.  "
                 "If ATP >= requested quantity → IN_STOCK. "
@@ -95,7 +95,11 @@ class InventoryAgent(BaseAgent):
                     action="route_to_sourcing",
                     escalate_to="orchestrator"
                 )
-            ]
+            ],
+            prompt_templates={
+                "default": "You query the internal warehouse database via the check_inventory tool. Compute ATP = quantity_on_hand - quantity_reserved. If ATP >= requested quantity -> IN_STOCK. If 0 <= ATP < requested quantity -> PARTIAL_OR_SHORTAGE, escalate to sourcing. If part is unknown -> NOT_FOUND, escalate to sourcing. Do NOT guess or invent quantities. Only report what is physically confirmed.",
+                "stock_check": "Validate the available inventory quantity and determine ATP before continuing with pricing.",
+            }
         )
         super().__init__(metadata)
         # Instantiate the tool directly (no LLM tool-call layer in this MVP)

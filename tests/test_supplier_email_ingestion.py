@@ -1,8 +1,10 @@
+import asyncio
 import os
 import unittest
 from unittest.mock import patch
 
 from agents.supplier_discovery_agent import SupplierDiscoveryAgent
+from agents.customer_communication_agent import CustomerCommunicationAgent
 from services.db_service import db_service
 from services.mailbox_service import fetch_inbox_messages
 from services.supplier_ingestion_service import SupplierEmailIngestionService
@@ -224,6 +226,43 @@ class TestSupplierEmailIngestion(unittest.TestCase):
         self.assertEqual(second["task_key"], "customer-followup:QTE-123456")
         self.assertEqual(second["reply_to"], "customer-message-id")
         self.assertEqual(supplier_db.list_due_communication_tasks("9999-12-31T00:00:00+00:00")[0]["task_type"], "customer_followup")
+
+    @patch.dict(os.environ, {"GRAPH_MAILBOX_USER": "purchasing@wingedtycoons.com", "AZURE_TENANT_ID": "tenant", "AZURE_CLIENT_ID": "client", "AZURE_CLIENT_SECRET": "secret"}, clear=False)
+    @patch("services.mailbox_service._graph_access_token")
+    @patch("services.mailbox_service.requests.post")
+    def test_graph_send_uses_the_correct_shared_mailbox_for_customer_emails(self, mock_post, mock_token):
+        from services.mailbox_service import send_message
+
+        mock_token.return_value = "token"
+        send_message("sales", "buyer@example.com", "Quote", "Please review the proposal.")
+
+        self.assertIn("sales@wingedtycoons.com", mock_post.call_args.args[0])
+        self.assertNotIn("purchasing@wingedtycoons.com", mock_post.call_args.args[0])
+
+    @patch.dict(os.environ, {"EMAIL_SEND_ENABLED": "true"}, clear=False)
+    @patch("services.communication_service.send_message")
+    def test_customer_quote_email_contains_full_quote_line_items(self, mock_send):
+        agent = CustomerCommunicationAgent()
+        response = asyncio.run(agent.execute({
+            "customer_email": "buyer@example.com",
+            "customer_name": "Buyer Company",
+            "quote_details": {
+                "quote_id": "QTE-123456",
+                "total_amount": 4500.0,
+                "shipping_cost": 150.0,
+                "items": [
+                    {"part_number": "060-1234-00", "quantity": 2, "unit_price": 2100.0},
+                    {"part_number": "123-9999-00", "quantity": 1, "unit_price": 300.0},
+                ],
+            },
+            "reply_to": "thread-1",
+        }))
+
+        self.assertTrue(response.success)
+        self.assertIn("060-1234-00", response.data["formatted_body"])
+        self.assertIn("$2,100.00", response.data["formatted_body"])
+        self.assertEqual("sales", mock_send.call_args.args[0])
+        self.assertEqual("buyer@example.com", mock_send.call_args.args[1])
 
     def test_supplier_discount_request_is_bounded_and_polite(self):
         service = CommunicationService()

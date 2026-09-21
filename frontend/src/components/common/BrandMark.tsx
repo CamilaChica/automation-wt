@@ -6,7 +6,7 @@ interface BrandMarkProps {
 }
 
 export const BrandMark: React.FC<BrandMarkProps> = ({ compact = false }) => {
-  const sources = ['/branding/WingedTycoons.svg', bundledMark];
+  const sources = ['/branding/WingedTycoons.png', '/branding/WingedTycoons.svg', bundledMark];
   const [sourceIndex, setSourceIndex] = useState(0);
 
   if (sourceIndex >= sources.length) {
@@ -25,7 +25,7 @@ export const BrandMark: React.FC<BrandMarkProps> = ({ compact = false }) => {
     <img
       key={source}
       src={source}
-      alt="Winged Tycoons"
+      alt="Winged Tycoons Logo"
       className={compact ? 'h-7 w-7' : 'h-11 w-11'}
       onError={() => setSourceIndex(index => index + 1)}
     />

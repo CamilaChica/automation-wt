@@ -16,35 +16,63 @@ export const SalesCommandView: React.FC = () => {
   const [selectedRfqId, setSelectedRfqId] = useState('');
   const [rfqInbox, setRfqInbox] = useState<RFQ[]>([]);
   const [selectedQuoteId, setSelectedQuoteId] = useState('');
+  const [quoteReady, setQuoteReady] = useState(false);
   const [unitPrice, setUnitPrice] = useState<number>(14200);
   const [marginPercent, setMarginPercent] = useState<number>(20);
   const [shippingOption, setShippingOption] = useState<'NFO' | 'HotShot'>('HotShot');
   const [issuing, setIssuing] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
 
+  const loadRfqDetail = (rfqId: string) => {
+    setSelectedRfqId(rfqId);
+    setQuoteReady(false);
+    void apiService.getRFQDetail(rfqId).then(detail => {
+      setSelectedQuoteId(detail.quote_details?.quote.id || '');
+      setQuoteReady(true);
+    });
+  };
+
   useEffect(() => {
     void apiService.getRFQs().then(rfqs => {
       setRfqInbox(rfqs);
-      if (rfqs[0]) {
-        setSelectedRfqId(rfqs[0].id);
-        void apiService.getRFQDetail(rfqs[0].id).then(detail => setSelectedQuoteId(detail.quote_details?.quote.id || ''));
+      const quoteReadyRfq = rfqs.find(rfq => rfq.status === 'Quoted') || rfqs[0];
+      if (quoteReadyRfq) {
+        loadRfqDetail(quoteReadyRfq.id);
       }
     });
   }, []);
 
   const calculateTotal = () => {
-    const shipping = shippingOption === 'HotShot' ? 250 : 120;
-    return unitPrice + shipping;
+    return unitPrice;
+  };
+
+  const downloadQuote = (format: 'pdf' | 'csv') => {
+    const selectedRfq = rfqInbox.find(rfq => rfq.id === selectedRfqId);
+    const customer = selectedRfq?.customer_name || 'Customer';
+    const content = format === 'csv'
+      ? `RFQ,Customer,Part Number,Quantity,Unit Price\n${selectedRfqId},${customer},32-11-45-01,1,${unitPrice}`
+      : `Winged Tycoons Quote\nRFQ: ${selectedRfqId}\nCustomer: ${customer}\nPart: 32-11-45-01\nUnit price: $${unitPrice.toLocaleString()}\nShipping: customer-selected`;
+    const blob = new Blob([content], { type: format === 'csv' ? 'text/csv' : 'application/pdf' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${selectedRfqId || 'quote'}.${format}`;
+    link.click();
+    URL.revokeObjectURL(link.href);
   };
 
   const handleIssueQuote = async () => {
     setIssuing(true);
-    if (!selectedQuoteId) return;
+    if (!selectedQuoteId) {
+      setIssuing(false);
+      setNotification('Select a quote-ready RFQ before issuing a customer quote.');
+      return;
+    }
     await apiService.approveQuote(selectedQuoteId, 'Alex R. (Sales Lead)', [
       { quote_item_id: 'QITEM-01', unit_price: unitPrice }
     ]);
     setIssuing(false);
-    setNotification(`Quote ${selectedRfqId} issued to Global Airlines! Customer communication dispatched.`);
+    const customer = rfqInbox.find(rfq => rfq.id === selectedRfqId)?.customer_name || 'customer';
+    setNotification(`Quote ${selectedRfqId} issued to ${customer}! Customer communication dispatched.`);
     setTimeout(() => setNotification(null), 5000);
   };
 
@@ -93,10 +121,7 @@ export const SalesCommandView: React.FC = () => {
                 {rfqInbox.map((rfq) => (
                   <tr
                     key={rfq.id}
-                    onClick={() => {
-                      setSelectedRfqId(rfq.id);
-                      void apiService.getRFQDetail(rfq.id).then(detail => setSelectedQuoteId(detail.quote_details?.quote.id || ''));
-                    }}
+                    onClick={() => loadRfqDetail(rfq.id)}
                     className={`cursor-pointer transition-colors ${
                       selectedRfqId === rfq.id
                         ? 'bg-blue-50/80 dark:bg-aero-blue/20 text-slate-900 dark:text-white font-semibold'
@@ -237,11 +262,11 @@ export const SalesCommandView: React.FC = () => {
 
               {/* PDF & Excel Action buttons */}
               <div className="flex items-center space-x-2 pt-1">
-                <button className="flex-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-2 px-3 rounded-xl text-[10px] font-bold border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1.5 transition-colors">
+                <button onClick={() => downloadQuote('pdf')} className="flex-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-2 px-3 rounded-xl text-[10px] font-bold border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1.5 transition-colors">
                   <FileText className="w-3.5 h-3.5 text-aog-red" />
                   <span>PDF Export</span>
                 </button>
-                <button className="flex-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-2 px-3 rounded-xl text-[10px] font-bold border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1.5 transition-colors">
+                <button onClick={() => downloadQuote('csv')} className="flex-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-2 px-3 rounded-xl text-[10px] font-bold border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1.5 transition-colors">
                   <Download className="w-3.5 h-3.5 text-emerald-500" />
                   <span>Excel Export</span>
                 </button>
@@ -251,13 +276,13 @@ export const SalesCommandView: React.FC = () => {
               <div className="grid grid-cols-2 gap-2 pt-1 font-display">
                 <button
                   onClick={handleIssueQuote}
-                  disabled={issuing}
+                  disabled={issuing || !quoteReady}
                   className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1.5 shadow-sm"
                 >
                   <Send className="w-3.5 h-3.5" />
-                  <span>{issuing ? 'ISSUING...' : 'ISSUE QUOTE'}</span>
+                  <span>{issuing ? 'ISSUING...' : quoteReady ? 'ISSUE QUOTE' : 'LOADING QUOTE...'}</span>
                 </button>
-                <button className="bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 transition-colors">
+                <button onClick={() => setNotification('Purchase orders are submitted by customers through the customer portal after quote approval.')} className="bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 transition-colors">
                   ISSUE PO
                 </button>
               </div>

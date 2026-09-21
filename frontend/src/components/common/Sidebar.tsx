@@ -9,8 +9,8 @@ import {
   Package, 
   Truck, 
   TrendingUp, 
-  Settings, 
-  LogOut 
+  LogOut,
+  FlaskConical,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -55,6 +55,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) =
       label: 'Sales Command',
       icon: TrendingUp,
       badge: '9'
+    },
+    {
+      id: 'swarm-simulation' as ViewMode,
+      label: 'Swarm Runner',
+      icon: FlaskConical,
+      badge: null
     }
   ];
 
@@ -108,17 +114,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) =
         <div className="space-y-1">
           <button
             onClick={() => onSelectView('fulfillment')}
+            aria-label="Open Logistics API"
             className="w-full flex items-center space-x-3 px-3 py-2 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors"
           >
             <Truck className="w-4 h-4 text-slate-400" />
             <span>Logistics API</span>
-          </button>
-          <button
-            onClick={() => onSelectView('fulfillment')}
-            className="w-full flex items-center space-x-3 px-3 py-2 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors"
-          >
-            <Settings className="w-4 h-4 text-slate-400" />
-            <span>Fulfillment Settings</span>
           </button>
           <a href="/customer-portal" className="w-full flex items-center space-x-3 px-3 py-2 text-xs text-aero-blue hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors">
             <Search className="w-4 h-4" />

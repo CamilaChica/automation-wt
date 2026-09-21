@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 AUTH_DB_PATH = os.getenv("WT_AUTH_DB", "data/winged_tycoons_auth.db")
@@ -16,8 +16,25 @@ OTP_TTL_SECONDS = 5 * 60
 SESSION_TTL_SECONDS = 8 * 60 * 60
 MAX_OTP_REQUESTS_PER_HOUR = 3
 MAX_OTP_ATTEMPTS = 5
-AUTH_SECRET = os.getenv("WT_AUTH_SECRET", "development-only-change-this-secret")
+AUTH_ENV = os.getenv("WT_AUTH_ENV", "development").strip().lower()
+AUTH_SECRET = os.getenv("WT_AUTH_SECRET", "").strip()
+if AUTH_ENV == "production" and len(AUTH_SECRET) < 32:
+    raise RuntimeError("WT_AUTH_SECRET must be at least 32 characters in production.")
+if not AUTH_SECRET:
+    AUTH_SECRET = "development-only-change-this-secret"
 security = HTTPBearer(auto_error=False)
+
+ROLE_CUSTOMER = "ROLE_CUSTOMER"
+ROLE_INTERNAL = "ROLE_INTERNAL"
+
+
+def normalize_role(role: str) -> str:
+    normalized = role.strip().upper()
+    if normalized == "CUSTOMER":
+        return ROLE_CUSTOMER
+    if normalized == "INTERNAL":
+        return ROLE_INTERNAL
+    return normalized
 
 
 def _connect() -> sqlite3.Connection:
@@ -97,14 +114,15 @@ def _user_row(email: str) -> Optional[sqlite3.Row]:
 
 def request_otp(email: str, role: str, full_name: str = "") -> tuple[str, str]:
     normalized = email.strip().lower()
-    if role == "ROLE_INTERNAL" and not normalized.endswith(f"@{INTERNAL_DOMAIN}"):
+    role = normalize_role(role)
+    if role == ROLE_INTERNAL and not normalized.endswith(f"@{INTERNAL_DOMAIN}"):
         raise HTTPException(400, "Internal users must use a Winged Tycoons email.")
-    if role == "ROLE_CUSTOMER" and normalized.endswith(f"@{INTERNAL_DOMAIN}"):
+    if role == ROLE_CUSTOMER and normalized.endswith(f"@{INTERNAL_DOMAIN}"):
         raise HTTPException(400, "Use the internal sign-in for Winged Tycoons staff.")
 
     now = int(time.time())
     user = _user_row(normalized)
-    if role == "ROLE_INTERNAL" and (not user or not user["is_email_verified"]):
+    if role == ROLE_INTERNAL and (not user or not user["is_email_verified"]):
         raise HTTPException(403, "Internal access requires an approved staff account.")
 
     with _connect() as connection:
@@ -172,8 +190,8 @@ def verify_otp(challenge_id: str, code: str) -> dict:
         return {"access_token": token, "token_type": "bearer", "role": user["role"], "email": user["email"]}
 
 
-def init_and_get_user(credentials: HTTPAuthorizationCredentials | None) -> dict:
-    if not credentials or credentials.scheme.lower() != "bearer":
+def init_and_get_user(token_value: str | None) -> dict:
+    if not token_value:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required.")
     now = int(time.time())
     with _connect() as connection:
@@ -181,19 +199,24 @@ def init_and_get_user(credentials: HTTPAuthorizationCredentials | None) -> dict:
             """            SELECT u.*, s.expires_at, s.last_activity_at AS session_last_activity
             FROM sessions s JOIN users u ON u.id = s.user_id
             WHERE s.token_hash = ? AND u.is_active = 1""",
-            (_hash(credentials.credentials),),
+            (_hash(token_value),),
         ).fetchone()
         if not row or row["expires_at"] < now or row["session_last_activity"] + SESSION_TTL_SECONDS < now:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired session.")
         connection.execute(
             "UPDATE sessions SET last_activity_at = ? WHERE token_hash = ?",
-            (now, _hash(credentials.credentials)),
+            (now, _hash(token_value)),
         )
         return dict(row)
 
 
-def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> dict:
-    return init_and_get_user(credentials)
+def current_user(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> dict:
+    token_value = None
+    if credentials and credentials.scheme.lower() == "bearer":
+        token_value = credentials.credentials
+    elif request.cookies.get("wt_session"):
+        token_value = request.cookies.get("wt_session")
+    return init_and_get_user(token_value)
 
 
 def require_roles(*roles: str):

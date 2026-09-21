@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ViewMode, ThemeMode, AgentAuditLog } from './types';
+import { ViewMode, ThemeMode, AgentAuditLog, AutomationEvent } from './types';
 import { TopBar } from './components/common/TopBar';
 import { Sidebar } from './components/common/Sidebar';
 import { AuditLogDrawer } from './components/common/AuditLogDrawer';
@@ -10,6 +10,7 @@ import { TraceVaultView } from './components/views/TraceVaultView';
 import { FulfillmentHubView } from './components/views/FulfillmentHubView';
 import { SalesCommandView } from './components/views/SalesCommandView';
 import { CustomerPortal } from './components/views/CustomerPortal';
+import { SwarmSimulationView } from './components/views/SwarmSimulationView';
 import { AuthScreen } from './components/common/AuthScreen';
 import { apiService } from './services/api';
 
@@ -74,20 +75,37 @@ const InternalApp: React.FC = () => {
 
   useEffect(() => {
     let active = true;
-    void apiService.getRFQs().then(async rfqs => {
+    const loadAuditFeed = async () => {
+      const [rfqs, events] = await Promise.all([apiService.getRFQs(), apiService.getAutomationEvents()]);
       if (!active || rfqs.length === 0) return;
       const detail = await apiService.getRFQDetail(rfqs[0].id);
       if (active) {
         setAuditRfqId(rfqs[0].id);
-        setAuditLogs(detail.logs || []);
+        const eventLogs: AgentAuditLog[] = (events as AutomationEvent[]).map(event => ({
+          rfq_id: event.entity_type === 'rfq' ? event.entity_id : rfqs[0].id,
+          agent_name: `${event.event_type} automation`,
+          action_type: event.status,
+          message: event.error || event.result || `Automation event ${event.status.toLowerCase()}. Attempts: ${event.attempts}/${event.max_attempts}.`,
+          status: event.status === 'FAILED' ? 'FAILURE' : event.status === 'SUCCEEDED' ? 'SUCCESS' : 'WARNING',
+          timestamp: event.execution_time || event.created_at,
+        }));
+        setAuditLogs([...eventLogs, ...(detail.logs || [])]);
       }
-    }).catch(() => {
+    };
+
+    void loadAuditFeed().catch(() => {
       if (active) {
         setAuditLogs(sampleLogs);
         setAuditRfqId('WT-29471');
       }
     });
-    return () => { active = false; };
+    const refresh = window.setInterval(() => {
+      void loadAuditFeed().catch(() => undefined);
+    }, 10000);
+    return () => {
+      active = false;
+      window.clearInterval(refresh);
+    };
   }, []);
 
   // Sync theme with HTML class
@@ -120,6 +138,8 @@ const InternalApp: React.FC = () => {
         return <FulfillmentHubView />;
       case 'sales':
         return <SalesCommandView />;
+      case 'swarm-simulation':
+        return <SwarmSimulationView />;
       default:
         return <CustomerDashboard />;
     }

@@ -122,5 +122,56 @@ class TestRFQQuoteWorkflow(unittest.TestCase):
             
         asyncio.run(run_scenario())
 
+    def test_quote_email_summary_preserves_uom_and_attachments(self):
+        quote_id = "QTE-TEST1"
+        db_service.quotes[quote_id] = type("QuoteStub", (), {
+            "id": quote_id,
+            "rfq_id": "RFQ-TEST",
+            "subtotal": 2000.0,
+            "shipping_cost": 50.0,
+            "total_amount": 2050.0,
+            "status": "Approved",
+            "comments": None,
+            "approved_by": None,
+            "approved_at": None,
+        })()
+        db_service.quote_items[quote_id] = [
+            type("QuoteItemStub", (), {
+                "id": "QITM-1",
+                "quote_id": quote_id,
+                "rfq_item_id": "RITM-1",
+                "part_number": "060-1234-00",
+                "quantity": 2,
+                "uom": "EA",
+                "attachments": ["FAA-8130-3.pdf", "spec-sheet.pdf"],
+                "source": "Inventory",
+                "unit_cost": 950.0,
+                "unit_price": 1000.0,
+                "margin_percent": 5.0,
+                "certificate_type": "FAA 8130-3",
+                "compliance_status": "Pass",
+            })()
+        ]
+        summary = orchestration_service.comm_agent._format_quote_summary({
+            "quote_id": quote_id,
+            "subtotal": 2000.0,
+            "shipping_cost": 50.0,
+            "total_amount": 2050.0,
+            "items": [
+                {
+                    "part_number": "060-1234-00",
+                    "quantity": 2,
+                    "uom": "EA",
+                    "unit_price": 1000.0,
+                    "attachments": ["FAA-8130-3.pdf", "spec-sheet.pdf"],
+                }
+            ],
+        })
+
+        self.assertIn("Qty 2 EA", summary)
+        self.assertIn("Attachments:", summary)
+        self.assertIn("FAA-8130-3.pdf", summary)
+        self.assertIn("spec-sheet.pdf", summary)
+
 if __name__ == "__main__":
     unittest.main()

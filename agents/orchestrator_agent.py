@@ -7,7 +7,7 @@ class OrchestratorAgent(BaseAgent):
             name="OrchestratorAgent",
             role="RFQ-to-Quote Multi-Agent Coordinator",
             objective="Coordinate state machine execution, route tasks to worker agents, and log progress.",
-            system_instructions=(
+            system_instruction=(
                 "You manage the RFQ processing pipeline. Sequentially run the Intake, Catalog Validation, "
                 "Inventory Lookups, Sourcing, Compliance, Pricing, and Quote Generation stages. "
                 "Write step results into audit logs. Halt when manual reviews or overrides are triggered."
@@ -32,7 +32,11 @@ class OrchestratorAgent(BaseAgent):
             },
             available_tools=["database_access", "state_router"],
             permissions=["manage_workflow", "write_logs"],
-            escalation_rules=[]
+            escalation_rules=[],
+            prompt_templates={
+                "default": "You manage the RFQ processing pipeline. Sequentially run the Intake, Catalog Validation, Inventory Lookups, Sourcing, Compliance, Pricing, and Quote Generation stages. Write step results into audit logs. Halt when manual reviews or overrides are triggered.",
+                "route_workflow": "Advance the RFQ through the approved workflow and coordinate any required escalation.",
+            }
         )
         super().__init__(metadata)
 

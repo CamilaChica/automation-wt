@@ -104,6 +104,20 @@ set the three Graph variables in the process environment, then run
 `python worker.py`. Stop the worker after confirming both mailboxes can be read.
 Never commit these values or paste them into chat.
 
+### SMS and freight integrations
+
+Shipment SMS notifications are available through `POST /api/internal/shipments/{shipment_id}/sms`.
+They use `services/twilio_service.py` and remain in dry-run mode unless
+`TWILIO_ENABLED=true` and `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and
+`TWILIO_FROM_NUMBER` are configured. Recipient numbers must use E.164 format.
+
+Freight rate lookup is available through `POST /api/internal/freight/quote`.
+Configure `FREIGHT_ENABLED=true`, `FREIGHT_API_BASE_URL`, `FREIGHT_API_KEY`, and
+optionally `FREIGHT_PROVIDER`. The adapter returns carrier options but does not
+modify customer quote totals; shipping remains customer-selected.
+
+ILS, PartsBase, Stripe, FAA, and EASA integrations are intentionally deferred.
+
 ### Temporary hosted testing mode
 
 The deployed API may use `WT_AUTH_ENV=development` only for controlled testing.
@@ -114,6 +128,10 @@ suspended in this mode. Before launch, configure Graph OAuth, switch the API to
 worker.
 
 ### Production launch checklist
+
+See [docs/PRODUCTION_LAUNCH_RUNBOOK.md](docs/PRODUCTION_LAUNCH_RUNBOOK.md) and
+[docs/PRODUCTION_DECISIONS.md](docs/PRODUCTION_DECISIONS.md) for the current
+deployment decisions, staging gate, rollback procedure, and external launch prerequisites.
 
 1. Register an Entra app and grant least-privilege Graph application permissions
    (`Mail.Read` and `Mail.Send`), then grant admin consent.

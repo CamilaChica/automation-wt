@@ -40,6 +40,17 @@ class TestCommunicationConfidentiality(unittest.TestCase):
         self.assertNotIn("1500", result["body"])
         self.assertIn("available", result["body"].lower())
 
+    def test_purchase_order_metadata_validation_rejects_invalid_or_duplicate_values(self):
+        service = CommunicationService()
+
+        with self.assertRaises(ValueError):
+            service.validate_purchase_order_metadata("PO-100", "not-an-email", "QTE-200")
+
+        with self.assertRaises(ValueError):
+            service.validate_purchase_order_metadata("PO-100", "buyer@example.com", "QTE-100", previous_po_number="PO-100", previous_quote_id="QTE-100")
+
+        service.validate_purchase_order_metadata("PO-101", "buyer@example.com", "QTE-101", previous_po_number="PO-100", previous_quote_id="QTE-100")
+
     def test_customer_tracking_message_contains_no_supplier_data(self):
         result = CommunicationService().send_shipment_tracking_link(
             recipient="buyer@example.com",

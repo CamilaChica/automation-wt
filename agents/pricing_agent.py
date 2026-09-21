@@ -1,16 +1,22 @@
 from typing import Dict, Any, Optional
 from agents.base_agent import BaseAgent, AgentMetadata, AgentResponse, EscalationRule
 
+
+class NegativeMarginError(ValueError):
+    """Raised when deterministic customer pricing does not exceed source cost."""
+
 class PricingAgent(BaseAgent):
+    MIN_AUTONOMOUS_MARGIN = 0.18
+
     def __init__(self):
         metadata = AgentMetadata(
             name="PricingAgent",
             role="Commercial Pricing & Margins Analyst",
-            objective="Compute retail markup, freight estimates, and total prices for RFQ items.",
-            system_instructions=(
+            objective="Compute retail markup and total prices for RFQ items without quoting shipping fees.",
+            system_instruction=(
                 "You calculate target margins (default 20%). Apply discount matrices for large orders. "
-                "Incorporate shipping premiums for expedite priorities. If profit margin drops below the "
-                "10% threshold, raise a low-margin escalation warning for commercial approval."
+                "Do not add or quote shipping charges; customers choose their own carrier and account. "
+                "If profit margin drops below the 10% threshold, raise a low-margin escalation warning for commercial approval."
             ),
             input_schema={
                 "type": "object",
@@ -28,12 +34,11 @@ class PricingAgent(BaseAgent):
                     "unit_cost": {"type": "number"},
                     "suggested_unit_price": {"type": "number"},
                     "margin_percent": {"type": "number"},
-                    "calculated_markup_amount": {"type": "number"},
-                    "shipping_estimate": {"type": "number"}
+                    "calculated_markup_amount": {"type": "number"}
                 },
-                "required": ["unit_cost", "suggested_unit_price", "margin_percent", "shipping_estimate"]
+                "required": ["unit_cost", "suggested_unit_price", "margin_percent"]
             },
-            available_tools=["margin_calculator", "shipping_estimator"],
+            available_tools=["margin_calculator"],
             permissions=["calculate_prices"],
             escalation_rules=[
                 EscalationRule(
@@ -41,7 +46,11 @@ class PricingAgent(BaseAgent):
                     action="halt_for_review",
                     escalate_to="human_operator"
                 )
-            ]
+            ],
+            prompt_templates={
+                "default": "You calculate target margins (default 20%). Apply discount matrices for large orders. Do not add or quote shipping charges; customers choose their own carrier and account. If profit margin drops below the 10% threshold, raise a low-margin escalation warning for commercial approval.",
+                "pricing_calc": "Compute the suggested unit price and confirm the margin remains above the approved threshold.",
+            }
         )
         super().__init__(metadata)
 
@@ -60,17 +69,7 @@ class PricingAgent(BaseAgent):
         elif qty >= 5:
             default_margin = 0.18 # 18% margin
             
-        # Expedited shipping premium adjustments
-        shipping_estimate = 50.00
-        if urgency == "AOG":
-            shipping_estimate = 250.00
-            # Increase margin slightly due to rapid handling value
-            default_margin += 0.02
-        elif urgency == "Expedite":
-            shipping_estimate = 120.00
-            
-        # Let's say cost is very high and we want to enforce price matches that reduce margin
-        # Mocking an overridden low-margin scenario:
+        # Shipping is customer-selected and must not be embedded into the customer quote price.
         actual_margin = default_margin
         if context and context.get("requested_price_limit", 0) > 0:
             limit = context["requested_price_limit"]
@@ -83,17 +82,21 @@ class PricingAgent(BaseAgent):
             
         calculated_markup = round(suggested_unit_price - unit_cost, 2)
         margin_percent = round(actual_margin * 100, 2)
+
+        if suggested_unit_price <= unit_cost:
+            raise NegativeMarginError(
+                f"Customer price ${suggested_unit_price:.2f} must exceed source cost ${unit_cost:.2f}."
+            )
         
         response_data = {
             "unit_cost": unit_cost,
             "suggested_unit_price": suggested_unit_price,
             "margin_percent": margin_percent,
             "calculated_markup_amount": calculated_markup,
-            "shipping_estimate": shipping_estimate
         }
         
-        # Escalation condition: Margin < 10%
-        if margin_percent < 10.0:
+        # Keep agent escalation aligned with the autonomous policy gate.
+        if actual_margin < self.MIN_AUTONOMOUS_MARGIN:
             return AgentResponse(
                 success=True, # Calculation completed, but needs human override
                 data=response_data,

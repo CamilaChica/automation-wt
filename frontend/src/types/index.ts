@@ -4,7 +4,8 @@ export type ViewMode =
   | 'aero-procurement' 
   | 'trace-vault' 
   | 'fulfillment' 
-  | 'sales';
+  | 'sales'
+  | 'swarm-simulation';
 
 export type ThemeMode = 'dark' | 'light';
 
@@ -123,6 +124,20 @@ export interface AgentAuditLog {
   status: 'SUCCESS' | 'WARNING' | 'FAILURE';
   payload_json?: string;
   timestamp: string;
+}
+
+export interface AutomationEvent {
+  id: string;
+  event_type: string;
+  entity_type: string;
+  entity_id: string;
+  status: string;
+  attempts: number;
+  max_attempts: number;
+  execution_time?: string;
+  result?: string;
+  error?: string;
+  created_at: string;
 }
 
 export interface RFQDetailResponse {

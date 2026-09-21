@@ -7,10 +7,10 @@ class QuoteGenerationAgent(BaseAgent):
         metadata = AgentMetadata(
             name="QuoteGenerationAgent",
             role="Quote Generation System Specialist",
-            objective="Compile finalized line items, taxes, and shipping expenses into a formal sales proposal.",
-            system_instructions=(
-                "You verify math operations. Sum line item totals, add shipping fees, and establish "
-                "quote expiration rules. Output the formatted proposal details ready for human approval sign-off."
+            objective="Compile finalized line items into a formal sales proposal without quoting shipping fees.",
+            system_instruction=(
+                "You verify math operations. Sum line item totals, establish quote expiration rules, and "
+                "do not include shipping charges in the client quote. Output the formatted proposal details ready for human approval sign-off."
             ),
             input_schema={
                 "type": "object",
@@ -42,7 +42,7 @@ class QuoteGenerationAgent(BaseAgent):
                     "quote_validity_days": {"type": "integer"},
                     "terms": {"type": "string"}
                 },
-                "required": ["rfq_id", "customer", "quote_items", "shipping_cost", "quote_validity_days", "terms"]
+                "required": ["rfq_id", "customer", "quote_items", "quote_validity_days", "terms"]
             },
             output_schema={
                 "type": "object",
@@ -74,11 +74,15 @@ class QuoteGenerationAgent(BaseAgent):
                     "status": {"type": "string", "enum": ["PENDING_HUMAN_APPROVAL", "APPROVED", "REJECTED"]},
                     "formatted_pdf_summary": {"type": "string"}
                 },
-                "required": ["quote_id", "rfq_id", "customer", "quotation", "subtotal", "shipping_cost", "total_amount", "quote_validity_days", "terms", "status", "formatted_pdf_summary"]
+                "required": ["quote_id", "rfq_id", "customer", "quotation", "subtotal", "total_amount", "quote_validity_days", "terms", "status", "formatted_pdf_summary"]
             },
             available_tools=["document_renderer"],
             permissions=["create_quotes"],
-            escalation_rules=[]
+            escalation_rules=[],
+            prompt_templates={
+                "default": "You verify math operations. Sum line item totals, establish quote expiration rules, and do not include shipping charges in the client quote. Output the formatted proposal details ready for human approval sign-off.",
+                "quote_packaging": "Prepare a clear quote summary and ensure totals and validity terms are correct before approval.",
+            }
         )
         super().__init__(metadata)
 
@@ -87,7 +91,7 @@ class QuoteGenerationAgent(BaseAgent):
         rfq_id = inputs.get("rfq_id", "")
         customer = inputs.get("customer", "")
         items = inputs.get("quote_items", [])
-        shipping = inputs.get("shipping_cost", 0.0)
+        shipping = 0.0
         quote_validity = inputs.get("quote_validity_days", 30)
         terms = inputs.get("terms", "Standard terms apply.")
         
@@ -117,6 +121,7 @@ class QuoteGenerationAgent(BaseAgent):
             f"Quote ID: {quote_id} | RFQ Ref: {rfq_id}\n"
             f"Customer: {customer}\n"
             f"Date: 2026-08-20 | Valid for: {quote_validity} Days\n"
+            f"Shipping: customer-selected, not quoted by Winged Tycoons\n"
             f"-------------------------------------\n"
         )
         for idx, q in enumerate(quotation, 1):
@@ -128,7 +133,6 @@ class QuoteGenerationAgent(BaseAgent):
         pdf_summary += (
             f"-------------------------------------\n"
             f"SUBTOTAL:          ${subtotal:.2f}\n"
-            f"SHIPPING/HANDLING: ${shipping:.2f}\n"
             f"TOTAL DUE (USD):   ${total_amount:.2f}\n"
             f"STATUS: {status}\n"
             f"TERMS: {terms}\n"

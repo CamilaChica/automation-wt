@@ -3,6 +3,27 @@ import { seedSession } from './helpers/session';
 
 test('zero-human-in-the-loop autonomous flow across all interfaces', async ({ page }) => {
   let intakeCalls = 0;
+  await page.route('**/api/rfqs', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{ id: 'WT-31005', customer_name: 'Global Airlines', status: 'Quoted' }]),
+    });
+  });
+  await page.route('**/api/rfqs/WT-31005', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        rfq: { id: 'WT-31005', customer_name: 'Global Airlines', status: 'Quoted' },
+        quote_details: { quote: { id: 'QTE-31005' }, items: [] },
+        logs: [],
+      }),
+    });
+  });
+  await page.route('**/api/quotes/QTE-31005/approve', async route => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'Quote_Sent' }) });
+  });
   await page.route('**/api/catalog/search**', async route => {
     await route.fulfill({
       status: 200,
@@ -33,11 +54,12 @@ test('zero-human-in-the-loop autonomous flow across all interfaces', async ({ pa
   await seedSession(page, 'customer');
   await page.goto('/customer-portal');
   await expect(page.getByText('Customer parts portal')).toBeVisible();
+  const quoteForm = page.getByRole('form', { name: 'Request a quote form' });
 
   await page.getByPlaceholder('Company or contact name').fill('Global Airlines');
-  await page.getByPlaceholder('Work email').fill('mro.ops@globalairlines.com');
-  await page.getByPlaceholder('Part number', { exact: true }).fill('AOG-9981');
-  await page.getByLabel('Quantity').fill('1');
+  await quoteForm.getByPlaceholder('Work email').fill('mro.ops@globalairlines.com');
+  await quoteForm.getByPlaceholder('Part number', { exact: true }).fill('AOG-9981');
+  await quoteForm.getByLabel('Quantity').fill('1');
   await page
     .getByPlaceholder('Condition, aircraft type, certification, delivery location...')
     .fill('AOG critical component. Need immediate dispatch with full ITAR docs.');

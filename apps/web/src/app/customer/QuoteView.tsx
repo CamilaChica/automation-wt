@@ -1,0 +1,19 @@
+"use client";
+import { useState } from "react";
+import Link from "next/link";
+
+export default function QuoteView({ quoteId }: { quoteId: string }) {
+  const [status, setStatus] = useState("QUOTE READY");
+  const [drawer, setDrawer] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [fileName, setFileName] = useState("");
+  const [question, setQuestion] = useState("");
+  const acceptQuote = () => { setStatus("PO_RECEIVED"); setDrawer(false); };
+  return <main className="shell">
+    <header className="topbar"><Link href="/" className="brand" aria-label="Winged Tycoons home"><img src="/WingedTycoons.png" alt="Winged Tycoons Logo" /><span>WINGED TYCOONS</span></Link><div className="mobile-nav"><button data-testid="mobile-menu-button" aria-label="Open navigation" onClick={() => setMenuOpen(value => !value)}>☰</button>{menuOpen && <nav><Link href="/rfq">New RFQ</Link><Link href={`/quotes/${quoteId}`}>Quote</Link></nav>}</div><span className="secure">CUSTOMER QUOTE <b>{status}</b></span></header>
+    <section className="quote-wrap"><div className="quote-title"><div><p className="eyebrow">Commercial quotation</p><h1>Quote {quoteId}</h1><p>Prepared for Global Airlines · issued 20 September 2026</p></div><span className="status-pill">{status}</span></div>
+      <div className="quote-grid"><article className="quote-card"><div className="quote-card-head"><div><span className="label">WINGED TYCOONS AVIATION</span><h2>Aircraft component quotation</h2></div><button className="secondary" onClick={() => window.print()}>Download PDF Quote</button></div><div className="quote-meta"><div><span>Part number</span><strong>XYZ123</strong></div><div><span>Quantity</span><strong>2 EA</strong></div><div><span>Condition</span><strong>Overhauled</strong></div><div><span>Lead time</span><strong>5 business days</strong></div></div><div className="line-item"><div><span className="part-icon">✦</span><div><strong>Garmin transponder assembly</strong><small>Trace packet available · FAA Form 8130-3</small></div></div><strong>$4,600.00 <small>USD / unit</small></strong></div><div className="total"><span>Total proposal</span><strong>$9,200.00 <small>USD</small></strong></div><div className="validity"><span>QUOTE VALID UNTIL</span><strong>15 October 2026</strong><em>Expires in 24 days</em></div></article><aside className="side-card"><p className="eyebrow">Ready when you are</p><h2>Move this order forward.</h2><p>Accept the commercial terms and upload your purchase order. Our operations team will verify availability before release.</p><button className="primary" onClick={() => setDrawer(true)}>Accept & Upload PO <span>→</span></button><div className="question"><label htmlFor="question">Ask a question</label><textarea id="question" value={question} onChange={event => setQuestion(event.target.value)} placeholder="Ask about lead time, certification, or delivery..." /><button className="text-button" onClick={() => setQuestion("")}>Send message</button></div></aside></div></section>
+    <div className="mobile-sticky-cta"><button className="primary" onClick={() => setDrawer(true)}>Accept & Upload PO <span>→</span></button></div>
+    {drawer && <div className="modal-backdrop"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="po-title"><button className="close" onClick={() => setDrawer(false)} aria-label="Close">×</button><p className="eyebrow">Purchase order</p><h2 id="po-title">Accept quotation</h2><p>Upload a PDF purchase order or confirm acceptance to send this quote to operations.</p><label className="upload" htmlFor="po-upload">Purchase order PDF<input id="po-upload" type="file" accept="application/pdf" onChange={event => setFileName(event.target.files?.[0]?.name || "")} />{fileName && <small>{fileName}</small>}</label><button className="primary" onClick={acceptQuote}>Submit PO & continue <span>→</span></button></div></div>}
+  </main>;
+}

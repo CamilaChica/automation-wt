@@ -26,14 +26,16 @@ def restore_database(source: Path, destination: Path) -> None:
         source_connection.close()
 
 
-def main() -> None:
-    if len(sys.argv) != 2:
-        raise SystemExit("Usage: python scripts/restore_sqlite.py <backup-directory>")
-    backup_dir = Path(sys.argv[1])
-    if not backup_dir.is_dir():
-        raise SystemExit(f"Backup directory does not exist: {backup_dir}")
+def main(backup_dir: str | Path | None = None) -> None:
+    if backup_dir is None:
+        if len(sys.argv) != 2:
+            raise SystemExit("Usage: python scripts/restore_sqlite.py <backup-directory>")
+        backup_dir = sys.argv[1]
+    backup_path = Path(backup_dir)
+    if not backup_path.is_dir():
+        raise SystemExit(f"Backup directory does not exist: {backup_path}")
     for name, destination in DATABASES.items():
-        source = backup_dir / f"{name}.db"
+        source = backup_path / f"{name}.db"
         if source.exists():
             restore_database(source, destination)
             print(f"Restored {name} database")

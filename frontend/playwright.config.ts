@@ -24,5 +24,10 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
+    {
+      name: 'e2e-ui',
+      testDir: './tests/e2e-ui',
+      use: { ...devices['Desktop Chrome'] },
+    },
   ],
 });

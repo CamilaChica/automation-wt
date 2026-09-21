@@ -30,7 +30,7 @@ class PartsIntelligenceAgent(BaseAgent):
                 "and a confidence score. Flag any unknown or ambiguous part numbers for "
                 "human review."
             ),
-            system_instructions=(
+            system_instruction=(
                 "Inspect part numbers from the validated RFQ. Standardize hyphenation, "
                 "spacing, and casing before lookup. Search the parts catalog for exact "
                 "matches first, then normalized/fuzzy matches, then alternate PNs. "
@@ -90,7 +90,11 @@ class PartsIntelligenceAgent(BaseAgent):
                     action="halt_for_review",
                     escalate_to="human_operator"
                 )
-            ]
+            ],
+            prompt_templates={
+                "default": "Inspect part numbers from the validated RFQ. Standardize hyphenation, spacing, and casing before lookup. Search the parts catalog for exact matches first, then normalized/fuzzy matches, then alternate PNs. Never assume compatibility — only return alternates explicitly listed in the catalog entry. If multiple parts match ambiguously, halt for human review. If the part is entirely unknown, flag it and escalate.",
+                "catalog_lookup": "Validate the part against the master aviation parts catalog and return only explicit matches or approved alternates.",
+            }
         )
         super().__init__(metadata)
         self._catalog_tool = SearchPartsCatalogTool()

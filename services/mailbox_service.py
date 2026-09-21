@@ -96,8 +96,19 @@ def _graph_access_token() -> str:
     return token.token
 
 
+def _mailbox_user_for_graph(mailbox: str) -> str:
+    mailbox_address = MAILBOXES[mailbox].address
+    specific = os.getenv(f"GRAPH_MAILBOX_USER_{mailbox.upper()}")
+    if specific:
+        return specific
+    generic = os.getenv("GRAPH_MAILBOX_USER")
+    if generic and generic.lower() == mailbox_address.lower():
+        return generic
+    return mailbox_address
+
+
 def _fetch_graph_inbox_messages(mailbox: str, limit: int = 25) -> list[dict[str, str]]:
-    mailbox_user = os.getenv("GRAPH_MAILBOX_USER") or MAILBOXES[mailbox].address
+    mailbox_user = _mailbox_user_for_graph(mailbox)
     token = _graph_access_token()
     headers = {
         "Authorization": f"Bearer {token}",
@@ -211,6 +222,38 @@ def fetch_inbox_headers(mailbox: str, limit: int = 25) -> list[dict[str, str]]:
     ]
 
 
+def health_check_mailboxes(mailboxes: Optional[list[str]] = None, limit: int = 5) -> dict[str, dict[str, object]]:
+    """Return a simple status summary for each configured shared mailbox.
+
+    Production smoke tests use this to assert the worker can read each mailbox and
+    that the backing Graph/IMAP configuration is live.
+    """
+    target = [mailbox.strip() for mailbox in (mailboxes or list(MAILBOXES.keys())) if str(mailbox or "").strip()]
+    if not target:
+        return {}
+
+    results: dict[str, dict[str, object]] = {}
+    for mailbox in target:
+        if mailbox not in MAILBOXES:
+            raise ValueError(f"Unknown mailbox: {mailbox}")
+        try:
+            messages = fetch_inbox_messages(mailbox, limit=limit)
+            latest = messages[0] if messages else {}
+            results[mailbox] = {
+                "status": "ok",
+                "message_count": len(messages),
+                "latest_from": latest.get("from", ""),
+                "latest_subject": latest.get("subject", ""),
+            }
+        except Exception as exc:  # pragma: no cover - production smoke path
+            results[mailbox] = {
+                "status": "error",
+                "message_count": 0,
+                "error": str(exc),
+            }
+    return results
+
+
 def send_message(mailbox: str, recipient: str, subject: str, body: str, reply_to: Optional[str] = None) -> None:
     if _use_legacy_graph_client():
         config = MAILBOXES.get(mailbox)
@@ -245,7 +288,7 @@ def send_message(mailbox: str, recipient: str, subject: str, body: str, reply_to
 
 
 def _send_graph_message(mailbox: str, recipient: str, subject: str, body: str, reply_to: Optional[str] = None) -> None:
-    mailbox_user = os.getenv("GRAPH_MAILBOX_USER") or MAILBOXES[mailbox].address
+    mailbox_user = _mailbox_user_for_graph(mailbox)
     token = _graph_access_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     if reply_to:

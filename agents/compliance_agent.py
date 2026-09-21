@@ -39,7 +39,7 @@ class ComplianceAgent(BaseAgent):
             name="ComplianceAgent",
             role="Aviation Compliance & Quality Assurance Auditor",
             objective="Inspect part pedigree, trace documentation, and supplier regulatory compliance.",
-            system_instructions=(
+            system_instruction=(
                 "You audit part sources. Check certificate presence (e.g., FAA Form 8130-3, EASA Form 1). "
                 "Verify trace logs are intact. Flag unvetted suppliers or safety warnings. "
                 "If critical documents are missing or risk levels are high, halt for review."
@@ -51,7 +51,9 @@ class ComplianceAgent(BaseAgent):
                     "source": {"type": "string", "enum": ["Inventory", "Supplier"]},
                     "supplier_name": {"type": "string"},
                     "certificate_type": {"type": "string"},
-                    "has_full_trace": {"type": "boolean"}
+                    "has_full_trace": {"type": "boolean"},
+                    "requested_certificate_type": {"type": "string"},
+                    "requested_condition": {"type": "string"}
                 },
                 "required": ["part_number", "source", "certificate_type"]
             },
@@ -76,7 +78,11 @@ class ComplianceAgent(BaseAgent):
                     action="halt_for_review",
                     escalate_to="human_operator"
                 )
-            ]
+            ],
+            prompt_templates={
+                "default": "You audit part sources. Check certificate presence (e.g., FAA Form 8130-3, EASA Form 1). Verify trace logs are intact. Flag unvetted suppliers or safety warnings. If critical documents are missing or risk levels are high, halt for review.",
+                "compliance_check": "Inspect the part certificate, trace record, and supplier approval before continuing.",
+            }
         )
         super().__init__(metadata)
 
@@ -86,17 +92,23 @@ class ComplianceAgent(BaseAgent):
         supplier_name = inputs.get("supplier_name", "")
         cert_type = inputs.get("certificate_type", "None")
         has_trace = inputs.get("has_full_trace", True)
+        requested_cert = inputs.get("requested_certificate_type")
+        requested_condition = inputs.get("requested_condition")
         
         issues = []
         trace_issue = False
+        requirement_issue = False
+        sanctions_issue = False
         # Retrieve mock document record for the part
         record = next((doc for doc in self.MOCK_DOCUMENTS if doc["part_number"] == part_number), None)
         if not record:
             # Check if this part number is one of our standard inventory/supplier parts
             if part_number in ["060-1234-00", "456-789-OH"]:
                 unapproved = ["Suspect Supplier Corp", "Blacklisted Co", "Blacklist Spares"]
-                if supplier_name in unapproved:
+                supplier_name_lower = supplier_name.strip().lower()
+                if supplier_name in unapproved or "sanction" in supplier_name_lower or "blacklist" in supplier_name_lower:
                     issues.append(f"Supplier '{supplier_name}' is not approved.")
+                    sanctions_issue = True
                 
                 valid_certs = ["FAA 8130-3", "EASA Form 1", "CoC"]
                 if cert_type not in valid_certs or cert_type == "None":
@@ -106,14 +118,30 @@ class ComplianceAgent(BaseAgent):
                     issues.append("Incomplete traceability information.")
                     trace_issue = True
             else:
-                issues.append(f"No documentation found for part number {part_number}.")
+                valid_certs = ["FAA 8130-3", "EASA Form 1", "CoC"]
+                supplier_identity = supplier_name.strip().lower()
+                supplier_blocked = (
+                    not supplier_identity
+                    or supplier_identity in {"unknown", "unknown supplier"}
+                    or "sanction" in supplier_identity
+                    or "blacklist" in supplier_identity
+                    or supplier_name in {"Suspect Supplier Corp", "Blacklisted Co", "Blacklist Spares"}
+                )
+                if source == "Supplier" and cert_type in valid_certs and has_trace and not supplier_blocked:
+                    # A new supplier offer can be compliant before catalog enrichment;
+                    # require explicit certificate and trace evidence rather than inventing catalog data.
+                    pass
+                else:
+                    issues.append(f"No documentation found for part number {part_number}.")
         else:
             # Supplier approval check
             if not record.get("supplier_approved", False):
                 issues.append(f"Supplier '{record['supplier_name']}' is not approved.")
+                sanctions_issue = True
             # Certificate type and status
             if record["certificate_type"] != cert_type:
                 issues.append(f"Certificate type mismatch: expected {record['certificate_type']}, got {cert_type}.")
+                requirement_issue = bool(requested_cert)
             if record["certificate_status"] != "valid":
                 issues.append(f"Certificate status is {record['certificate_status']}, not valid.")
             # Expiration check
@@ -123,11 +151,20 @@ class ComplianceAgent(BaseAgent):
             if not record.get("trace_complete", False):
                 issues.append("Incomplete traceability information.")
                 trace_issue = True
+
+        if requested_cert and cert_type != requested_cert and not any("Requested certificate mismatch" in issue for issue in issues):
+            issues.append(f"Requested certificate mismatch: expected {requested_cert}, got {cert_type}.")
+            requirement_issue = True
+        if requested_condition and inputs.get("condition") and inputs.get("condition") != requested_condition:
+            issues.append(f"Condition mismatch: expected {requested_condition}, got {inputs.get('condition')}.")
+            requirement_issue = True
         
         # Determine final compliance status based on gathered issues
         if not issues:
             compliance_status = "APPROVED"
-        elif trace_issue and len(issues) == 1:
+        elif sanctions_issue:
+            compliance_status = "REJECTED"
+        elif (trace_issue and len(issues) == 1) or requirement_issue:
             compliance_status = "HUMAN_REVIEW_REQUIRED"
         else:
             compliance_status = "REJECTED"

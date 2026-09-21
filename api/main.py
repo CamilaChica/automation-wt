@@ -1,8 +1,13 @@
 import os
 import secrets
+import uuid
+import json
+import logging
+import time
+from collections import defaultdict, deque
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request, Response
 
 load_dotenv()
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,17 +15,119 @@ from pydantic import BaseModel, Field
 from models.db_models import RFQ, RFQItem, Quote, QuoteItem, AgentAuditLog, Supplier
 from services.db_service import db_service
 from services.orchestration_service import orchestration_service
-from services.mailbox_service import fetch_inbox_messages, fetch_inbox_headers, send_message, send_otp_email
+from services.mailbox_service import fetch_inbox_messages, fetch_inbox_headers, health_check_mailboxes, send_message, send_otp_email
 from services.communication_service import communication_service
 from services.supplier_database import supplier_db
 from services.carrier_tracking_service import carrier_tracking_service
-from api.auth import current_user, init_auth_db, request_otp, require_roles, verify_otp
+from services.twilio_service import twilio_service
+from services.freight_service import FreightRequest, freight_rate_service
+from services.operations_store import operations_store
+from services.export_control_service import export_control_service
+from services.swarm_runtime import swarm_runtime
+from api.auth import current_user, init_auth_db, request_otp, require_roles, verify_otp, ROLE_CUSTOMER
 
 app = FastAPI(
     title="Winged Tycoons RFQ-to-Quote Multi-Agent API",
     description="Automated multi-agent processing pipeline with Human-in-the-Loop approval gates.",
     version="1.0.0"
 )
+
+
+class _JsonLogFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        return json.dumps({
+            "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        })
+
+
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+for _handler in logging.getLogger().handlers:
+    _handler.setFormatter(_JsonLogFormatter())
+logger = logging.getLogger("winged-tycoons.api")
+
+_CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+_CSRF_EXEMPT_PATHS = {"/healthz", "/ready", "/", "/api/auth/otp/request", "/api/auth/otp/verify"}
+_RATE_LIMIT_RULES = {
+    "/api/auth/otp/request": (3, 3600),
+    "/api/auth/otp/verify": (10, 900),
+    "/api/rfqs/intake": (30, 60),
+    "/api/purchase-orders": (20, 60),
+    "/api/catalog/search": (120, 60),
+}
+_rate_limit_events: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+
+
+def _client_key(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    return forwarded or (request.client.host if request.client else "unknown")
+
+
+def _rate_limit(request: Request) -> tuple[bool, int]:
+    rule = _RATE_LIMIT_RULES.get(request.url.path)
+    if not rule or os.getenv("RATE_LIMIT_ENABLED", "true").strip().lower() in {"0", "false", "no", "off"}:
+        return True, 0
+    limit, window = rule
+    now = time.time()
+    key = (request.url.path, _client_key(request))
+    events = _rate_limit_events[key]
+    while events and events[0] <= now - window:
+        events.popleft()
+    if len(events) >= limit:
+        retry_after = max(1, int(events[0] + window - now))
+        return False, retry_after
+    events.append(now)
+    return True, 0
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    started = time.perf_counter()
+    allowed, retry_after = _rate_limit(request)
+    if not allowed:
+        response = Response("Rate limit exceeded.", status_code=429)
+        response.headers["Retry-After"] = str(retry_after)
+        response.headers["X-Request-ID"] = request_id
+        return response
+    session_cookie = request.cookies.get("wt_session")
+    csrf_cookie = request.cookies.get("wt_csrf")
+    csrf_header = request.headers.get("x-csrf-token")
+    if (
+        request.method not in _CSRF_SAFE_METHODS
+        and request.url.path not in _CSRF_EXEMPT_PATHS
+        and session_cookie
+        and not request.headers.get("authorization")
+        and (not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header))
+    ):
+        return Response("CSRF validation failed.", status_code=403, headers={"X-Request-ID": request_id})
+    response = await call_next(request)
+    duration_ms = round((time.perf_counter() - started) * 1000, 2)
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Response-Time-Ms"] = str(duration_ms)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+    csrf_token = csrf_cookie or secrets.token_urlsafe(24)
+    response.set_cookie(
+        "wt_csrf",
+        csrf_token,
+        httponly=False,
+        secure=os.getenv("WT_AUTH_ENV", "development").strip().lower() == "production",
+        samesite="Strict",
+        max_age=8 * 60 * 60,
+    )
+    if os.getenv("WT_AUTH_ENV", "development").strip().lower() == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    logger.info(
+        "http_request",
+        extra={"request_id": request_id, "method": request.method, "path": request.url.path, "status_code": response.status_code, "duration_ms": duration_ms},
+    )
+    return response
 allowed_origins = [
     origin.strip()
     for origin in os.getenv(
@@ -32,8 +139,7 @@ allowed_origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    allow_credentials=False,
-    allow_methods=["*"],
+    allow_credentials=True,
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -43,6 +149,7 @@ class IntakeRequest(BaseModel):
     customer_name: Optional[str] = Field(None, description="Customer company or contact name")
     customer_email: Optional[str] = Field(None, description="Customer email for quote updates")
     reply_to: Optional[str] = Field(None, description="Original email message ID for same-thread replies")
+    customer_country: Optional[str] = Field(None, description="Customer or destination country for export screening")
 
 class OtpRequest(BaseModel):
     email: str
@@ -134,6 +241,15 @@ class CarrierTrackingRequest(BaseModel):
     carrier: str
     tracking_number: str
 
+class ShipmentSmsRequest(BaseModel):
+    recipient: str = Field(..., description="E.164 phone number")
+    status: str
+    tracking_url: Optional[str] = None
+
+class AutomationPauseRequest(BaseModel):
+    paused: bool
+    reason: Optional[str] = None
+
 # Endpoints
 
 @app.post("/api/auth/otp/request")
@@ -150,8 +266,17 @@ async def otp_request(request: OtpRequest):
     return response
 
 @app.post("/api/auth/otp/verify", response_model=LoginResponse)
-async def otp_verify(request: OtpVerifyRequest):
+async def otp_verify(request: OtpVerifyRequest, response: Response):
     result = verify_otp(request.challenge_id, request.code)
+    auth_env = os.getenv("WT_AUTH_ENV", "development").strip().lower()
+    response.set_cookie(
+        key="wt_session",
+        value=result["access_token"],
+        httponly=True,
+        secure=auth_env == "production",
+        samesite="Strict",
+        max_age=8 * 60 * 60,
+    )
     return LoginResponse(
         access_token=result["access_token"],
         role=result["role"],
@@ -168,6 +293,20 @@ async def root():
         "frontend_url": "http://localhost:3000"
     }
 
+
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
+
+
+@app.get("/ready")
+async def ready():
+    try:
+        db_service.list_rfqs()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"database not ready: {exc}") from exc
+    return {"status": "ready"}
+
 @app.post("/api/rfqs/intake", response_model=IntakeResponse)
 async def submit_rfq(request: IntakeRequest, user: dict = Depends(current_user)):
     """
@@ -178,7 +317,7 @@ async def submit_rfq(request: IntakeRequest, user: dict = Depends(current_user))
         raise HTTPException(status_code=400, detail="Raw RFQ text cannot be empty.")
         
     # Standard mock customer resolution (simulating a database record lookup)
-    if user["role"] == "customer":
+    if user["role"] == ROLE_CUSTOMER:
         customer_name = request.customer_name or user["email"]
         customer_email = user["email"]
     else:
@@ -200,6 +339,52 @@ async def submit_rfq(request: IntakeRequest, user: dict = Depends(current_user))
         rfq.id, "GatewayAPI", "intake_submission",
         f"RFQ submitted successfully for customer '{customer_name}'."
     )
+
+    if os.getenv("SWARM_SHADOW_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        try:
+            await swarm_runtime.publish_rfq_received(
+                rfq_id=rfq.id,
+                raw_text=request.raw_text,
+                customer_id=f"CUS-{customer_email.lower()}",
+                customer_name=customer_name,
+                customer_email=customer_email,
+                thread_id=request.reply_to,
+            )
+            db_service.add_audit_log(
+                rfq.id,
+                "SwarmRuntime",
+                "event_published",
+                "Published event.rfq.received in shadow mode; sequential pipeline remains authoritative.",
+            )
+        except Exception as exc:
+            db_service.add_audit_log(
+                rfq.id,
+                "SwarmRuntime",
+                "event_publish_failed",
+                f"Shadow event publication failed: {type(exc).__name__}: {exc}",
+                "WARNING",
+            )
+
+    screening = export_control_service.screen(
+        customer_name=customer_name,
+        raw_text=request.raw_text,
+        destination=request.customer_country,
+    )
+    if screening.blocked:
+        db_service.update_rfq_status(rfq.id, "Blocked_Compliance_Review")
+        db_service.add_audit_log(
+            rfq.id,
+            "ExportControlService",
+            "export_screening",
+            "RFQ blocked pending export-control compliance review.",
+            "FAILURE",
+            json.dumps(screening.model_dump()),
+        )
+        return IntakeResponse(
+            rfq_id=rfq.id,
+            status="Blocked_Compliance_Review",
+            message="RFQ blocked pending export-control compliance review.",
+        )
     
     # Run the pipeline synchronously to make parsing results immediately available in MVP
     pipeline_res = await orchestration_service.process_rfq_pipeline(rfq.id)
@@ -228,6 +413,44 @@ async def trigger_process(rfq_id: str, _user: dict = Depends(require_roles("ROLE
         
     res = await orchestration_service.process_rfq_pipeline(rfq_id)
     return res
+
+@app.post("/api/internal/rfqs/{rfq_id}/automation")
+async def set_automation_pause(
+    rfq_id: str,
+    request: AutomationPauseRequest,
+    user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER")),
+):
+    rfq = db_service.set_rfq_automation_paused(rfq_id, request.paused, request.reason)
+    if not rfq:
+        raise HTTPException(status_code=404, detail="RFQ not found.")
+    db_service.add_audit_log(
+        rfq_id,
+        "AutomationControl",
+        "automation_pause" if request.paused else "automation_resume",
+        f"Automation {'paused' if request.paused else 'resumed'} by {user['email']}."
+        + (f" Reason: {rfq.pause_reason}" if rfq.pause_reason else ""),
+        "WARNING" if request.paused else "SUCCESS",
+    )
+    return {
+        "rfq_id": rfq_id,
+        "automation_paused": rfq.automation_paused,
+        "pause_reason": rfq.pause_reason,
+    }
+
+@app.get("/api/internal/automation-events")
+async def list_automation_events(
+    status: Optional[str] = None,
+    limit: int = 100,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
+):
+    return operations_store.list_automation_events(status=status, limit=limit)
+
+@app.get("/api/internal/mailboxes/health")
+async def mailbox_health(
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+):
+    """Return operational health for the shared sales and purchasing mailboxes."""
+    return health_check_mailboxes()
 
 @app.get("/api/rfqs", response_model=List[RFQ])
 async def list_rfqs(user: dict = Depends(current_user)):
@@ -358,10 +581,26 @@ async def submit_purchase_order(request: PurchaseOrderRequest, user: dict = Depe
     rfq = db_service.get_rfq(quote.rfq_id)
     if not rfq:
         raise HTTPException(status_code=404, detail="RFQ not found.")
+    if rfq.status == "Purchase_Order_Received":
+        raise HTTPException(status_code=409, detail="Purchase order already received for this RFQ.")
 
     customer_email = request.customer_email or rfq.customer_email
     if user["role"] == "ROLE_CUSTOMER" and customer_email.lower() != user["email"].lower():
         raise HTTPException(status_code=403, detail="You can only submit a purchase order for your own quote.")
+
+    previous_po_number = None
+    previous_quote_id = None
+    if rfq.status and rfq.status != "Intake":
+        previous_po_number = rfq.status.replace("Purchase_Order_Received", "").strip() or None
+    if quote.status and quote.status != "Draft":
+        previous_quote_id = quote.id
+    communication_service.validate_purchase_order_metadata(
+        po_number=request.po_number,
+        customer_email=customer_email,
+        quote_id=request.quote_id,
+        previous_po_number=previous_po_number,
+        previous_quote_id=previous_quote_id,
+    )
 
     quote_items = db_service.get_quote_items(request.quote_id)
     internal_items = []
@@ -521,6 +760,34 @@ async def refresh_carrier_tracking(
     )
     return {"shipment_id": shipment_id, "event": event, "provider": payload}
 
+@app.post("/api/internal/shipments/{shipment_id}/sms")
+async def send_shipment_sms(
+    shipment_id: str,
+    request: ShipmentSmsRequest,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING", "ROLE_SALES")),
+):
+    if not db_service.get_shipment(shipment_id):
+        raise HTTPException(status_code=404, detail="Shipment not found.")
+    return twilio_service.send_shipment_update(
+        recipient=request.recipient,
+        shipment_id=shipment_id,
+        status=request.status,
+        tracking_url=request.tracking_url,
+    )
+
+@app.post("/api/internal/freight/quote")
+async def quote_freight(
+    request: FreightRequest,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING", "ROLE_SALES")),
+):
+    return freight_rate_service.quote(
+        origin=request.origin,
+        destination=request.destination,
+        weight_kg=request.weight_kg,
+        packages=request.packages,
+        service_level=request.service_level,
+    )
+
 @app.post("/api/webhooks/carriers/aftership")
 async def carrier_webhook(request: Request):
     body = await request.body()
@@ -534,6 +801,8 @@ async def carrier_webhook(request: Request):
     )
     if not shipment:
         raise HTTPException(status_code=404, detail="No shipment matches carrier tracking event.")
+    if not operations_store.claim_carrier_webhook_event(normalized["event_id"]):
+        return {"status": "duplicate", "shipment_id": shipment.id}
     event = db_service.add_shipment_event(
         shipment.id,
         normalized["status"],

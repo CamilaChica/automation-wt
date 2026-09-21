@@ -54,8 +54,11 @@ def run() -> None:
         for task in supplier_db.list_due_communication_tasks():
             try:
                 result = communication_service.process_due_task(task)
-                supplier_db.mark_communication_task_sent(task["id"])
-                logger.info("Sent scheduled %s communication to %s -> %s", task["task_type"], task["recipient"], result["transmission_status"])
+                if result["transmission_status"] == "SENT":
+                    supplier_db.mark_communication_task_sent(task["id"])
+                    logger.info("Sent scheduled %s communication to %s", task["task_type"], task["recipient"])
+                else:
+                    logger.info("Dry-run scheduled %s communication retained for delivery", task["task_type"])
             except Exception:
                 supplier_db.mark_communication_task_failed(task["id"])
                 logger.exception("Scheduled communication failed for task %s", task["id"])
@@ -65,6 +68,10 @@ def run() -> None:
                 messages = fetch_inbox_messages(mailbox)
                 logger.info("Mailbox %s: read %d message bodies", mailbox, len(messages))
                 for message in messages:
+                    message_id = str(message.get("message_id") or "").strip()
+                    if message_id and supplier_db.is_email_processed(mailbox, message_id):
+                        logger.info("Mailbox %s skipped already processed message %s", mailbox, message_id)
+                        continue
                     body = (message.get("body") or "").strip()
                     if not body:
                         continue
@@ -77,11 +84,11 @@ def run() -> None:
                         logger.info(
                             "Mailbox %s message %s retained for customer communication; supplier ingestion skipped",
                             mailbox,
-                            message.get("message_id"),
+                            message_id,
                         )
                         continue
-                    result = loader.load_raw_email_text(email_text)
-                    logger.info("Mailbox %s processed message %s -> %s", mailbox, message.get("message_id"), result)
+                    result = loader.load_raw_email_text(email_text, mailbox=mailbox, message_id=message_id or None)
+                    logger.info("Mailbox %s processed message %s -> %s", mailbox, message_id, result)
                     if result.get("success") and mailbox == "purchasing":
                         sender = message.get("from", "")
                         if result.get("unit_cost", 0) and "@" in sender:
@@ -91,7 +98,8 @@ def run() -> None:
                                 part_number=result["part_number"],
                                 unit_cost=float(result["unit_cost"]),
                                 source_email_id=result["source_email_id"],
-                                reply_to=message.get("message_id"),
+                                reply_to=message_id,
+                                quantity=int(result.get("quantity_available") or 1),
                             )
                             logger.info("Scheduled supplier discount request -> %s", discount_task)
                         missing_fields = _missing_supplier_fields(email_text, result)
@@ -100,12 +108,12 @@ def run() -> None:
                                 recipient=sender,
                                 part_number=result["part_number"],
                                 missing_fields=missing_fields,
-                                reply_to=message.get("message_id"),
+                                reply_to=message_id,
                             )
                             logger.info(
                                 "Requested missing supplier fields for %s in thread %s -> %s",
                                 result["part_number"],
-                                message.get("message_id"),
+                                message_id,
                                 clarification,
                             )
             except Exception:

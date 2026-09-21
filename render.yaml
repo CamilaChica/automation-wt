@@ -1,17 +1,18 @@
 services:
   - type: web
-    name: winged-tycoons-api
+    name: winged-api
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: python run_service.py
-    healthCheckPath: /
+    healthCheckPath: /ready
+    autoDeploy: true
     disk:
-      name: winged-tycoons-data
+      name: winged-api-data
       mountPath: /var/data
-      sizeGB: 1
+      sizeGB: 10
     envVars:
       - key: WT_AUTH_ENV
-        sync: false
+        value: "production"
       - key: WT_AUTH_SECRET
         sync: false
       - key: SALES_EMAIL_USERNAME
@@ -32,6 +33,8 @@ services:
         sync: false
       - key: EMAIL_SEND_ENABLED
         value: "true"
+      - key: REDIS_URL
+        sync: false
       - key: MAILBOX_MAX_AGE_DAYS
         value: "7"
       - key: CUSTOMER_FOLLOWUP_DELAY_MINUTES
@@ -46,6 +49,22 @@ services:
         value: "https://api.aftership.com/tracking/2026-07"
       - key: CARRIER_WEBHOOK_SECRET
         sync: false
+      - key: TWILIO_ENABLED
+        value: "false"
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_NUMBER
+        sync: false
+      - key: FREIGHT_ENABLED
+        value: "false"
+      - key: FREIGHT_PROVIDER
+        value: "configured-carrier-api"
+      - key: FREIGHT_API_BASE_URL
+        sync: false
+      - key: FREIGHT_API_KEY
+        sync: false
       - key: PUBLIC_APP_URL
         sync: false
       - key: OPERATIONS_DB_PATH
@@ -59,17 +78,70 @@ services:
       - key: AZURE_STORAGE_CONTAINER
         value: "winged-tycoons-backups"
       - key: FRONTEND_ORIGIN
-        sync: false
+        value: "https://wingedtycoons.com,https://rfq.wingedtycoons.com"
 
-  - type: static
-    name: winged-tycoons-frontend
-    buildCommand: npm ci && npm run build
-    staticPublishPath: dist
-    rootDir: frontend
+  - type: worker
+    name: winged-worker
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python worker.py
     envVars:
-      - key: VITE_API_BASE_URL
+      - key: WT_AUTH_ENV
+        value: "production"
+      - key: WT_AUTH_SECRET
         sync: false
+      - key: SALES_EMAIL_USERNAME
+        sync: false
+      - key: SALES_EMAIL_PASSWORD
+        sync: false
+      - key: PURCHASING_EMAIL_USERNAME
+        sync: false
+      - key: PURCHASING_EMAIL_PASSWORD
+        sync: false
+      - key: AZURE_TENANT_ID
+        sync: false
+      - key: AZURE_CLIENT_ID
+        sync: false
+      - key: AZURE_CLIENT_SECRET
+        sync: false
+      - key: GRAPH_MAILBOX_USER
+        sync: false
+      - key: EMAIL_SEND_ENABLED
+        value: "true"
+      - key: REDIS_URL
+        sync: false
+      - key: MAILBOX_MAX_AGE_DAYS
+        value: "7"
+      - key: PUBLIC_APP_URL
+        sync: false
+      - key: OPERATIONS_DB_PATH
+        value: "/var/data/operations.db"
+      - key: SUPPLIER_DATABASE_PATH
+        value: "/var/data/supplier_email_store.db"
+      - key: WT_AUTH_DB
+        value: "/var/data/winged_tycoons_auth.db"
+      - key: AZURE_STORAGE_CONNECTION_STRING
+        sync: false
+      - key: AZURE_STORAGE_CONTAINER
+        value: "winged-tycoons-backups"
+
+  - type: web
+    name: winged-customer-web-2
+    runtime: node
+    rootDir: apps/web
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        sync: false
+      - key: NEXT_PUBLIC_SITE_URL
+        value: "https://rfq.wingedtycoons.com"
+      - key: NEXT_PUBLIC_APP_NAME
+        value: "Winged Tycoons"
+      - key: NODE_ENV
+        value: "production"
     routes:
       - type: rewrite
         source: /*
-        destination: /index.html
+        destination: /
