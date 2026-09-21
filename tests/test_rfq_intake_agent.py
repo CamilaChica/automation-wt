@@ -103,6 +103,7 @@ class TestRFQIntakeAgent(unittest.TestCase):
         d = res.data
         self.assertEqual(d["status"], "COMPLETE")
         self.assertEqual(d["quantity"], 1)
+        self.assertTrue(d["quantity_defaulted"])
         self.assertEqual(d["items"][0]["quantity"], 1)
         # Part number still extracted and normalized
         self.assertEqual(d["part_number"], "456-789-OH")

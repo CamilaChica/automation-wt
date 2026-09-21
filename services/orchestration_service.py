@@ -469,6 +469,14 @@ class OrchestrationService:
                 "subtotal": quote.subtotal,
                 "shipping_cost": quote.shipping_cost,
                 "total_amount": quote.total_amount,
+                "quantity_defaulted": any(
+                    item.quantity == 1 and not re.search(
+                        r"(?:qty|quantity|q(?:t)?y\.?)\s*[:#]?\s*\d+|\b\d+\s*(?:ea|each|pcs?|pieces?|units?)\b|\b(?:need|require|want|request|order)\s+\d+",
+                        rfq.raw_text,
+                        re.IGNORECASE,
+                    )
+                    for item in quote_items
+                ),
                 "items": [
                     {
                         "part_number": item.part_number,

@@ -50,6 +50,7 @@ class AutonomousSalesAndPoTests(unittest.TestCase):
                     "quote_id": "QTE-1001",
                     "subtotal": 1000,
                     "total_amount": 1100,
+                    "quantity_defaulted": True,
                     "items": [{"part_number": "PN-1", "quantity": 2, "unit_price": 500}],
                 },
             }))
@@ -57,6 +58,7 @@ class AutonomousSalesAndPoTests(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertFalse(result.data["llm_fallback_used"])
         self.assertEqual(provider.requests[0].task, "customer_communication")
+        self.assertIn("How many do you need?", provider.requests[0].system_prompt)
         send_quote.assert_called_once()
         self.assertEqual(send_quote.call_args.kwargs["subject_override"], "Quotation QTE-1001")
 

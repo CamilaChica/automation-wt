@@ -372,7 +372,9 @@ class RFQIntakeAgent(BaseAgent):
         customer_name, company, customer_email = _extract_customer_info(raw_text)
         part_number_raw = _extract_part_number(raw_text)
         part_number  = _normalize_part_number(part_number_raw) if part_number_raw else None
-        quantity     = _extract_quantity(raw_text) or 1
+        extracted_quantity = _extract_quantity(raw_text)
+        quantity     = extracted_quantity or 1
+        quantity_defaulted = extracted_quantity is None
         condition, is_ambiguous_condition = _extract_condition(raw_text)
         required_date    = _extract_required_date(raw_text)
         delivery_location = _extract_delivery_location(raw_text)
@@ -433,6 +435,7 @@ class RFQIntakeAgent(BaseAgent):
 
         # ── 7. Compose response payload ─────────────────────────────────
         payload = intake_output.model_dump()
+        payload["quantity_defaulted"] = quantity_defaulted
         payload["customer_email"] = customer_email  # legacy key
         payload["items"] = items                    # legacy key
 
