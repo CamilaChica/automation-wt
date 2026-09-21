@@ -14,11 +14,12 @@ Responsibilities
 6. Generate a unique RFQ ID.
 7. Return structured JSON via AgentResponse.data.
 
-Mandatory fields
-----------------
+Required fields
+---------------
 - customer_name  (or company)
 - part_number
-- quantity
+
+Quantity defaults to one when the customer does not specify it.
 
 If any mandatory field is absent, status is set to NEEDS_CLARIFICATION and
 the field name is added to missing_fields.  The agent NEVER invents values.
@@ -277,12 +278,7 @@ def _determine_priority(aog: bool, text: str) -> str:
 # ---------------------------------------------------------------------------
 
 class RFQIntakeAgent(BaseAgent):
-    """
-    Converts unstructured customer RFQ text into a structured RFQIntakeOutput.
-
-    Never invents missing information.  If mandatory fields are absent,
-    returns status=NEEDS_CLARIFICATION with missing_fields populated.
-    """
+    """Convert unstructured customer RFQ text into structured RFQ data."""
 
     def __init__(self):
         metadata = AgentMetadata(
@@ -299,7 +295,7 @@ class RFQIntakeAgent(BaseAgent):
                 "quantity (integer), condition (NE/NS/OH/AR), required_date, "
                 "delivery_location, AOG_status, certification_requirements, "
                 "and additional_requirements. "
-                "Flag missing mandatory fields (part_number, quantity, customer identity). "
+                "Flag missing mandatory fields (part_number, customer identity). "
                 "Flag ambiguous condition when multiple codes appear. "
                 "Set priority: AOG > Urgent > Routine. "
                 "NEVER invent or guess missing fields."
@@ -350,7 +346,7 @@ class RFQIntakeAgent(BaseAgent):
                 ),
             ],
             prompt_templates={
-                "default": "Analyze the raw customer RFQ text. Extract: customer_name, company, part_number (normalize to uppercase), quantity (integer), condition (NE/NS/OH/AR), required_date, delivery_location, AOG_status, certification_requirements, and additional_requirements. Flag missing mandatory fields (part_number, quantity, customer identity). Flag ambiguous condition when multiple codes appear. Set priority: AOG > Urgent > Routine. NEVER invent or guess missing fields.",
+                "default": "Analyze the raw customer RFQ text. Extract: customer_name, company, part_number (normalize to uppercase), quantity (integer, default 1 when omitted), condition (NE/NS/OH/AR), required_date, delivery_location, AOG_status, certification_requirements, and additional_requirements. Flag missing mandatory fields (part_number, customer identity). Flag ambiguous condition when multiple codes appear. Set priority: AOG > Urgent > Routine. NEVER invent or guess confirmed fields.",
                 "rfq_parse": "Normalize the inbound RFQ and return only confirmed fields; escalate when required information is missing or ambiguous.",
             },
         )
@@ -376,7 +372,7 @@ class RFQIntakeAgent(BaseAgent):
         customer_name, company, customer_email = _extract_customer_info(raw_text)
         part_number_raw = _extract_part_number(raw_text)
         part_number  = _normalize_part_number(part_number_raw) if part_number_raw else None
-        quantity     = _extract_quantity(raw_text)
+        quantity     = _extract_quantity(raw_text) or 1
         condition, is_ambiguous_condition = _extract_condition(raw_text)
         required_date    = _extract_required_date(raw_text)
         delivery_location = _extract_delivery_location(raw_text)
@@ -397,9 +393,6 @@ class RFQIntakeAgent(BaseAgent):
 
         if not part_number:
             missing_fields.append("part_number")
-
-        if quantity is None:
-            missing_fields.append("quantity")
 
         if is_ambiguous_condition:
             ambiguous_fields.append("condition")

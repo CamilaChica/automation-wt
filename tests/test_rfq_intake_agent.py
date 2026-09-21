@@ -5,7 +5,7 @@ Unit tests for RFQIntakeAgent covering the six mandatory scenarios:
 
     1. complete_rfq         – all fields present; status = COMPLETE
     2. missing_part_number  – no PN in text; status = NEEDS_CLARIFICATION
-    3. missing_quantity     – no quantity in text; status = NEEDS_CLARIFICATION
+    3. omitted_quantity     – no quantity in text; defaults to one
     4. ambiguous_condition  – multiple condition codes; status = NEEDS_CLARIFICATION
     5. aog_request          – AOG keyword triggers AOG priority
     6. malformed_rfq        – garbage/empty input; status = NEEDS_CLARIFICATION
@@ -89,24 +89,23 @@ class TestRFQIntakeAgent(unittest.TestCase):
         self.assertEqual(res.escalation_triggered.condition, "missing_mandatory_fields")
 
     # ================================================================== #
-    # 3. Missing Quantity
+    # 3. Omitted Quantity
     # ================================================================== #
-    def test_missing_quantity(self):
-        """No quantity in text → NEEDS_CLARIFICATION, 'quantity' in missing_fields."""
+    def test_omitted_quantity_defaults_to_one(self):
+        """No quantity in text → complete RFQ with quantity one."""
         raw = (
             "United Airlines maintenance needs Part Number 456-789-OH. "
             "Condition OH. Required by 2026-10-01. Ship to Chicago O'Hare."
         )
         res = self._run(raw)
 
-        self.assertFalse(res.success)
+        self.assertTrue(res.success)
         d = res.data
-        self.assertEqual(d["status"], "NEEDS_CLARIFICATION")
-        self.assertIn("quantity", d["missing_fields"])
-        self.assertIsNone(d["quantity"])
+        self.assertEqual(d["status"], "COMPLETE")
+        self.assertEqual(d["quantity"], 1)
+        self.assertEqual(d["items"][0]["quantity"], 1)
         # Part number still extracted and normalized
         self.assertEqual(d["part_number"], "456-789-OH")
-        self.assertIsNotNone(res.escalation_triggered)
 
     # ================================================================== #
     # 4. Ambiguous Condition
