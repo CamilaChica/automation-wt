@@ -133,19 +133,30 @@ async def security_headers(request: Request, call_next):
         extra={"request_id": request_id, "method": request.method, "path": request.url.path, "status_code": response.status_code, "duration_ms": duration_ms},
     )
     return response
-allowed_origins = [
+configured_origins = {
     origin.strip()
-    for origin in os.getenv(
-        "FRONTEND_ORIGIN",
-        "http://localhost:3000,https://winged-tycoons-frontend.onrender.com",
-    ).split(",")
+    for origin in os.getenv("FRONTEND_ORIGIN", "").split(",")
     if origin.strip()
-]
+}
+allowed_origins = sorted(configured_origins | {
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "https://winged-tycoons-frontend.onrender.com",
+    "https://wingedtycoons.com",
+    "https://rfq.wingedtycoons.com",
+})
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_headers=["Authorization", "Content-Type"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Accept",
+        "Authorization",
+        "Content-Type",
+        "X-CSRF-Token",
+        "X-Internal-Role",
+    ],
 )
 
 # API Schemas

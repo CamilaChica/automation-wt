@@ -4,15 +4,36 @@ import { RFQ, RFQDetailResponse, InventoryItem, Supplier, Quote, QuoteItem, Agen
 const hostedApiBase = window.location.hostname === 'winged-tycoons-frontend.onrender.com'
   ? 'https://winged-tycoons-api.onrender.com/api'
   : '/api';
-const API_BASE = import.meta.env.VITE_API_BASE_URL || hostedApiBase;
+const configuredApiBase = import.meta.env.VITE_API_BASE_URL?.trim();
+const isDeployedStaticHost = window.location.hostname === 'winged-tycoons-frontend.onrender.com';
+const API_BASE = isDeployedStaticHost && (!configuredApiBase || configuredApiBase.startsWith('/'))
+  ? hostedApiBase
+  : (configuredApiBase || hostedApiBase);
 const allowMockFallbacks = import.meta.env.VITE_ALLOW_MOCK_FALLBACKS === 'true';
-axios.defaults.timeout = 5000;
+axios.defaults.timeout = 10000;
 
 axios.interceptors.request.use(config => {
   const token = localStorage.getItem('wt_access_token');
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
+
+axios.interceptors.response.use(
+  response => response,
+  error => {
+    if (import.meta.env.DEV) {
+      console.error('API request failed', {
+        method: error.config?.method,
+        url: error.config?.url,
+        status: error.response?.status,
+        responseData: error.response?.data,
+        hasRequest: Boolean(error.request),
+        message: error.message,
+      });
+    }
+    return Promise.reject(error);
+  },
+);
 
 const rethrowAuthError = (error: unknown): never => {
   if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) {
