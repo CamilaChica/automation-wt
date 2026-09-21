@@ -199,6 +199,30 @@ class TestSupplierEmailIngestion(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["part_number"], "32-11-45-01")
 
+    def test_partsbase_billing_reference_is_not_a_part_number(self):
+        email_text = """
+        From: rfqs@partsbase.com
+        Subject: Request for quotation RT-PBILL62OMS8D4
+        Please quote the requested aircraft component. Reference: RT-PBILL62OMS8D4.
+        """
+
+        result = SupplierEmailIngestionService().ingest_email(email_text)
+
+        self.assertFalse(result["success"])
+        self.assertIn("part number", result["error"].lower())
+
+    def test_opaque_partsbase_token_does_not_trigger_supplier_dispatch(self):
+        email_text = """
+        From: rfqs@partsbase.com
+        Subject: PartsBase RFQ
+        Reference: U7IICFIEFTRKGQ8-XHSGSW
+        Please quote the requested component.
+        """
+
+        result = SupplierEmailIngestionService().ingest_email(email_text)
+
+        self.assertFalse(result["success"])
+
     def test_generic_follow_up_messages_are_ignored(self):
         email_text = """
         From: sender@example.com

@@ -140,12 +140,15 @@ def _extract_part_number(text: str) -> Optional[str]:
 
     def valid_candidate(value: str) -> bool:
         normalized = _normalize_part_number(value)
+        segments = normalized.split("-")
+        digit_count = len(re.findall(r"\d", normalized))
         return (
             normalized not in metadata_tokens
             and not normalized.startswith(("RT-PBILL", "PBILL"))
             and bool(re.search(r"\d", normalized))
             and len(normalized) <= 40
             and bool(re.search(r"[A-Z0-9]+-[A-Z0-9]+", normalized))
+            and not (any(len(segment) > 10 for segment in segments) and digit_count < 3)
         )
 
     # Explicit label patterns — stop at newline, pipe, comma, semicolon
