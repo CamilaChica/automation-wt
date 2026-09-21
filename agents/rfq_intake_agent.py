@@ -219,18 +219,22 @@ def _extract_customer_info(text: str) -> tuple:
 
     # Explicit labels
     name_m = re.search(
-        r"(?:customer\s*name|contact\s*name|name)[:\s]+([A-Za-z][\w\s\.\-]{1,50})",
+        r"(?:customer[ \t]*name|contact(?:[ \t]*name)?|name)[: \t]+([A-Za-z][\w \t\.\-]{1,50})",
         text, re.IGNORECASE
     )
     if name_m:
         customer_name = name_m.group(1).strip()
 
     company_m = re.search(
-        r"(?:company|organization|org|airline|operator|mro|from)[:\s]+([A-Za-z][\w\s\.\-&,]{1,60})",
+        r"(?:company|organization|org|airline|operator|mro)[: \t]+([A-Za-z][\w \t\.\-&,]{1,60})",
         text, re.IGNORECASE
     )
     if company_m:
         company = company_m.group(1).strip()
+    else:
+        from_m = re.search(r"from[: \t]+([^<\n\r]+)", text, re.IGNORECASE)
+        if from_m:
+            company = from_m.group(1).strip()
 
     # Fallback: pick the first Title-Cased multi-word token block as company
     if not company and not customer_name:
@@ -239,7 +243,46 @@ def _extract_customer_info(text: str) -> tuple:
             company = caps_match[0]
 
     email = _extract_email(text)
+    if not company and email:
+        domain = email.split("@", 1)[1].split(".", 1)[0]
+        if domain.lower() not in {"gmail", "outlook", "hotmail", "yahoo", "icloud", "aol"}:
+            company = domain.replace("-", " ").replace("_", " ").title()
+    if not customer_name:
+        signature = re.search(
+            r"(?:best|kind regards|regards|sincerely|thank you)[,\s]*\n\s*([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){1,3})",
+            text,
+            re.IGNORECASE,
+        )
+        if signature:
+            customer_name = signature.group(1).strip()
     return customer_name, company, email
+
+
+def _extract_line_items(text: str) -> List[Dict[str, Any]]:
+    """Extract repeated part rows with independent quantity and condition."""
+    label_pattern = re.compile(
+        r"(?:Part\s*(?:Number|No\.?|#)|P/?N|PN)[:\s#]*"
+        r"([A-Z0-9][A-Z0-9\- ]{2,40}?)(?=\s+(?:Alt\s+Part\s+No\.?|Description|Condition|Qty|Quantity|Currency)|[\n\r|,;.]|\s*$)",
+        re.IGNORECASE,
+    )
+    matches = list(label_pattern.finditer(text))
+    items: List[Dict[str, Any]] = []
+    for index, match in enumerate(matches):
+        candidate = _normalize_part_number(match.group(1))
+        if not candidate or len(candidate) > 40 or candidate.startswith(("RT-PBILL", "PBILL")):
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        segment = text[match.start():end]
+        condition, ambiguous = _extract_condition(segment)
+        items.append({
+            "requested_part_number": candidate,
+            "quantity": _extract_quantity(segment) or 1,
+            "uom": "EA",
+            "aircraft_type": None,
+            "condition_preference": condition if condition and not ambiguous else "NE",
+            "condition_ambiguous": ambiguous,
+        })
+    return items
 
 
 def _extract_required_date(text: str) -> Optional[str]:
@@ -387,12 +430,18 @@ class RFQIntakeAgent(BaseAgent):
         # ── 1. Extract all fields ───────────────────────────────────────
         rfq_id       = _generate_rfq_id()
         customer_name, company, customer_email = _extract_customer_info(raw_text)
+        extracted_items = _extract_line_items(raw_text)
         part_number_raw = _extract_part_number(raw_text)
         part_number  = _normalize_part_number(part_number_raw) if part_number_raw else None
         extracted_quantity = _extract_quantity(raw_text)
         quantity     = extracted_quantity or 1
         quantity_defaulted = extracted_quantity is None
         condition, is_ambiguous_condition = _extract_condition(raw_text)
+        if extracted_items:
+            part_number = extracted_items[0]["requested_part_number"]
+            quantity = extracted_items[0]["quantity"]
+            condition = extracted_items[0]["condition_preference"]
+            is_ambiguous_condition = any(item["condition_ambiguous"] for item in extracted_items)
         required_date    = _extract_required_date(raw_text)
         delivery_location = _extract_delivery_location(raw_text)
         aog_status   = bool(AOG_RE.search(raw_text))
@@ -440,8 +489,8 @@ class RFQIntakeAgent(BaseAgent):
         )
 
         # ── 6. Build legacy-compatible items list ───────────────────────
-        items: list = []
-        if part_number and quantity:
+        items: list = extracted_items or []
+        if not items and part_number and quantity:
             items.append({
                 "requested_part_number": part_number,
                 "quantity": quantity,
@@ -449,6 +498,8 @@ class RFQIntakeAgent(BaseAgent):
                 "aircraft_type": None,
                 "condition_preference": condition if (condition and not is_ambiguous_condition) else "NE",
             })
+        for item in items:
+            item.pop("condition_ambiguous", None)
 
         # ── 7. Compose response payload ─────────────────────────────────
         payload = intake_output.model_dump()

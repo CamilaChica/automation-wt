@@ -83,6 +83,25 @@ class TestRFQIntakeAgent(unittest.TestCase):
         self.assertEqual(res.data["quantity"], 1)
         self.assertEqual(res.data["condition"], "AR")
 
+    def test_multiple_partsbase_rows_keep_quantity_and_condition_per_item(self):
+        raw = (
+            "From: Sandy Delgado <sales@innovation-aero.com>\n"
+            "Company: Innovation Aerospace, LLC\n"
+            "Contact: Sandy Delgado\n"
+            "Part No: 5-89356-42 Alt Part No: Description: WINDOW Condition: AR Quantity: 2\n"
+            "Part No: 060-1234-00 Alt Part No: Description: ACTUATOR Condition: OH Quantity: 5\n"
+        )
+
+        res = self._run(raw)
+
+        self.assertTrue(res.success, res.error_message)
+        self.assertEqual(
+            [(item["requested_part_number"], item["quantity"], item["condition_preference"]) for item in res.data["items"]],
+            [("5-89356-42", 2, "AR"), ("060-1234-00", 5, "OH")],
+        )
+        self.assertEqual(res.data["company"], "Innovation Aerospace, LLC")
+        self.assertEqual(res.data["customer_name"], "Sandy Delgado")
+
     # ================================================================== #
     # 2. Missing Part Number
     # ================================================================== #
