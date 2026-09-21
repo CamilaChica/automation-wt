@@ -77,6 +77,11 @@ class OrchestrationService:
                 
             # Populate DB with extracted items
             items_data = res.data.get("items", [])
+            db_service.update_rfq_customer(
+                rfq_id,
+                res.data.get("customer_name") or res.data.get("company"),
+                res.data.get("customer_email"),
+            )
             for item in items_data:
                 db_service.add_rfq_item(
                     rfq_id=rfq_id,

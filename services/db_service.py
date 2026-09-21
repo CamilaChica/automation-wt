@@ -255,6 +255,17 @@ class MockDatabaseService:
     def list_rfqs(self) -> List[RFQ]:
         return list(self.rfqs.values())
 
+    def update_rfq_customer(self, rfq_id: str, customer_name: Optional[str], customer_email: Optional[str]) -> Optional[RFQ]:
+        rfq = self.rfqs.get(rfq_id)
+        if not rfq:
+            return None
+        if customer_name:
+            rfq.customer_name = customer_name.strip()
+        if customer_email:
+            rfq.customer_email = customer_email.strip().lower()
+        self._persist_state()
+        return rfq
+
     def save_supplier_offer(
         self,
         supplier_name: str,

@@ -251,7 +251,12 @@ def _extract_customer_info(text: str) -> tuple:
         if caps_match:
             company = caps_match[0]
 
-    email = _extract_email(text)
+    email_labels = re.findall(
+        r"(?:customer\s*email|contact\s*email|email|e-mail)\s*[:\-]\s*([^\s<>,;]+@[^\s<>,;]+)",
+        text,
+        re.IGNORECASE,
+    )
+    email = email_labels[0].strip().lower() if email_labels else _extract_email(text)
     if not company and email:
         domain = email.split("@", 1)[1].split(".", 1)[0]
         if domain.lower() not in {"gmail", "outlook", "hotmail", "yahoo", "icloud", "aol"}:

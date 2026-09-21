@@ -83,6 +83,22 @@ class TestRFQIntakeAgent(unittest.TestCase):
         self.assertEqual(res.data["quantity"], 1)
         self.assertEqual(res.data["condition"], "AR")
 
+    def test_partsbase_uses_embedded_client_email_not_partsbase_sender(self):
+        raw = (
+            "From: rfqs@partsbase.com\n"
+            "Subject: PartsBase Quote Request #21824835\n"
+            "Company: Innovation Aerospace, LLC\n"
+            "Contact: Sandy Delgado\n"
+            "Email: Sales@innovation-aero.com\n"
+            "Part No: 5-89356-42 Alt Part No: Description: WINDOW\n"
+            "Condition: AR Quantity: 1\n"
+        )
+
+        res = self._run(raw)
+
+        self.assertTrue(res.success, res.error_message)
+        self.assertEqual(res.data["customer_email"], "sales@innovation-aero.com")
+
     def test_multiple_partsbase_rows_keep_quantity_and_condition_per_item(self):
         raw = (
             "From: Sandy Delgado <sales@innovation-aero.com>\n"
