@@ -160,6 +160,19 @@ class TestSupplierEmailIngestion(unittest.TestCase):
         self.assertEqual(result["part_number"], "2-8020-26")
         self.assertAlmostEqual(float(result["unit_cost"]), 4800.0)
 
+    def test_html_metadata_does_not_override_real_part_number(self):
+        email_text = """
+        From: quotes@example.com
+        Subject: Quote
+        <meta http-equiv="Content-Type" content="text/html">
+        Part Number: 32-11-45-01 Qty 1 at $1200.00. FAA 8130-3 attached.
+        """
+
+        result = SupplierEmailIngestionService().ingest_email(email_text)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["part_number"], "32-11-45-01")
+
     def test_generic_follow_up_messages_are_ignored(self):
         email_text = """
         From: sender@example.com

@@ -144,6 +144,12 @@ class SupplierEmailExtractor:
         return candidate
 
     def _extract_part_number(self, text: str) -> str:
+        metadata_tokens = {"HTTP-EQUIV", "CONTENT-TYPE", "CHARSET", "NAME", "CONTENT", "STYLE", "WIDTH", "HEIGHT"}
+
+        def valid_candidate(value: str) -> bool:
+            normalized = re.sub(r"\s*[-]\s*", "-", value).upper()
+            return normalized not in metadata_tokens and bool(re.search(r"\d", normalized))
+
         explicit_patterns = [
             r"(?i)\b(?:part\s*(?:no|number)|p/n|pn)\s*[:=]\s*([A-Z0-9]{1,}(?:\s*-\s*[A-Z0-9]+){1,5})",
             r"(?i)\b(?:part\s*(?:no|number)|p/n|pn)\s*([A-Z0-9]{1,}(?:\s*-\s*[A-Z0-9]+){1,5})",
@@ -152,7 +158,8 @@ class SupplierEmailExtractor:
             match = re.search(pattern, text, flags=re.IGNORECASE)
             if match:
                 candidate = re.sub(r"\s*[-]\s*", "-", match.group(1)).upper()
-                return candidate
+                if valid_candidate(candidate):
+                    return candidate
 
         candidates = re.findall(r"\b[A-Z0-9]{1,}(?:\s*-\s*[A-Z0-9]+){1,5}\b", text, flags=re.IGNORECASE)
         if not candidates:
@@ -161,6 +168,8 @@ class SupplierEmailExtractor:
         scored = []
         for candidate in candidates:
             upper = re.sub(r"\s*[-]\s*", "-", candidate).upper()
+            if not valid_candidate(upper):
+                continue
             score = 0
             if upper.count("-") >= 2:
                 score += 50
@@ -168,14 +177,15 @@ class SupplierEmailExtractor:
                 score += 15
             if upper.startswith("8130"):
                 score -= 100
+            if re.search(r"\d+-[A-Z0-9]+-", upper):
+                score += 15
             if re.search(r"\b(?:part\s*(?:no|number)|p/n|pn)\b", text, flags=re.IGNORECASE):
                 score += 20
             if re.search(r"\b(?:qty|quantity|cond|condition)\b", text, flags=re.IGNORECASE):
                 score += 5
             scored.append((score, upper))
 
-        best = max(scored, key=lambda x: x[0])[1]
-        return best
+        return max(scored, key=lambda x: x[0])[1] if scored else ""
 
     def _extract_quantity(self, text: str) -> Optional[int]:
         match = re.search(r"(?:qty|quantity|available)[:\s]+(\d+)", text, flags=re.IGNORECASE)

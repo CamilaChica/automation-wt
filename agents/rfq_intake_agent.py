@@ -127,6 +127,12 @@ def _extract_part_number(text: str) -> Optional[str]:
     Looks for explicit label first, then falls back to a general
     alphanumeric-with-hyphens pattern that is at least 5 characters.
     """
+    metadata_tokens = {"HTTP-EQUIV", "CONTENT-TYPE", "CHARSET", "NAME", "CONTENT", "STYLE", "WIDTH", "HEIGHT"}
+
+    def valid_candidate(value: str) -> bool:
+        normalized = _normalize_part_number(value)
+        return normalized not in metadata_tokens and bool(re.search(r"\d", normalized))
+
     # Explicit label patterns — stop at newline, pipe, comma, semicolon
     label_re = re.compile(
         r"(?:Part\s*(?:Number|No\.?|#)|P/?N|PN)[:\s#]*([A-Z0-9][A-Z0-9\- ]{2,30}?)(?:\s*[\n\r|,;.]|\s+(?:Qty|Quantity|Condition|Cert|Required|Delivery|Additional|UOM)|\s*$)",
@@ -134,7 +140,9 @@ def _extract_part_number(text: str) -> Optional[str]:
     )
     m = label_re.search(text)
     if m:
-        return _normalize_part_number(m.group(1))
+        candidate = _normalize_part_number(m.group(1))
+        if valid_candidate(candidate):
+            return candidate
 
     # General token: contains at least one digit and one hyphen, e.g. 060-1234-00
     general_re = re.compile(r"\b([A-Z0-9]{2,}(?:-[A-Z0-9]+){1,5})\b", re.IGNORECASE)
@@ -143,7 +151,7 @@ def _extract_part_number(text: str) -> Optional[str]:
     for c in candidates:
         if re.match(r"^\d+[A-Z]{1,3}$", c, re.IGNORECASE):
             continue
-        if len(c) >= 5:
+        if len(c) >= 5 and valid_candidate(c):
             return _normalize_part_number(c)
 
     return None
