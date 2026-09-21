@@ -144,7 +144,10 @@ class SupplierEmailExtractor:
         return candidate
 
     def _extract_part_number(self, text: str) -> str:
-        metadata_tokens = {"HTTP-EQUIV", "CONTENT-TYPE", "CHARSET", "NAME", "CONTENT", "STYLE", "WIDTH", "HEIGHT"}
+        metadata_tokens = {
+            "HTTP-EQUIV", "CONTENT-TYPE", "CHARSET", "NAME", "CONTENT", "STYLE", "WIDTH", "HEIGHT",
+            "UTF-8", "UTF8", "ISO-8859-1", "US-ASCII", "TEXT-HTML", "TEXT-PLAIN",
+        }
 
         def valid_candidate(value: str) -> bool:
             normalized = re.sub(r"\s*[-]\s*", "-", value).upper()

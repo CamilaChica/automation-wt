@@ -127,7 +127,10 @@ def _extract_part_number(text: str) -> Optional[str]:
     Looks for explicit label first, then falls back to a general
     alphanumeric-with-hyphens pattern that is at least 5 characters.
     """
-    metadata_tokens = {"HTTP-EQUIV", "CONTENT-TYPE", "CHARSET", "NAME", "CONTENT", "STYLE", "WIDTH", "HEIGHT"}
+    metadata_tokens = {
+        "HTTP-EQUIV", "CONTENT-TYPE", "CHARSET", "NAME", "CONTENT", "STYLE", "WIDTH", "HEIGHT",
+        "UTF-8", "UTF8", "ISO-8859-1", "US-ASCII", "TEXT-HTML", "TEXT-PLAIN",
+    }
 
     def valid_candidate(value: str) -> bool:
         normalized = _normalize_part_number(value)

@@ -173,6 +173,19 @@ class TestSupplierEmailIngestion(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["part_number"], "32-11-45-01")
 
+    def test_encoding_metadata_does_not_override_real_part_number(self):
+        email_text = """
+        From: rfqs@example.com
+        Subject: Request for quotation
+        Content-Type: text/html; charset=UTF-8
+        Please quote part 7013270-983, quantity 2, condition OH.
+        """
+
+        result = SupplierEmailIngestionService().ingest_email(email_text)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["part_number"], "7013270-983")
+
     def test_generic_follow_up_messages_are_ignored(self):
         email_text = """
         From: sender@example.com
