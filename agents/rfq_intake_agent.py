@@ -37,11 +37,17 @@ existing workflow continues to function unchanged.
 
 import re
 import uuid
+import asyncio
+import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
 from agents.base_agent import BaseAgent, AgentMetadata, AgentResponse, EscalationRule
 from models.db_models import RFQIntakeOutput
+from services.email_intelligence import extract_email_intelligence
+from services.llm_provider import LLMRouter
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +417,7 @@ class RFQIntakeAgent(BaseAgent):
             },
         )
         super().__init__(metadata)
+        self.llm_router = LLMRouter()
 
     # ------------------------------------------------------------------
     async def execute(
@@ -447,6 +454,35 @@ class RFQIntakeAgent(BaseAgent):
         aog_status   = bool(AOG_RE.search(raw_text))
         certifications   = _extract_certifications(raw_text)
         additional_req   = _extract_additional_requirements(raw_text)
+
+        # Prefer the validated model extraction when a provider is configured;
+        # local parsing remains the bounded fallback for provider outages.
+        try:
+            llm_data = await asyncio.to_thread(
+                extract_email_intelligence,
+                raw_text,
+                task="rfq_extraction",
+                router=self.llm_router,
+            )
+            if llm_data.items:
+                extracted_items = [
+                    {
+                        "requested_part_number": item.part_number.upper(),
+                        "quantity": item.quantity,
+                        "uom": "EA",
+                        "aircraft_type": None,
+                        "condition_preference": item.condition_code or "NE",
+                    }
+                    for item in llm_data.items
+                ]
+                part_number = extracted_items[0]["requested_part_number"]
+                quantity = extracted_items[0]["quantity"]
+                condition = extracted_items[0]["condition_preference"]
+                customer_name = llm_data.customer_name or customer_name
+                company = llm_data.customer_company or company
+                customer_email = llm_data.customer_email or customer_email
+        except Exception as exc:
+            logger.warning("rfq_llm_extraction_fallback error=%s", type(exc).__name__)
 
         # ── 2. Priority ─────────────────────────────────────────────────
         priority = _determine_priority(aog_status, raw_text)

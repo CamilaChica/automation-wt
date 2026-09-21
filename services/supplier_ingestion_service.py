@@ -5,15 +5,43 @@ from typing import Any, Dict, List, Optional
 
 from services.supplier_database import supplier_db
 from services.supplier_email_extractor import SupplierEmailExtractor
+from services.email_intelligence import extract_email_intelligence
+from services.llm_provider import LLMRouter
 
 
 class SupplierEmailIngestionService:
     def __init__(self):
         self.extractor = SupplierEmailExtractor()
+        self.llm_router = LLMRouter()
 
     def ingest_email(self, email_text: str, mailbox: str = "purchasing", message_id: Optional[str] = None) -> Dict[str, Any]:
         try:
             extracted = self.extractor.extract(email_text)
+            try:
+                llm_data = extract_email_intelligence(
+                    email_text,
+                    task="supplier_quote_extraction",
+                    router=self.llm_router,
+                )
+                if llm_data.items:
+                    item = llm_data.items[0]
+                    extracted.update({
+                        "supplier_name": llm_data.supplier_name or extracted.get("supplier_name"),
+                        "supplier_email": llm_data.supplier_email or extracted.get("supplier_email"),
+                        "part_number": item.part_number.upper(),
+                        "quantity_available": item.quantity,
+                        "unit_cost": item.unit_price,
+                        "certificate_type": (item.trace_documents[0] if item.trace_documents else None) or extracted.get("certificate_type"),
+                        "lead_time_days": item.lead_time_days,
+                        "condition_code": item.condition_code,
+                        "warranty_terms": item.warranty_terms,
+                        "trace_documents": item.trace_documents,
+                        "missing_fields": llm_data.missing_fields,
+                        "confidence": llm_data.confidence_score,
+                    })
+            except Exception:
+                # Deterministic extraction remains the bounded outage fallback.
+                pass
             if not extracted.get("part_number"):
                 return {"success": False, "error": "No part number detected in email."}
 
@@ -55,6 +83,10 @@ class SupplierEmailIngestionService:
                 condition_code=condition,
                 source_email_id=source_email_id,
                 confidence=float(extracted.get("confidence", 0.9)),
+                description=extracted.get("description", ""),
+                availability_location=extracted.get("availability_location"),
+                warranty_terms=extracted.get("warranty_terms"),
+                trace_documents=extracted.get("trace_documents", []),
             )
 
             return {
@@ -65,6 +97,8 @@ class SupplierEmailIngestionService:
                 "unit_cost": float(unit_cost),
                 "certificate_type": certificate,
                 "lead_time_days": int(lead_time),
+                "warranty_terms": extracted.get("warranty_terms"),
+                "trace_documents": extracted.get("trace_documents", []),
                 "source_email_id": source_email_id,
             }
         except Exception as exc:  # pragma: no cover - defensive

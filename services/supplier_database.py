@@ -71,11 +71,15 @@ class SupplierDatabase:
                     supplier_id TEXT NOT NULL,
                     part_number TEXT NOT NULL,
                     condition_code TEXT,
+                    description TEXT,
                     quantity_available INTEGER,
                     unit_cost REAL,
                     currency TEXT NOT NULL DEFAULT 'USD',
                     certificate_type TEXT,
                     lead_time_days INTEGER,
+                    availability_location TEXT,
+                    warranty_terms TEXT,
+                    trace_documents TEXT,
                     valid_until TEXT,
                     source_email_id TEXT,
                     confidence REAL,
@@ -110,6 +114,15 @@ class SupplierDatabase:
                     ON communication_tasks(status, due_at);
                 """
             )
+            for column, definition in (
+                ("description", "TEXT"),
+                ("availability_location", "TEXT"),
+                ("warranty_terms", "TEXT"),
+                ("trace_documents", "TEXT"),
+            ):
+                existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(supplier_parts)")}
+                if column not in existing_columns:
+                    conn.execute(f"ALTER TABLE supplier_parts ADD COLUMN {column} {definition}")
 
     def upsert_supplier(self, supplier_name: str, supplier_email: Optional[str] = None, phone: Optional[str] = None, approval_status: str = "Pending") -> str:
         with self._connection() as conn:
@@ -164,6 +177,10 @@ class SupplierDatabase:
         condition_code: Optional[str] = None,
         source_email_id: Optional[str] = None,
         confidence: float = 1.0,
+        description: str = "",
+        availability_location: Optional[str] = None,
+        warranty_terms: Optional[str] = None,
+        trace_documents: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         supplier_id = self.upsert_supplier(supplier_name, supplier_email=supplier_email, approval_status=approval_status)
         offer_id = f"SPO-{uuid.uuid4().hex[:8].upper()}"
@@ -175,14 +192,14 @@ class SupplierDatabase:
             ).fetchone()
             if existing:
                 conn.execute(
-                    "UPDATE supplier_parts SET quantity_available = ?, unit_cost = ?, certificate_type = ?, lead_time_days = ?, approval_status = ?, condition_code = ?, source_email_id = ?, confidence = ?, updated_at = ? WHERE id = ?",
-                    (quantity_available, unit_cost, certificate_type, lead_time_days, approval_status, condition_code, source_email_id, confidence, now, existing["id"]),
+                    "UPDATE supplier_parts SET description = ?, quantity_available = ?, unit_cost = ?, currency = ?, certificate_type = ?, lead_time_days = ?, availability_location = ?, warranty_terms = ?, trace_documents = ?, approval_status = ?, condition_code = ?, source_email_id = ?, confidence = ?, updated_at = ? WHERE id = ?",
+                    (description, quantity_available, unit_cost, "USD", certificate_type, lead_time_days, availability_location, warranty_terms, json.dumps(trace_documents or []), approval_status, condition_code, source_email_id, confidence, now, existing["id"]),
                 )
                 offer_id = existing["id"]
             else:
                 conn.execute(
-                    "INSERT INTO supplier_parts (id, supplier_id, part_number, condition_code, quantity_available, unit_cost, currency, certificate_type, lead_time_days, source_email_id, confidence, approval_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (offer_id, supplier_id, part_number.upper(), condition_code, quantity_available, unit_cost, "USD", certificate_type, lead_time_days, source_email_id, confidence, approval_status, now, now),
+                    "INSERT INTO supplier_parts (id, supplier_id, part_number, condition_code, description, quantity_available, unit_cost, currency, certificate_type, lead_time_days, availability_location, warranty_terms, trace_documents, source_email_id, confidence, approval_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (offer_id, supplier_id, part_number.upper(), condition_code, description, quantity_available, unit_cost, "USD", certificate_type, lead_time_days, availability_location, warranty_terms, json.dumps(trace_documents or []), source_email_id, confidence, approval_status, now, now),
                 )
 
         return {
