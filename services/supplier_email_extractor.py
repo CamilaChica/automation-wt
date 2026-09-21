@@ -151,7 +151,12 @@ class SupplierEmailExtractor:
 
         def valid_candidate(value: str) -> bool:
             normalized = re.sub(r"\s*[-]\s*", "-", value).upper()
-            return normalized not in metadata_tokens and bool(re.search(r"\d", normalized))
+            return (
+                normalized not in metadata_tokens
+                and bool(re.search(r"\d", normalized))
+                and len(normalized) <= 40
+                and bool(re.search(r"[A-Z0-9]+-[A-Z0-9]+", normalized))
+            )
 
         explicit_patterns = [
             r"(?i)\b(?:part\s*(?:no|number)|p/n|pn)\s*[:=]\s*([A-Z0-9]{1,}(?:\s*-\s*[A-Z0-9]+){1,5})",

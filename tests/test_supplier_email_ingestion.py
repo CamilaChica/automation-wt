@@ -186,6 +186,19 @@ class TestSupplierEmailIngestion(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["part_number"], "7013270-983")
 
+    def test_opaque_encoded_token_is_not_a_part_number(self):
+        email_text = """
+        From: rfqs@example.com
+        Subject: Request for quotation
+        <meta content="2DOICVWUQXKXVMHMWKHH5IZGBN1J4LO-2DVI9GACHOJ2SAQWUWK3TEKTRQDWRBOOHKMXXFSW0NKB5XN0FVKXUICY8Z6RFAMUVCLHJWWOGV3NUVDP">
+        Please quote part 32-11-45-01, quantity 1.
+        """
+
+        result = SupplierEmailIngestionService().ingest_email(email_text)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["part_number"], "32-11-45-01")
+
     def test_generic_follow_up_messages_are_ignored(self):
         email_text = """
         From: sender@example.com

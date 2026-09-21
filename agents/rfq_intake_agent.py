@@ -134,7 +134,12 @@ def _extract_part_number(text: str) -> Optional[str]:
 
     def valid_candidate(value: str) -> bool:
         normalized = _normalize_part_number(value)
-        return normalized not in metadata_tokens and bool(re.search(r"\d", normalized))
+        return (
+            normalized not in metadata_tokens
+            and bool(re.search(r"\d", normalized))
+            and len(normalized) <= 40
+            and bool(re.search(r"[A-Z0-9]+-[A-Z0-9]+", normalized))
+        )
 
     # Explicit label patterns — stop at newline, pipe, comma, semicolon
     label_re = re.compile(
