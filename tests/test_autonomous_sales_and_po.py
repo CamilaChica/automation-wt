@@ -6,6 +6,7 @@ from unittest.mock import patch
 from services.communication_service import CommunicationService
 from services.llm_provider import LLMProvider, LLMResponse, LLMRouter
 from agents.customer_communication_agent import CustomerCommunicationAgent
+from services.orchestration_service import _is_partsbase_rfq
 
 
 class FakeCommunicationProvider(LLMProvider):
@@ -31,6 +32,14 @@ class FakeCommunicationProvider(LLMProvider):
 
 
 class AutonomousSalesAndPoTests(unittest.TestCase):
+    def test_partsbase_rfq_uses_embedded_customer_as_new_thread_source(self):
+        class Rfq:
+            customer_email = "sales@innovation-aero.com"
+            raw_text = "From: rfqs@partsbase.com\nEmail: sales@innovation-aero.com"
+            thread_id = "partsbase-message-id"
+
+        self.assertTrue(_is_partsbase_rfq(Rfq()))
+
     def test_customer_quote_invokes_llm_and_dispatches_without_approval(self):
         provider = FakeCommunicationProvider()
         agent = CustomerCommunicationAgent(LLMRouter({"openai": provider}))

@@ -23,6 +23,11 @@ def _lead_time_days(value: Any) -> Optional[int]:
     match = re.search(r"\d+", str(value))
     return int(match.group()) if match else None
 
+
+def _is_partsbase_rfq(rfq: Any) -> bool:
+    source = f"{getattr(rfq, 'customer_email', '')} {getattr(rfq, 'raw_text', '')}".lower()
+    return "partsbase.com" in source
+
 class OrchestrationService:
     def __init__(self):
         self.intake_agent = RFQIntakeAgent()
@@ -466,6 +471,10 @@ class OrchestrationService:
 
     async def _dispatch_customer_quote(self, rfq: Any, quote: Any) -> AgentResponse:
         quote_items = db_service.get_quote_items(quote.id)
+        # PartsBase's message belongs to PartsBase, not the embedded requester.
+        # Send a new message to the embedded customer instead of Graph-replying
+        # to the PartsBase source message.
+        reply_to = None if _is_partsbase_rfq(rfq) else rfq.thread_id
         return await self.comm_agent.execute({
             "customer_email": rfq.customer_email,
             "customer_name": rfq.customer_name,
@@ -493,7 +502,7 @@ class OrchestrationService:
                     for item in quote_items
                 ],
             },
-            "reply_to": rfq.thread_id,
+            "reply_to": reply_to,
         })
 
     async def approve_and_send_quote(self, quote_id: str, operator_name: str, overrides: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
