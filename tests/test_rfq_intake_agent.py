@@ -66,6 +66,23 @@ class TestRFQIntakeAgent(unittest.TestCase):
         self.assertEqual(d["items"][0]["requested_part_number"], "060-1234-00")
         self.assertEqual(d["items"][0]["quantity"], 5)
 
+    def test_partsbase_table_extracts_part_no_before_alt_part_no(self):
+        raw = (
+            "PartsBase Quote Request #21824835\n"
+            "Company: Innovation Aerospace, LLC\n"
+            "Contact: Sandy Delgado\n"
+            "Email: Sales@innovation-aero.com\n"
+            "Part No: 5-89356-42 Alt Part No: Description: WINDOW\n"
+            "Condition: AR Quantity: 1 Currency: dollars\n"
+        )
+
+        res = self._run(raw)
+
+        self.assertTrue(res.success, res.error_message)
+        self.assertEqual(res.data["part_number"], "5-89356-42")
+        self.assertEqual(res.data["quantity"], 1)
+        self.assertEqual(res.data["condition"], "AR")
+
     # ================================================================== #
     # 2. Missing Part Number
     # ================================================================== #

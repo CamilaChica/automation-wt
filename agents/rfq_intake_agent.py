@@ -136,6 +136,7 @@ def _extract_part_number(text: str) -> Optional[str]:
         normalized = _normalize_part_number(value)
         return (
             normalized not in metadata_tokens
+            and not normalized.startswith(("RT-PBILL", "PBILL"))
             and bool(re.search(r"\d", normalized))
             and len(normalized) <= 40
             and bool(re.search(r"[A-Z0-9]+-[A-Z0-9]+", normalized))
@@ -143,7 +144,7 @@ def _extract_part_number(text: str) -> Optional[str]:
 
     # Explicit label patterns — stop at newline, pipe, comma, semicolon
     label_re = re.compile(
-        r"(?:Part\s*(?:Number|No\.?|#)|P/?N|PN)[:\s#]*([A-Z0-9][A-Z0-9\- ]{2,30}?)(?:\s*[\n\r|,;.]|\s+(?:Qty|Quantity|Condition|Cert|Required|Delivery|Additional|UOM)|\s*$)",
+        r"(?:Part\s*(?:Number|No\.?|#)|P/?N|PN)[:\s#]*([A-Z0-9][A-Z0-9\- ]{2,30}?)(?:\s*[\n\r|,;. ]|\s+(?:Alt\s+Part\s+No\.?|Qty|Quantity|Condition|Cert|Required|Delivery|Additional|UOM)|\s*$)",
             re.IGNORECASE,
     )
     m = label_re.search(text)
