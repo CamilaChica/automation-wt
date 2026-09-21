@@ -274,6 +274,12 @@ class AutomationPauseRequest(BaseModel):
 
 @app.post("/api/auth/otp/request")
 async def otp_request(request: OtpRequest):
+    requested_role = request.role.strip().upper()
+    if requested_role in {"INTERNAL", "ROLE_INTERNAL"} and os.getenv("WT_AUTH_ENV", "development").strip().lower() != "production":
+        raise HTTPException(
+            status_code=503,
+            detail="Internal email sign-in is unavailable until WT_AUTH_ENV=production is configured.",
+        )
     challenge_id, code = request_otp(request.email, request.role, request.full_name)
     response = {"challenge_id": challenge_id, "message": "If eligible, an OTP has been sent."}
     auth_env = os.getenv("WT_AUTH_ENV", "development").strip().lower()

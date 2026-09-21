@@ -59,7 +59,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated })
       if (!challengeId) {
         const response = await apiService.requestOtp(email, role === 'customer' ? 'ROLE_CUSTOMER' : 'ROLE_INTERNAL');
         setChallengeId(response.challenge_id);
-        setDevelopmentOtp(response.development_otp);
+        setDevelopmentOtp(role === 'customer' ? response.development_otp : undefined);
       } else {
         const session = await apiService.verifyOtp(challengeId, otp);
         const isCorrectRole = role === 'customer'
@@ -89,7 +89,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated })
         <label className="mb-4 block text-sm font-semibold">Work email<input required type="email" value={email} onChange={event => setEmail(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-300 bg-transparent px-4 py-3 outline-none focus:border-aero-blue" /></label>
         {challengeId && <label className="mb-5 block text-sm font-semibold">One-time code<input required inputMode="numeric" pattern="[0-9]{6}" value={otp} onChange={event => setOtp(event.target.value)} placeholder="6-digit code" className="mt-2 w-full rounded-xl border border-slate-300 bg-transparent px-4 py-3 outline-none focus:border-aero-blue" /></label>}
         <button disabled={loading} className="w-full rounded-xl bg-aero-blue px-4 py-3 font-bold text-white hover:bg-blue-600 disabled:opacity-60">{loading ? 'Working...' : challengeId ? 'Verify code' : 'Send one-time code'}</button>
-        {developmentOtp && <p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-800">Development OTP: <strong>{developmentOtp}</strong></p>}
+        {isCustomer && developmentOtp && <p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-800">Development OTP: <strong>{developmentOtp}</strong></p>}
         {error && <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
         <p className="mt-6 flex gap-2 text-xs text-slate-500"><ShieldCheck className="h-4 w-4 shrink-0" /> Sessions expire after 8 hours. Production deployments should replace demo users with an identity provider.</p>
       </form>
