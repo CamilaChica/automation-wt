@@ -116,13 +116,15 @@ def run_purchasing(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def run_sales(args: argparse.Namespace) -> dict[str, Any]:
-    messages = fetch_inbox_messages("sales", limit=args.limit)
+    messages = fetch_inbox_messages("sales", limit=max(args.limit * 5, 25))
     results = []
     original_email_send_enabled = os.getenv("EMAIL_SEND_ENABLED")
     if not args.send_live or not args.confirm_live_dispatch:
         os.environ["EMAIL_SEND_ENABLED"] = "false"
     try:
         for message in messages:
+            if len(results) >= args.limit:
+                break
             message_id = str(message.get("message_id") or "")
             if message_id and supplier_db.is_email_processed("sales", message_id):
                 continue
