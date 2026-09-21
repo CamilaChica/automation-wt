@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
@@ -114,24 +115,33 @@ def run_purchasing(args: argparse.Namespace) -> dict[str, Any]:
 def run_sales(args: argparse.Namespace) -> dict[str, Any]:
     messages = fetch_inbox_messages("sales", limit=args.limit)
     results = []
-    for message in messages:
-        message_id = str(message.get("message_id") or "")
-        if message_id and supplier_db.is_email_processed("sales", message_id):
-            continue
-        sender = str(message.get("from") or "")
-        body = str(message.get("body") or "").strip()
-        if "@" not in sender or not body:
-            continue
-        rfq = db_service.create_rfq(
-            customer_name=sender.split("@", 1)[0].replace(".", " ").title(),
-            customer_email=sender,
-            raw_text=f"From: {sender}\nSubject: {message.get('subject', '')}\n\n{body}",
-            thread_id=message_id or None,
-        )
-        pipeline_result = asyncio.run(orchestration_service.process_rfq_pipeline(rfq.id))
-        if message_id:
-            supplier_db.save_email("sales", message_id, sender, str(message.get("subject") or ""), body)
-        results.append({"message_id": message_id, "sender": sender, "rfq_id": rfq.id, "pipeline": pipeline_result})
+    original_email_send_enabled = os.getenv("EMAIL_SEND_ENABLED")
+    if not args.send_live or not args.confirm_live_dispatch:
+        os.environ["EMAIL_SEND_ENABLED"] = "false"
+    try:
+        for message in messages:
+            message_id = str(message.get("message_id") or "")
+            if message_id and supplier_db.is_email_processed("sales", message_id):
+                continue
+            sender = str(message.get("from") or "")
+            body = str(message.get("body") or "").strip()
+            if "@" not in sender or not body:
+                continue
+            rfq = db_service.create_rfq(
+                customer_name=sender.split("@", 1)[0].replace(".", " ").title(),
+                customer_email=sender,
+                raw_text=f"From: {sender}\nSubject: {message.get('subject', '')}\n\n{body}",
+                thread_id=message_id or None,
+            )
+            pipeline_result = asyncio.run(orchestration_service.process_rfq_pipeline(rfq.id))
+            if message_id:
+                supplier_db.save_email("sales", message_id, sender, str(message.get("subject") or ""), body)
+            results.append({"message_id": message_id, "sender": sender, "rfq_id": rfq.id, "pipeline": pipeline_result})
+    finally:
+        if original_email_send_enabled is None:
+            os.environ.pop("EMAIL_SEND_ENABLED", None)
+        else:
+            os.environ["EMAIL_SEND_ENABLED"] = original_email_send_enabled
     return {"mailbox": "sales", "processed": results}
 
 
