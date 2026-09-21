@@ -33,6 +33,20 @@ services:
         sync: false
       - key: EMAIL_SEND_ENABLED
         value: "true"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: "gpt-4o-mini"
+      - key: LLM_DEFAULT_PROVIDER
+        value: "openai"
+      - key: LLM_TASK_PROVIDERS
+        value: '{"customer_communication":"openai"}'
+      - key: LLM_RETRY_ATTEMPTS
+        value: "2"
+      - key: LLM_EMAIL_TIMEOUT_SECONDS
+        value: "12"
+      - key: LLM_ALLOW_TEMPLATE_FALLBACK
+        value: "true"
       - key: REDIS_URL
         sync: false
       - key: MAILBOX_MAX_AGE_DAYS
@@ -78,7 +92,7 @@ services:
       - key: AZURE_STORAGE_CONTAINER
         value: "winged-tycoons-backups"
       - key: FRONTEND_ORIGIN
-        value: "https://wingedtycoons.com,https://rfq.wingedtycoons.com"
+        value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com,https://rfq.wingedtycoons.com"
 
   - type: worker
     name: winged-worker
@@ -107,6 +121,20 @@ services:
       - key: GRAPH_MAILBOX_USER
         sync: false
       - key: EMAIL_SEND_ENABLED
+        value: "true"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: "gpt-4o-mini"
+      - key: LLM_DEFAULT_PROVIDER
+        value: "openai"
+      - key: LLM_TASK_PROVIDERS
+        value: '{"customer_communication":"openai"}'
+      - key: LLM_RETRY_ATTEMPTS
+        value: "2"
+      - key: LLM_EMAIL_TIMEOUT_SECONDS
+        value: "12"
+      - key: LLM_ALLOW_TEMPLATE_FALLBACK
         value: "true"
       - key: REDIS_URL
         sync: false

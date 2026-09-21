@@ -56,7 +56,12 @@ export const TraceVaultView: React.FC = () => {
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
                   {rfqs.length === 0 && <tr><td colSpan={4} className="py-8 text-center text-slate-400">No RFQ documentation records available.</td></tr>}
                   {rfqs.map(rfq => (
-                    <tr key={rfq.id} onClick={() => setActiveTab(rfq.id)} className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40 text-slate-700 dark:text-slate-200">
+                    <tr key={rfq.id} onClick={() => setActiveTab(rfq.id)} onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setActiveTab(rfq.id);
+                      }
+                    }} tabIndex={0} role="button" className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40 text-slate-700 dark:text-slate-200">
                       <td className="py-2.5 text-aero-blue font-bold">{rfq.id}</td>
                       <td className="py-2.5">{rfq.part_number || 'Pending extraction'}</td>
                       <td className="py-2.5 text-slate-500">Awaiting document data</td>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { WorkflowStepper } from '../common/WorkflowStepper';
 import { apiService } from '../../services/api';
@@ -51,65 +51,13 @@ export const CustomerDashboard: React.FC = () => {
   const [documents, setDocuments] = useState({ faa8130: true, easaForm1: false, trace121: true, nonIncident: true });
   
   // Active RFQs & Quotations
-  const [activeRfqs, setActiveRfqs] = useState<RFQ[]>([
-    {
-      id: 'WT-29471',
-      customer_name: 'GLOBAL AIRLINES',
-      customer_email: 'mro.ops@globalairlines.com',
-      status: 'Quotation Ready',
-      raw_text: 'Urgent Main Landing Gear Actuator P/N 32-11-45-01 Qty 1 SV Condition',
-      created_at: '2026-09-05T09:30:00Z',
-      urgency: 'AOG',
-      part_number: '32-11-45-01',
-      quantity: 1,
-      best_price: 14200,
-      lead_time: '1 Day (Hot-Shot)'
-    },
-    {
-      id: 'WT-29472',
-      customer_name: 'GLOBAL AIRLINES',
-      customer_email: 'mro.ops@globalairlines.com',
-      status: 'Quotation Ready',
-      raw_text: 'Routine Actuator Overhaul P/N 32-11-45-01 Qty 2 OH',
-      created_at: '2026-09-04T18:00:00Z',
-      urgency: 'Routine',
-      part_number: '32-11-45-01',
-      quantity: 2,
-      best_price: 12300,
-      lead_time: '2 Days'
-    },
-    {
-      id: 'WT-29473',
-      customer_name: 'GLOBAL AIRLINES',
-      customer_email: 'mro.ops@globalairlines.com',
-      status: 'In Sourcing',
-      raw_text: 'AOG Carbon Brake Assembly P/N 68-99-12-04 Qty 1',
-      created_at: '2026-09-04T14:30:00Z',
-      urgency: 'AOG',
-      part_number: '68-99-12-04',
-      quantity: 1,
-      best_price: 18450,
-      lead_time: '1 Day'
-    },
-    {
-      id: 'WT-29474',
-      customer_name: 'GLOBAL AIRLINES',
-      customer_email: 'mro.ops@globalairlines.com',
-      status: 'In Transit',
-      raw_text: 'B737 Engine Hydraulic Pump P/N 747-1011-00 Qty 2',
-      created_at: '2026-09-03T11:00:00Z',
-      urgency: 'Routine',
-      part_number: '747-1011-00',
-      quantity: 2,
-      best_price: 1550,
-      lead_time: 'Delivering Today'
-    }
-  ]);
-
-  const [selectedRfqId, setSelectedRfqId] = useState('WT-29471');
+  const [activeRfqs, setActiveRfqs] = useState<RFQ[]>([]);
+  const [selectedRfqId, setSelectedRfqId] = useState('');
+  const [loadingRfqs, setLoadingRfqs] = useState(true);
+  const [approving, setApproving] = useState(false);
+  const [notification, setNotification] = useState<{ type: 'success' | 'info' | 'error'; message: string } | null>(null);
   const [selectedOption, setSelectedOption] = useState<'A' | 'B' | 'C'>('A');
   const [submitting, setSubmitting] = useState(false);
-  const [notification, setNotification] = useState<{ type: 'success' | 'info'; message: string } | null>(null);
 
   // Modals
   const [isApproveModalOpen, setIsApproveModalOpen] = useState(false);
@@ -118,7 +66,31 @@ export const CustomerDashboard: React.FC = () => {
   const [poNumber, setPoNumber] = useState('PO-2026-9941');
   const [approverName, setApproverName] = useState('Alex R. (Lead MRO Engineer)');
 
-  const selectedRfq = activeRfqs.find(r => r.id === selectedRfqId) || activeRfqs[0];
+  const selectedRfq = activeRfqs.find(r => r.id === selectedRfqId) || {
+    id: selectedRfqId || 'No RFQ selected',
+    customer_name: 'Customer',
+    customer_email: '',
+    status: 'Loading',
+    raw_text: '',
+    created_at: new Date(0).toISOString()
+  };
+
+  const refreshRfqs = async () => {
+    setLoadingRfqs(true);
+    try {
+      const rfqs = await apiService.getRFQs();
+      setActiveRfqs(rfqs);
+      setSelectedRfqId(currentId => rfqs.some(rfq => rfq.id === currentId) ? currentId : rfqs[0]?.id || '');
+    } catch (error) {
+      setNotification({ type: 'error', message: error instanceof Error ? error.message : 'Unable to load your RFQs. Please retry.' });
+    } finally {
+      setLoadingRfqs(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshRfqs();
+  }, []);
 
   // Quick Preset Handlers
   const applyPreset = (preset: 'aog-actuator' | 'routine-overhaul' | 'hydraulic-pump' | 'avionics') => {
@@ -161,46 +133,33 @@ export const CustomerDashboard: React.FC = () => {
     e.preventDefault();
     setSubmitting(true);
     const rawText = `RFQ P/N ${partNumber} (${partName}) Qty ${quantity} Condition: ${Object.keys(conditions).filter(k => (conditions as any)[k]).join(', ')} Urgency: ${urgency} Delivery: ${deliveryIcao} ${dockLocation}`;
-    
-    const res = await apiService.submitRFQ(rawText);
-    
-    const newRfq: RFQ = {
-      id: res.rfq_id,
-      customer_name: 'GLOBAL AIRLINES',
-      customer_email: 'mro.ops@globalairlines.com',
-      status: 'Quotation Ready',
-      raw_text: rawText,
-      created_at: new Date().toISOString(),
-      urgency,
-      best_price: urgency === 'AOG' ? 14200 : 11800,
-      lead_time: urgency === 'AOG' ? '1 Day (Hot-Shot)' : '2-3 Days',
-      part_number: partNumber,
-      quantity
-    };
-
-    setActiveRfqs([newRfq, ...activeRfqs]);
-    setSelectedRfqId(res.rfq_id);
-    setSubmitting(false);
-    setActiveTab('quotations');
-    setNotification({
-      type: 'success',
-      message: `RFQ ${res.rfq_id} submitted! AI Agents matched 3 airworthy inventory options in 1.4s.`
-    });
-    setTimeout(() => setNotification(null), 6000);
+    try {
+      const res = await apiService.submitCustomerRFQ(rawText, 'GLOBAL AIRLINES', 'mro.ops@globalairlines.com');
+      await refreshRfqs();
+      setSelectedRfqId(res.rfq_id);
+      setActiveTab('quotations');
+      setNotification({ type: 'success', message: `RFQ ${res.rfq_id} submitted and is now visible in your RFQ list.` });
+      setTimeout(() => setNotification(null), 6000);
+    } catch (error) {
+      setNotification({ type: 'error', message: error instanceof Error ? error.message : 'RFQ submission failed. Please retry.' });
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleApproveQuote = async () => {
-    await apiService.approveQuote(`QTE-${selectedRfqId.replace('WT-', '')}`, approverName);
-    setIsApproveModalOpen(false);
-    
-    // Update local state
-    setActiveRfqs(prev => prev.map(r => r.id === selectedRfqId ? { ...r, status: 'Approved (Dispatched)' } : r));
-
-    setNotification({
-      type: 'success',
-      message: `Quotation Approved! Purchase Order ${poNumber} linked. Warehouse pick & FAA 8130-3 compliance packet released.`
-    });
-    setTimeout(() => setNotification(null), 7000);
+    setApproving(true);
+    try {
+      await apiService.approveQuote(`QTE-${selectedRfqId.replace('WT-', '')}`, approverName);
+      await refreshRfqs();
+      setIsApproveModalOpen(false);
+      setNotification({ type: 'success', message: `Quotation approved! Purchase Order ${poNumber} linked.` });
+      setTimeout(() => setNotification(null), 7000);
+    } catch (error) {
+      setNotification({ type: 'error', message: error instanceof Error ? error.message : 'Quote approval failed. Please retry.' });
+    } finally {
+      setApproving(false);
+    }
   };
 
   const openDocViewer = (tag: string, pn: string, sn: string, cert: string, date: string) => {
@@ -1216,9 +1175,10 @@ export const CustomerDashboard: React.FC = () => {
               </button>
               <button
                 onClick={handleApproveQuote}
+                disabled={approving}
                 className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-display font-bold py-2.5 rounded-xl text-xs shadow-lg shadow-emerald-600/20"
               >
-                CONFIRM & DISPATCH ORDER
+                {approving ? 'DISPATCHING...' : 'CONFIRM & DISPATCH ORDER'}
               </button>
             </div>
           </div>

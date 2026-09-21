@@ -3,6 +3,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 from services.db_service import db_service
+from agents.base_agent import AgentResponse
 from agents.rfq_intake_agent import RFQIntakeAgent
 from agents.parts_intelligence_agent import PartsIntelligenceAgent
 from agents.inventory_agent import InventoryAgent
@@ -432,21 +433,55 @@ class OrchestrationService:
                 "SUCCESS", json.dumps(q_data)
             )
             
-            # Update RFQ status to Pending_Approval
-            db_service.update_rfq_status(rfq_id, "Pending_Approval")
-            
-            if context["has_low_margin_escalation"]:
-                db_service.update_rfq_status(rfq_id, "Pending_Approval_Low_Margin")
+            # Customer quote dispatch is autonomous. Human review begins only when a PO arrives.
+            db_service.update_quote_status(quote.id, "Sent")
+            db_service.update_rfq_status(rfq_id, "Quote_Sent")
+            communication_result = await self._dispatch_customer_quote(rfq, quote)
+            if not communication_result.success:
+                db_service.update_rfq_status(rfq_id, "Quote_Dispatch_Failed")
                 return {
-                    "status": "Pending_Approval_Low_Margin",
+                    "status": "Quote_Dispatch_Failed",
                     "quote_id": quote.id,
-                    "escalation": context["margin_esc_rule"]
+                    "error": communication_result.error_message,
                 }
-                
-            return {
-                "status": "Pending_Approval",
-                "quote_id": quote.id
-            }
+
+            status = "Quote_Sent"
+            if context["has_low_margin_escalation"]:
+                db_service.add_audit_log(
+                    rfq_id, "PricingAgent", "low_margin_autonomous_dispatch",
+                    "Quote dispatched autonomously despite low-margin escalation; PO review remains human-gated.",
+                    "WARNING", json.dumps(context["margin_esc_rule"]),
+                )
+            db_service.add_audit_log(
+                rfq_id, "CustomerCommunicationAgent", "email_dispatch",
+                f"Autonomous quote email dispatched to customer '{rfq.customer_name}'.",
+                "SUCCESS", json.dumps(communication_result.data),
+            )
+            return {"status": status, "quote_id": quote.id, "email_body": communication_result.data.get("formatted_body")}
+
+    async def _dispatch_customer_quote(self, rfq: Any, quote: Any) -> AgentResponse:
+        quote_items = db_service.get_quote_items(quote.id)
+        return await self.comm_agent.execute({
+            "customer_email": rfq.customer_email,
+            "customer_name": rfq.customer_name,
+            "quote_details": {
+                "quote_id": quote.id,
+                "subtotal": quote.subtotal,
+                "shipping_cost": quote.shipping_cost,
+                "total_amount": quote.total_amount,
+                "items": [
+                    {
+                        "part_number": item.part_number,
+                        "quantity": item.quantity,
+                        "uom": getattr(item, "uom", "EA"),
+                        "unit_price": item.unit_price,
+                        "attachments": getattr(item, "attachments", []),
+                    }
+                    for item in quote_items
+                ],
+            },
+            "reply_to": rfq.thread_id,
+        })
 
     async def approve_and_send_quote(self, quote_id: str, operator_name: str, overrides: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
@@ -458,6 +493,9 @@ class OrchestrationService:
             return {"error": f"Quote {quote_id} not found."}
             
         rfq_id = quote.rfq_id
+
+        if quote.status == "Sent" or (db_service.get_rfq(rfq_id) and db_service.get_rfq(rfq_id).status == "Quote_Sent"):
+            return {"status": "Quote_Sent", "quote_id": quote_id, "message": "Quote was already dispatched autonomously."}
         
         # Apply overrides if provided
         if overrides:

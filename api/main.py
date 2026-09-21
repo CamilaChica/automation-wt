@@ -4,10 +4,12 @@ import uuid
 import json
 import logging
 import time
+from pathlib import Path
 from collections import defaultdict, deque
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request, Response
+from fastapi.responses import FileResponse
 
 load_dotenv()
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +25,7 @@ from services.twilio_service import twilio_service
 from services.freight_service import FreightRequest, freight_rate_service
 from services.operations_store import operations_store
 from services.export_control_service import export_control_service
+from services.attachment_service import AttachmentService
 from services.swarm_runtime import swarm_runtime
 from api.auth import current_user, init_auth_db, request_otp, require_roles, verify_otp, ROLE_CUSTOMER
 
@@ -31,6 +34,8 @@ app = FastAPI(
     description="Automated multi-agent processing pipeline with Human-in-the-Loop approval gates.",
     version="1.0.0"
 )
+
+attachment_service = AttachmentService()
 
 
 class _JsonLogFormatter(logging.Formatter):
@@ -226,6 +231,10 @@ class PurchaseOrderRequest(BaseModel):
     po_number: str
     customer_email: Optional[str] = None
 
+class PurchaseOrderApprovalRequest(BaseModel):
+    operator_name: str = Field(..., min_length=1)
+    comments: Optional[str] = None
+
 class ShipmentCreateRequest(BaseModel):
     rfq_id: str
     quote_id: Optional[str] = None
@@ -306,6 +315,27 @@ async def ready():
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"database not ready: {exc}") from exc
     return {"status": "ready"}
+
+
+@app.get("/api/attachments/{attachment_id}")
+async def download_attachment(attachment_id: str, user: dict = Depends(current_user)):
+    """Download an accepted attachment without exposing arbitrary filesystem paths."""
+    if user["role"] not in {"ROLE_CUSTOMER", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"}:
+        raise HTTPException(status_code=403, detail="Insufficient permissions.")
+
+    normalized_id = attachment_id.strip().upper()
+    if not normalized_id.startswith("ATT-") or len(normalized_id) != 20:
+        raise HTTPException(status_code=404, detail="Attachment not found.")
+
+    matches = list(attachment_service.storage_dir.glob(f"{normalized_id}.*"))
+    if not matches:
+        raise HTTPException(status_code=404, detail="Attachment not found.")
+
+    attachment_path = matches[0].resolve()
+    storage_root = attachment_service.storage_dir.resolve()
+    if storage_root not in attachment_path.parents:
+        raise HTTPException(status_code=404, detail="Attachment not found.")
+    return FileResponse(attachment_path, filename=attachment_path.name)
 
 @app.post("/api/rfqs/intake", response_model=IntakeResponse)
 async def submit_rfq(request: IntakeRequest, user: dict = Depends(current_user)):
@@ -445,6 +475,21 @@ async def list_automation_events(
 ):
     return operations_store.list_automation_events(status=status, limit=limit)
 
+
+@app.get("/api/internal/llm/health")
+async def llm_health(
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER")),
+):
+    """Report LLM routing and secret presence without exposing credentials."""
+    return {
+        "default_provider": os.getenv("LLM_DEFAULT_PROVIDER", "openai"),
+        "customer_communication_provider": os.getenv("LLM_TASK_PROVIDERS", ""),
+        "openai_configured": bool(os.getenv("OPENAI_API_KEY")),
+        "anthropic_configured": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "gemini_configured": bool(os.getenv("GEMINI_API_KEY")),
+        "fallback_enabled": os.getenv("LLM_ALLOW_TEMPLATE_FALLBACK", "true").strip().lower() in {"1", "true", "yes", "on"},
+    }
+
 @app.get("/api/internal/mailboxes/health")
 async def mailbox_health(
     _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
@@ -543,8 +588,11 @@ async def approve_quote(quote_id: str, request: ApproveRequest, _user: dict = De
         overrides=overrides_list
     )
     
-    # Update comments in database
-    db_service.update_quote_status(quote_id, quote.status, comments=request.comments)
+    # Use the status produced by orchestration; the original object is stale after approval.
+    final_status = res.get("status")
+    if not final_status or res.get("error"):
+        raise HTTPException(status_code=409, detail=res.get("error", "Quote approval failed."))
+    db_service.update_quote_status(quote_id, final_status, comments=request.comments)
     
     return res
 
@@ -581,7 +629,7 @@ async def submit_purchase_order(request: PurchaseOrderRequest, user: dict = Depe
     rfq = db_service.get_rfq(quote.rfq_id)
     if not rfq:
         raise HTTPException(status_code=404, detail="RFQ not found.")
-    if rfq.status == "Purchase_Order_Received":
+    if rfq.status in {"Purchase_Order_Received", "Pending_PO_Review"}:
         raise HTTPException(status_code=409, detail="Purchase order already received for this RFQ.")
 
     customer_email = request.customer_email or rfq.customer_email
@@ -592,8 +640,6 @@ async def submit_purchase_order(request: PurchaseOrderRequest, user: dict = Depe
     previous_quote_id = None
     if rfq.status and rfq.status != "Intake":
         previous_po_number = rfq.status.replace("Purchase_Order_Received", "").strip() or None
-    if quote.status and quote.status != "Draft":
-        previous_quote_id = quote.id
     communication_service.validate_purchase_order_metadata(
         po_number=request.po_number,
         customer_email=customer_email,
@@ -632,32 +678,50 @@ async def submit_purchase_order(request: PurchaseOrderRequest, user: dict = Depe
         customer_email=customer_email,
         quote_id=request.quote_id,
         items=internal_items,
+        review_url=os.getenv("SALES_DASHBOARD_URL") or os.getenv("PUBLIC_APP_URL", "http://localhost:3000"),
     )
-    confirmations = [
-        communication_service.request_supplier_availability_confirmation(
-            recipient=supplier_email,
-            supplier_name=group["supplier_name"],
-            po_number=request.po_number,
-            items=group["items"],
-            reply_to=None,
-        )
-        for supplier_email, group in supplier_groups.items()
-    ]
-    db_service.update_rfq_status(rfq.id, "Purchase_Order_Received")
+    db_service.update_rfq_status(rfq.id, "Pending_PO_Review")
     db_service.add_audit_log(
         rfq.id,
         "PurchaseOrderAgent",
         "purchase_order_received",
-        f"Purchase order {request.po_number} received and routed for human purchasing review.",
+        f"Purchase order {request.po_number} received; fulfillment and invoicing are blocked pending human review.",
         "SUCCESS",
     )
     return {
-        "status": "Purchase_Order_Received",
+        "status": "Pending_PO_Review",
         "po_number": request.po_number,
         "quote_id": request.quote_id,
         "internal_notification": notification,
-        "supplier_confirmation_count": len(confirmations),
+        "supplier_confirmation_count": 0,
     }
+
+@app.post("/api/purchase-orders/{quote_id}/approve")
+async def approve_purchase_order(
+    quote_id: str,
+    request: PurchaseOrderApprovalRequest,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+):
+    """Release a previously held PO for downstream purchasing work."""
+    quote = db_service.get_quote(quote_id)
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found.")
+    rfq = db_service.get_rfq(quote.rfq_id)
+    if not rfq:
+        raise HTTPException(status_code=404, detail="RFQ not found.")
+    if rfq.status != "Pending_PO_Review":
+        raise HTTPException(status_code=409, detail="PO is not waiting for human review.")
+
+    db_service.update_rfq_status(rfq.id, "Purchase_Order_Received")
+    db_service.add_audit_log(
+        rfq.id,
+        "PurchaseOrderAgent",
+        "purchase_order_approved",
+        f"PO approved by {request.operator_name}; downstream purchasing may proceed."
+        + (f" Comments: {request.comments}" if request.comments else ""),
+        "SUCCESS",
+    )
+    return {"status": "Purchase_Order_Received", "quote_id": quote_id, "rfq_id": rfq.id}
 
 @app.get("/api/shipments/track/{public_token}")
 async def track_shipment(public_token: str):
@@ -684,6 +748,8 @@ async def create_shipment(
     rfq = db_service.get_rfq(request.rfq_id)
     if not rfq:
         raise HTTPException(status_code=404, detail="RFQ not found.")
+    if rfq.status == "Pending_PO_Review":
+        raise HTTPException(status_code=409, detail="Fulfillment is blocked until the purchase order is approved by a human operator.")
     shipment = db_service.create_shipment(
         rfq_id=request.rfq_id,
         quote_id=request.quote_id,

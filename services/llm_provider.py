@@ -243,16 +243,28 @@ class LLMRouter:
         self.task_providers[task] = provider_name
 
     def extract_structured(self, request: LLMRequest, schema: Type[StructuredModel], max_attempts: int = 2) -> StructuredModel:
+        result, _response = self.extract_structured_with_response(request, schema, max_attempts=max_attempts)
+        return result
+
+    def extract_structured_with_response(
+        self,
+        request: LLMRequest,
+        schema: Type[StructuredModel],
+        max_attempts: int = 2,
+    ) -> tuple[StructuredModel, LLMResponse]:
+        """Return validated structured output together with provider telemetry."""
         last_error: Exception | None = None
         current_request = _with_structured_contract(request, schema)
+        last_response: LLMResponse | None = None
         for attempt in range(max_attempts):
             response = self.complete(current_request)
+            last_response = response
             try:
                 raw_text = response.text.strip()
                 fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", raw_text, flags=re.IGNORECASE | re.DOTALL)
                 if fenced:
                     raw_text = fenced.group(1)
-                return schema.model_validate(json.loads(raw_text))
+                return schema.model_validate(json.loads(raw_text)), response
             except (json.JSONDecodeError, ValidationError) as exc:
                 last_error = exc
                 current_request = LLMRequest(

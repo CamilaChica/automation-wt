@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import time
+import asyncio
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
@@ -14,6 +15,8 @@ from services.mailbox_service import fetch_inbox_messages
 from services.supplier_email_loader import SupplierEmailLoader
 from services.communication_service import communication_service
 from services.supplier_database import supplier_db
+from services.db_service import db_service
+from services.orchestration_service import orchestration_service
 from scripts.backup_sqlite import main as backup_sqlite
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -34,6 +37,25 @@ def _missing_supplier_fields(email_text: str, result: dict) -> list[str]:
     if not re.search(r"(?:valid until|valid for|expires|expiration)", email_text, re.IGNORECASE):
         missing.append("quote validity or expiration date")
     return missing
+
+
+async def _ingest_sales_message(message: dict[str, str]) -> None:
+    """Create and process a customer RFQ received by the sales mailbox."""
+    sender = (message.get("from") or "").strip()
+    if "@" not in sender:
+        logger.warning("Sales message %s has no valid sender; skipped", message.get("message_id", "unknown"))
+        return
+    body = (message.get("body") or "").strip()
+    if not body:
+        return
+    rfq = db_service.create_rfq(
+        customer_name=sender.split("@", 1)[0].replace(".", " ").title(),
+        customer_email=sender,
+        raw_text=f"From: {sender}\nSubject: {message.get('subject', '')}\n\n{body}",
+        thread_id=message.get("message_id") or None,
+    )
+    await orchestration_service.process_rfq_pipeline(rfq.id)
+    logger.info("Sales mailbox message %s ingested as RFQ %s", message.get("message_id", "unknown"), rfq.id)
 
 
 def run() -> None:
@@ -80,12 +102,10 @@ def run() -> None:
                         f"Subject: {message.get('subject', '')}\n\n"
                         f"{body}"
                     )
-                    if mailbox != "purchasing":
-                        logger.info(
-                            "Mailbox %s message %s retained for customer communication; supplier ingestion skipped",
-                            mailbox,
-                            message_id,
-                        )
+                    if mailbox == "sales":
+                        asyncio.run(_ingest_sales_message(message))
+                        if message_id:
+                            supplier_db.save_email(mailbox, message_id, message.get("from", ""), message.get("subject", ""), body)
                         continue
                     result = loader.load_raw_email_text(email_text, mailbox=mailbox, message_id=message_id or None)
                     logger.info("Mailbox %s processed message %s -> %s", mailbox, message_id, result)

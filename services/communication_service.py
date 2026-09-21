@@ -221,6 +221,7 @@ class CommunicationService:
         items: List[Dict[str, Any]],
         previous_po_number: Optional[str] = None,
         previous_quote_id: Optional[str] = None,
+        review_url: Optional[str] = None,
     ) -> Dict[str, Any]:
         self.validate_purchase_order_metadata(
             po_number=po_number,
@@ -230,6 +231,7 @@ class CommunicationService:
             previous_quote_id=previous_quote_id,
         )
         safe_customer_name = safe_display_text(customer_name)
+        total_value = sum(float(item.get("unit_price") or 0) * int(item.get("quantity") or 0) for item in items)
         item_lines = []
         for item in items:
             item_lines.append(
@@ -239,15 +241,17 @@ class CommunicationService:
             )
         body = (
             f"Purchase order received: {po_number}\n\n"
-            f"Customer: {safe_customer_name}\nCustomer email: {customer_email}\nQuote: {quote_id}\n\n"
+            f"Customer: {safe_customer_name}\nCustomer email: {customer_email}\nQuote: {quote_id}\n"
+            f"Total value: ${total_value:,.2f}\n\n"
             "Requested items:\n" + "\n".join(item_lines) + "\n\n"
-            "Please take over the human purchasing and supplier-confirmation process. "
+            f"Review and approve this PO in the Sales Command Dashboard: {review_url or os.getenv('SALES_DASHBOARD_URL') or os.getenv('PUBLIC_APP_URL', 'http://localhost:3000')}\n\n"
+            "Do not fulfill, invoice, or contact suppliers until a human operator approves this PO. "
             "Supplier details are included for internal use only."
         )
         return self._send(
             "sales",
             recipient,
-            f"PURCHASE ORDER {po_number} - human purchasing review",
+            f"[ACTION REQUIRED] New Purchase Order Received - PO #{po_number}",
             body,
             reply_to=None,
         )
@@ -325,8 +329,10 @@ class CommunicationService:
         quote_summary: str,
         reply_to: Optional[str] = None,
         quote_items: Optional[List[Dict[str, Any]]] = None,
+        subject_override: Optional[str] = None,
+        body_override: Optional[str] = None,
     ) -> Dict[str, Any]:
-        subject = f"Winged Tycoons quotation {quote_id}"
+        subject = subject_override or f"Winged Tycoons quotation {quote_id}"
         quote_body = str(quote_summary or "").strip()
         if not quote_body:
             quote_body = "Please see the approved quotation below."
@@ -387,7 +393,8 @@ class CommunicationService:
                 lead_time=(f"{quote_details.lead_time_days} days" if quote_details.lead_time_days is not None else "Available upon request"),
                 valid_until=quote_details.valid_until or "Available upon request",
             ))
-            subject = template.subject
+            if not subject_override:
+                subject = template.subject
             body = template.body
         else:
             body = (
@@ -398,6 +405,10 @@ class CommunicationService:
                 "We will keep this conversation together for follow-up.\n\n"
                 "Best regards,\nWinged Tycoons Sales Team"
             )
+        if body_override:
+            body = body_override.strip()
+            if not body:
+                raise ValueError("Generated customer email body is empty. Email dispatch aborted.")
         result = self._send("sales", recipient, subject, body, reply_to=reply_to)
         self.schedule_customer_followup(
             recipient=recipient,

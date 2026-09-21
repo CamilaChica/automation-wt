@@ -29,6 +29,7 @@ LEGACY_TO_CANONICAL = {
     "Pending_Approval": WorkflowState.CUSTOMER_QUOTE_READY,
     "Pending_Approval_Low_Margin": WorkflowState.CUSTOMER_QUOTE_READY,
     "Quote_Sent": WorkflowState.QUOTE_SENT,
+    "Pending_PO_Review": WorkflowState.PO_RECEIVED,
     "Purchase_Order_Received": WorkflowState.PO_RECEIVED,
 }
 
@@ -40,10 +41,11 @@ LEGACY_TRANSITIONS = {
     "Supplier_Sourcing": {"Sourcing_Failed", "Compliance_Check", "Supplier_Sourcing"},
     "Compliance_Check": {"Compliance_Blocked", "Compliance_Warning", "Pricing"},
     "Pricing": {"Quote_Generation"},
-    "Quote_Generation": {"Pending_Approval"},
+    "Quote_Generation": {"Pending_Approval", "Quote_Sent"},
     "Pending_Approval": {"Pending_Approval_Low_Margin", "Quote_Sent", "Rejected"},
     "Pending_Approval_Low_Margin": {"Quote_Sent", "Rejected"},
-    "Quote_Sent": {"Purchase_Order_Received", "Rejected"},
+    "Quote_Sent": {"Pending_PO_Review", "Purchase_Order_Received", "Rejected"},
+    "Pending_PO_Review": {"Purchase_Order_Received", "Rejected"},
     "Purchase_Order_Received": {"PO_Validated", "Rejected"},
     "PO_Validated": {"SUPPLIER_AVAILABILITY_PENDING", "Rejected"},
     "SUPPLIER_AVAILABILITY_PENDING": {"SUPPLIER_CONFIRMED", "Rejected"},

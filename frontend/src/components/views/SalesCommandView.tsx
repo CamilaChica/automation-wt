@@ -22,37 +22,84 @@ export const SalesCommandView: React.FC = () => {
   const [shippingOption, setShippingOption] = useState<'NFO' | 'HotShot'>('HotShot');
   const [issuing, setIssuing] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
-  const loadRfqDetail = (rfqId: string) => {
+  const loadRfqDetail = async (rfqId: string) => {
     setSelectedRfqId(rfqId);
     setQuoteReady(false);
-    void apiService.getRFQDetail(rfqId).then(detail => {
+    setDetailError(null);
+    try {
+      const detail = await apiService.getRFQDetail(rfqId);
       setSelectedQuoteId(detail.quote_details?.quote.id || '');
-      setQuoteReady(true);
-    });
+      setQuoteReady(Boolean(detail.quote_details?.quote.id));
+    } catch (error) {
+      setSelectedQuoteId('');
+      setDetailError(error instanceof Error ? error.message : 'Unable to load RFQ details.');
+    }
   };
 
-  useEffect(() => {
-    void apiService.getRFQs().then(rfqs => {
+  const refreshRfqs = async () => {
+    try {
+      const rfqs = await apiService.getRFQs();
       setRfqInbox(rfqs);
       const quoteReadyRfq = rfqs.find(rfq => rfq.status === 'Quoted') || rfqs[0];
       if (quoteReadyRfq) {
-        loadRfqDetail(quoteReadyRfq.id);
+        await loadRfqDetail(quoteReadyRfq.id);
       }
-    });
+    } catch (error) {
+      setNotification(error instanceof Error ? error.message : 'Unable to load RFQs.');
+    }
+  };
+
+  useEffect(() => {
+    void refreshRfqs();
   }, []);
 
   const calculateTotal = () => {
-    return unitPrice;
+    const selectedRfq = rfqInbox.find(rfq => rfq.id === selectedRfqId);
+    const quantity = Math.max(1, selectedRfq?.quantity || 1);
+    const shippingCost = shippingOption === 'NFO' ? 120 : 250;
+    return unitPrice * quantity + shippingCost;
+  };
+
+  const createPdfBlob = (lines: string[]) => {
+    const escapePdfText = (value: string) => value.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+    const content = ['BT', '/F1 12 Tf', ...lines.map((line, index) => `72 ${760 - index * 18} Td (${escapePdfText(line)}) Tj`), 'ET'].join('\n');
+    const objects = [
+      '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+      '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
+      '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n',
+      '4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
+      `5 0 obj\n<< /Length ${content.length} >>\nstream\n${content}\nendstream\nendobj\n`
+    ];
+    let pdf = '%PDF-1.4\n';
+    const offsets = [0];
+    objects.forEach(object => {
+      offsets.push(pdf.length);
+      pdf += object;
+    });
+    const xrefOffset = pdf.length;
+    pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n `).join('\n')}\n`;
+    pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+    return new Blob([new TextEncoder().encode(pdf)], { type: 'application/pdf' });
   };
 
   const downloadQuote = (format: 'pdf' | 'csv') => {
     const selectedRfq = rfqInbox.find(rfq => rfq.id === selectedRfqId);
     const customer = selectedRfq?.customer_name || 'Customer';
-    const content = format === 'csv'
-      ? `RFQ,Customer,Part Number,Quantity,Unit Price\n${selectedRfqId},${customer},32-11-45-01,1,${unitPrice}`
-      : `Winged Tycoons Quote\nRFQ: ${selectedRfqId}\nCustomer: ${customer}\nPart: 32-11-45-01\nUnit price: $${unitPrice.toLocaleString()}\nShipping: customer-selected`;
-    const blob = new Blob([content], { type: format === 'csv' ? 'text/csv' : 'application/pdf' });
+    const quantity = Math.max(1, selectedRfq?.quantity || 1);
+    const blob = format === 'csv'
+      ? new Blob([`RFQ,Customer,Part Number,Quantity,Unit Price,Shipping,Total\n${selectedRfqId},${customer},${selectedRfq?.part_number || ''},${quantity},${unitPrice},${shippingOption},${calculateTotal()}`], { type: 'text/csv;charset=utf-8' })
+      : createPdfBlob([
+        'Winged Tycoons Quote',
+        `RFQ: ${selectedRfqId}`,
+        `Customer: ${customer}`,
+        `Part: ${selectedRfq?.part_number || 'Pending extraction'}`,
+        `Quantity: ${quantity}`,
+        `Unit price: $${unitPrice.toLocaleString()}`,
+        `Shipping: ${shippingOption}`,
+        `Total: $${calculateTotal().toLocaleString()}`
+      ]);
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
     link.download = `${selectedRfqId || 'quote'}.${format}`;
@@ -62,18 +109,41 @@ export const SalesCommandView: React.FC = () => {
 
   const handleIssueQuote = async () => {
     setIssuing(true);
-    if (!selectedQuoteId) {
+    try {
+      if (!selectedQuoteId) {
+        setNotification('Select a quote-ready RFQ before issuing a customer quote.');
+        return;
+      }
+      await apiService.approveQuote(selectedQuoteId, 'Alex R. (Sales Lead)', [
+        { quote_item_id: 'QITEM-01', unit_price: unitPrice }
+      ]);
+      await refreshRfqs();
+      const customer = rfqInbox.find(rfq => rfq.id === selectedRfqId)?.customer_name || 'customer';
+      setNotification(`Quote ${selectedRfqId} issued to ${customer}! Customer communication dispatched.`);
+      setTimeout(() => setNotification(null), 5000);
+    } catch (error) {
+      setNotification(error instanceof Error ? error.message : 'Unable to issue the quote. Please retry.');
+    } finally {
       setIssuing(false);
-      setNotification('Select a quote-ready RFQ before issuing a customer quote.');
+    }
+  };
+
+  const handleDownloadAttachment = async (attachmentId: string, filename: string) => {
+    if (!attachmentId) {
+      setNotification(`${filename} has no stored attachment available for download.`);
       return;
     }
-    await apiService.approveQuote(selectedQuoteId, 'Alex R. (Sales Lead)', [
-      { quote_item_id: 'QITEM-01', unit_price: unitPrice }
-    ]);
-    setIssuing(false);
-    const customer = rfqInbox.find(rfq => rfq.id === selectedRfqId)?.customer_name || 'customer';
-    setNotification(`Quote ${selectedRfqId} issued to ${customer}! Customer communication dispatched.`);
-    setTimeout(() => setNotification(null), 5000);
+    try {
+      const blob = await apiService.downloadAttachment(attachmentId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setNotification(error instanceof Error ? error.message : 'Unable to download the attachment.');
+    }
   };
 
   return (
@@ -86,6 +156,13 @@ export const SalesCommandView: React.FC = () => {
             <span>{notification}</span>
           </div>
           <button onClick={() => setNotification(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-white">✕</button>
+        </div>
+      )}
+
+      {detailError && (
+        <div role="alert" className="bg-red-50 dark:bg-red-500/20 border border-red-300 dark:border-red-500 text-red-800 dark:text-red-300 p-4 rounded-2xl flex items-center justify-between text-xs font-semibold">
+          <span>{detailError}</span>
+          <button onClick={() => void loadRfqDetail(selectedRfqId)} className="underline">Retry</button>
         </div>
       )}
 
@@ -122,6 +199,14 @@ export const SalesCommandView: React.FC = () => {
                   <tr
                     key={rfq.id}
                     onClick={() => loadRfqDetail(rfq.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        void loadRfqDetail(rfq.id);
+                      }
+                    }}
+                    tabIndex={0}
+                    role="button"
                     className={`cursor-pointer transition-colors ${
                       selectedRfqId === rfq.id
                         ? 'bg-blue-50/80 dark:bg-aero-blue/20 text-slate-900 dark:text-white font-semibold'
@@ -322,7 +407,14 @@ export const SalesCommandView: React.FC = () => {
                   <Mail className="w-3.5 h-3.5" />
                   <span>WT-31005 Trace Packet</span>
                 </div>
-                <Download className="w-3.5 h-3.5 text-slate-400 cursor-pointer hover:text-slate-700 dark:hover:text-white" />
+                <button
+                  type="button"
+                  aria-label="Download WT-31005 trace packet"
+                  onClick={() => void handleDownloadAttachment('', 'WT-31005 trace packet')}
+                  className="text-slate-400 hover:text-slate-700 dark:hover:text-white"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                </button>
               </div>
 
               <div className="bg-slate-50 dark:bg-slate-900/60 p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center justify-between text-[10px]">
@@ -330,7 +422,14 @@ export const SalesCommandView: React.FC = () => {
                   <Mail className="w-3.5 h-3.5" />
                   <span>WT-31006 Invoice PDF</span>
                 </div>
-                <Download className="w-3.5 h-3.5 text-slate-400 cursor-pointer hover:text-slate-700 dark:hover:text-white" />
+                <button
+                  type="button"
+                  aria-label="Download WT-31006 invoice PDF"
+                  onClick={() => void handleDownloadAttachment('', 'WT-31006 invoice PDF')}
+                  className="text-slate-400 hover:text-slate-700 dark:hover:text-white"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                </button>
               </div>
             </div>
           </div>

@@ -420,6 +420,13 @@ export const apiService = {
     }
   },
 
+  async downloadAttachment(attachmentId: string): Promise<Blob> {
+    const res = await axios.get(`${API_BASE}/attachments/${encodeURIComponent(attachmentId)}`, {
+      responseType: 'blob'
+    });
+    return res.data;
+  },
+
   async rejectQuote(quote_id: string, operator_name: string, comments: string): Promise<any> {
     try {
       const res = await axios.post(`${API_BASE}/quotes/${quote_id}/reject`, {
