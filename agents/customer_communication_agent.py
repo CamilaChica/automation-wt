@@ -50,10 +50,12 @@ class CustomerCommunicationAgent(BaseAgent):
             prompt_templates={"customer_quote": "Draft a validated customer quotation email."},
         )
         super().__init__(metadata)
+        self._router_injected = llm_router is not None
         self.llm_router = llm_router or LLMRouter()
         self.llm_timeout_seconds = float(os.getenv("LLM_EMAIL_TIMEOUT_SECONDS", "12"))
         self.llm_model = os.getenv("CUSTOMER_COMMUNICATION_MODEL") or os.getenv("OPENAI_MODEL")
         self.template_fallback_enabled = os.getenv("LLM_ALLOW_TEMPLATE_FALLBACK", "true").strip().lower() in {"1", "true", "yes", "on"}
+        self.llm_live_enabled = os.getenv("LLM_LIVE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
         provider_name = self.llm_router.task_providers.get("customer_communication", os.getenv("LLM_DEFAULT_PROVIDER", "openai"))
         if provider_name not in self.llm_router.providers:
             raise ValueError(f"Unknown customer communication LLM provider: {provider_name}")
@@ -104,6 +106,8 @@ class CustomerCommunicationAgent(BaseAgent):
         fallback_used = False
         usage: dict[str, Any] = {}
         try:
+            if not self.llm_live_enabled and not self._router_injected:
+                raise RuntimeError("Live LLM drafting is disabled; using emergency template.")
             draft, response = await asyncio.wait_for(
                 asyncio.to_thread(self.llm_router.extract_structured_with_response, request, GeneratedEmailDraft),
                 timeout=self.llm_timeout_seconds + 2,

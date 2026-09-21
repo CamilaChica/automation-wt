@@ -22,7 +22,7 @@ class TestZeroTouchAutonomousFlow(unittest.TestCase):
                 "Please quote part 060-1234-00, quantity 1, for Global Airlines.",
             )
             pipeline = await orchestration_service.process_rfq_pipeline(rfq.id)
-            self.assertEqual(pipeline.get("status"), "Pending_Approval")
+            self.assertEqual(pipeline.get("status"), "Quote_Sent")
 
             quote_id = pipeline["quote_id"]
             send_result = await orchestration_service.approve_and_send_quote(

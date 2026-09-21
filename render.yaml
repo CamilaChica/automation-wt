@@ -39,6 +39,8 @@ services:
         value: "gpt-4o-mini"
       - key: LLM_DEFAULT_PROVIDER
         value: "openai"
+      - key: LLM_LIVE_ENABLED
+        value: "true"
       - key: LLM_TASK_PROVIDERS
         value: '{"customer_communication":"openai"}'
       - key: LLM_RETRY_ATTEMPTS
@@ -128,6 +130,8 @@ services:
         value: "gpt-4o-mini"
       - key: LLM_DEFAULT_PROVIDER
         value: "openai"
+      - key: LLM_LIVE_ENABLED
+        value: "true"
       - key: LLM_TASK_PROVIDERS
         value: '{"customer_communication":"openai"}'
       - key: LLM_RETRY_ATTEMPTS

@@ -38,6 +38,8 @@ class EmailIntelligenceExtraction(BaseModel):
 
 def extract_email_intelligence(email_text: str, *, task: str, router: LLMRouter | None = None) -> EmailIntelligenceExtraction:
     """Extract structured aviation RFQ/quote data with a validated LLM response."""
+    if router is None and os.getenv("LLM_LIVE_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
+        raise RuntimeError("Live LLM extraction is disabled; use deterministic fallback.")
     router = router or LLMRouter()
     request = LLMRequest(
         task=task,
