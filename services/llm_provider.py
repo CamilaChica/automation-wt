@@ -113,13 +113,16 @@ class OpenAIProvider(LLMProvider):
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         model = request.model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        system_prompt = request.system_prompt
+        if request.response_format == "json" and "json" not in system_prompt.lower():
+            system_prompt = f"{system_prompt}\nReturn the response as valid JSON."
         payload = {
             "model": model,
             "temperature": request.temperature,
             "top_p": request.top_p,
             "max_tokens": request.max_tokens,
             "messages": [
-                {"role": "system", "content": request.system_prompt},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": request.user_prompt},
             ],
         }
