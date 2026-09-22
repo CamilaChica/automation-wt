@@ -19,16 +19,28 @@ export const TraceVaultView: React.FC = () => {
   const [rfqs, setRfqs] = useState<RFQ[]>([]);
   const [verificationPassed, setVerificationPassed] = useState(false);
   const [hardFreezeEnabled, setHardFreezeEnabled] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    void apiService.getRFQs().then(items => {
+  const loadRfqs = async () => {
+    setLoading(true);
+    try {
+      const items = await apiService.getRFQs();
       setRfqs(items);
       if (items[0]) setActiveTab(items[0].id);
-    }).catch(() => setRfqs([]));
-  }, []);
+      setNotice(null);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Unable to load trace records.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void loadRfqs(); }, []);
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
+      {notice && <div role="alert" className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700"><span>{notice}</span><button type="button" onClick={() => void loadRfqs()} className="font-bold underline">Retry</button></div>}
       {/* Top Grid: Pipeline & Active Vault & Document Viewer */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Top (4 cols): DOCUMENTATION STATUS PIPELINE & ACTIVE DOCUMENT VAULT */}
@@ -54,7 +66,8 @@ export const TraceVaultView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
-                  {rfqs.length === 0 && <tr><td colSpan={4} className="py-8 text-center text-slate-400">No RFQ documentation records available.</td></tr>}
+                  {loading && <tr><td colSpan={4} className="py-8 text-center text-slate-400">Loading trace records...</td></tr>}
+                  {!loading && rfqs.length === 0 && <tr><td colSpan={4} className="py-8 text-center text-slate-400">No RFQ documentation records available.</td></tr>}
                   {rfqs.map(rfq => (
                     <tr key={rfq.id} onClick={() => setActiveTab(rfq.id)} onKeyDown={(event) => {
                       if (event.key === 'Enter' || event.key === ' ') {
@@ -226,7 +239,7 @@ export const TraceVaultView: React.FC = () => {
               <XCircle className="w-4 h-4" />
               <span>REJECT DOC</span>
             </button>
-            <button className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 text-xs">
+            <button onClick={() => setNotice('Document re-scan requested. Backend OCR processing is not yet connected to this view.')} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 text-xs">
               <FileSearch className="w-4 h-4" />
               <span>REQUEST RE-SCAN</span>
             </button>

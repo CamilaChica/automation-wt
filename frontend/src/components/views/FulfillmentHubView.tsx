@@ -13,10 +13,22 @@ import {
 
 export const FulfillmentHubView: React.FC = () => {
   const [shipments, setShipments] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    void apiService.getShipments().then(setShipments).catch(() => setShipments([]));
-  }, []);
+  const loadShipments = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setShipments(await apiService.getShipments());
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to load shipments.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void loadShipments(); }, []);
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
@@ -59,7 +71,9 @@ export const FulfillmentHubView: React.FC = () => {
           <h2 className="font-display font-bold text-xs uppercase tracking-wider">Live Shipments</h2>
           <span className="font-mono text-[10px] text-aero-blue">{shipments.length} tracked</span>
         </div>
+        {error && <div role="alert" className="mt-4 flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700"><span>{error}</span><button type="button" onClick={() => void loadShipments()} className="font-bold underline">Retry</button></div>}
         <div className="mt-4 grid gap-3 md:grid-cols-3">
+          {loading && <p className="text-sm text-slate-400">Loading shipments...</p>}
           {shipments.length === 0 && <p className="text-sm text-slate-400">No shipments are currently registered.</p>}
           {shipments.slice(0, 6).map(shipment => (
             <div key={shipment.id} className="rounded-xl border border-slate-200 dark:border-slate-800 p-3 text-xs">
