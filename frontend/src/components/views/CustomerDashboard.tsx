@@ -150,7 +150,11 @@ export const CustomerDashboard: React.FC = () => {
   const handleApproveQuote = async () => {
     setApproving(true);
     try {
-      await apiService.approveQuote(`QTE-${selectedRfqId.replace('WT-', '')}`, approverName);
+      await apiService.submitPurchaseOrder(
+        `QTE-${selectedRfqId.replace('WT-', '')}`,
+        poNumber,
+        selectedRfq.customer_email,
+      );
       await refreshRfqs();
       setIsApproveModalOpen(false);
       setNotification({ type: 'success', message: `Quotation approved! Purchase Order ${poNumber} linked.` });
