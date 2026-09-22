@@ -7,7 +7,16 @@ Run after installing requirements and applying migrations:
 from __future__ import annotations
 
 import asyncio
+import sys
 from decimal import Decimal
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+load_dotenv(ROOT / ".env")
 
 from services.async_database import create_engine_from_environment, session_scope, upsert_aviation_part
 
