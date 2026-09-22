@@ -9,6 +9,7 @@ from typing import Any, List, Optional
 from pydantic import BaseModel, Field
 
 from services.llm_provider import LLMRequest, LLMRouter
+from services.document_parser import build_email_context
 
 
 class ExtractedEmailItem(BaseModel):
@@ -36,11 +37,12 @@ class EmailIntelligenceExtraction(BaseModel):
     confidence_score: float = Field(0.0, ge=0, le=1)
 
 
-def extract_email_intelligence(email_text: str, *, task: str, router: LLMRouter | None = None) -> EmailIntelligenceExtraction:
+def extract_email_intelligence(email_text: str, *, task: str, router: LLMRouter | None = None, attachments: list[dict[str, Any]] | None = None) -> EmailIntelligenceExtraction:
     """Extract structured aviation RFQ/quote data with a validated LLM response."""
     if router is None and os.getenv("LLM_LIVE_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
         raise RuntimeError("Live LLM extraction is disabled; use deterministic fallback.")
     router = router or LLMRouter()
+    context = build_email_context(email_text, attachments)
     request = LLMRequest(
         task=task,
         system_prompt=(
@@ -52,7 +54,7 @@ def extract_email_intelligence(email_text: str, *, task: str, router: LLMRouter 
             "message IDs, RFQ numbers, tracking numbers, billing references, or opaque encoded strings as part numbers. "
             "If quantity is absent, use 1 and include quantity in missing_fields. Return only the JSON schema."
         ),
-        user_prompt=json.dumps({"email": email_text}, ensure_ascii=False),
+        user_prompt=json.dumps({"email": context}, ensure_ascii=False),
         model=os.getenv("EMAIL_EXTRACTION_MODEL") or os.getenv("OPENAI_MODEL"),
         temperature=0.0,
         timeout_seconds=float(os.getenv("LLM_EXTRACTION_TIMEOUT_SECONDS", "10")),

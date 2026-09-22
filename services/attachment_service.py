@@ -22,7 +22,11 @@ class AttachmentRecord(BaseModel):
 
 
 class AttachmentService:
-    allowed_types = {"application/pdf", "image/png", "image/jpeg"}
+    allowed_types = {
+        "application/pdf", "image/png", "image/jpeg",
+        "text/plain", "text/csv",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }
     max_bytes = 25 * 1024 * 1024
 
     def __init__(self, storage_dir: str | Path | None = None):
@@ -35,7 +39,7 @@ class AttachmentService:
         attachment_id = f"ATT-{digest[:16].upper()}"
         if len(content) > self.max_bytes:
             return AttachmentRecord(attachment_id=attachment_id, filename=filename, content_type=content_type, size_bytes=len(content), sha256=digest, status="REJECTED", warning="Attachment exceeds 25MB limit.")
-        if content_type not in self.allowed_types or Path(filename).suffix.lower() not in {".pdf", ".png", ".jpg", ".jpeg"}:
+        if content_type not in self.allowed_types or Path(filename).suffix.lower() not in {".pdf", ".png", ".jpg", ".jpeg", ".txt", ".csv", ".xlsx"}:
             return AttachmentRecord(attachment_id=attachment_id, filename=filename, content_type=content_type, size_bytes=len(content), sha256=digest, status="REJECTED", warning="Unsupported attachment type.")
         target = self.storage_dir / f"{attachment_id}{Path(filename).suffix.lower()}"
         target.write_bytes(content)
