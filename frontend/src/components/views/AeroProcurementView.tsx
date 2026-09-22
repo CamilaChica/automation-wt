@@ -61,7 +61,7 @@ export const AeroProcurementView: React.FC = () => {
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
                 {rfqs.length === 0 && <tr><td colSpan={6} className="py-8 text-center text-slate-400">No active RFQs.</td></tr>}
                 {rfqs.map((rfq, idx) => (
-                  <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors">
+                  <tr key={rfq.id} tabIndex={0} role="button" onClick={() => setSelectedSupplier(rfq.customer_name as 'A' | 'B' | 'C')} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedSupplier(rfq.customer_name as 'A' | 'B' | 'C'); } }} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors">
                     <td className="py-2.5 text-aero-blue font-bold">{rfq.id}</td>
                     <td className="py-2.5">
                       <div className="font-bold text-slate-900 dark:text-slate-200">{rfq.part_number || 'Pending extraction'}</div>

@@ -14,6 +14,7 @@ import {
 
 export const SupplierSourcingView: React.FC = () => {
   const [selectedPn, setSelectedPn] = useState('32-11-45-01');
+  const [selectedRfqId, setSelectedRfqId] = useState<string | null>(null);
   const [liveOffers, setLiveOffers] = useState<any[]>([]);
   const [activeRfqs, setActiveRfqs] = useState<any[]>([]);
 
@@ -23,6 +24,7 @@ export const SupplierSourcingView: React.FC = () => {
   }, [selectedPn]);
 
   const compareMatrix = liveOffers.map(offer => ({
+    part_number: offer.part_number,
     name: offer.supplier_name,
     rel: `${Math.round((offer.confidence || 0) * 100)}%`,
     loc: offer.supplier_email || 'Unknown',
@@ -69,7 +71,7 @@ export const SupplierSourcingView: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
                 {activeRfqs.map((rfq, i) => (
-                  <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors">
+                  <tr key={i} tabIndex={0} role="button" onClick={() => setSelectedRfqId(rfq.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedRfqId(rfq.id); } }} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors">
                     <td className="py-2.5 text-aero-blue font-bold">{rfq.id}</td>
                     <td className="py-2.5">
                       <div className="font-bold text-slate-900 dark:text-slate-200">{rfq.part_number || 'Pending extraction'}</div>
@@ -129,7 +131,7 @@ export const SupplierSourcingView: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
                   {compareMatrix.map((row, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 text-slate-700 dark:text-slate-300">
+                    <tr key={idx} tabIndex={0} role="button" onClick={() => setSelectedPn(row.part_number || selectedPn)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedPn(row.part_number || selectedPn); } }} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 text-slate-700 dark:text-slate-300">
                       <td className="py-2 font-bold text-slate-900 dark:text-slate-100">{row.name}</td>
                       <td className="py-2 text-emerald-600 dark:text-emerald-400 font-bold">{row.rel}</td>
                       <td className="py-2">{row.loc}</td>

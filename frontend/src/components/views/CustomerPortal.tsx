@@ -32,8 +32,14 @@ export const CustomerPortal: React.FC = () => {
 
   const searchCatalog = async (value: string) => {
     setIsSearching(true);
-    setResults(await apiService.searchCatalog(value));
-    setIsSearching(false);
+    try {
+      setResults(await apiService.searchCatalog(value));
+      setNotice(null);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Catalog search failed. Please retry.');
+    } finally {
+      setIsSearching(false);
+    }
   };
 
   const handleSearch = (event: React.FormEvent) => {
@@ -48,14 +54,19 @@ export const CustomerPortal: React.FC = () => {
       return;
     }
     setIsSubmitting(true);
-    const response = await apiService.submitCustomerRFQ(
-      `Customer request for P/N ${partNumber}, quantity ${quantity}. ${details}`,
-      customerName,
-      customerEmail
-    );
-    setNotice(`Request ${response.rfq_id} received. Our parts team will email ${customerEmail} with availability and pricing.`);
-    setTrackingStatus('Processing Autonomous Fulfillment');
-    setIsSubmitting(false);
+    try {
+      const response = await apiService.submitCustomerRFQ(
+        `Customer request for P/N ${partNumber}, quantity ${quantity}. ${details}`,
+        customerName,
+        customerEmail
+      );
+      setNotice(`Request ${response.rfq_id} received. Our parts team will email ${customerEmail} with availability and pricing.`);
+      setTrackingStatus('Processing Autonomous Fulfillment');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'RFQ submission failed. Please retry.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handlePurchaseOrder = async (event: React.FormEvent) => {
@@ -66,6 +77,8 @@ export const CustomerPortal: React.FC = () => {
       setNotice(`Purchase order ${poNumber} received. Our purchasing team will confirm the order by email.`);
       setQuoteId('');
       setPoNumber('');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Purchase order submission failed. Please retry.');
     } finally {
       setIsSubmittingPo(false);
     }
@@ -76,6 +89,9 @@ export const CustomerPortal: React.FC = () => {
     setIsTracking(true);
     try {
       setShipment(await apiService.trackShipment(trackingToken));
+      setNotice(null);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Shipment tracking failed. Please retry.');
     } finally {
       setIsTracking(false);
     }
