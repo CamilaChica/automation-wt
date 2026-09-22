@@ -72,6 +72,42 @@ class OrchestrationService:
             res = await self.intake_agent.execute({"raw_text": rfq.raw_text})
             
             if not res.success:
+                intake_data = res.data or {}
+                requires_internal_review = (
+                    intake_data.get("AOG_status") is True
+                    or intake_data.get("priority") in {"AOG", "Urgent"}
+                )
+                if requires_internal_review:
+                    db_service.update_rfq_customer(
+                        rfq_id,
+                        intake_data.get("customer_name") or intake_data.get("company"),
+                        intake_data.get("customer_email"),
+                    )
+                    for item in intake_data.get("items", []):
+                        requested_part = item.get("requested_part_number")
+                        if requested_part:
+                            db_service.add_rfq_item(
+                                rfq_id=rfq_id,
+                                requested_part=requested_part,
+                                qty=item.get("quantity", 1),
+                                uom=item.get("uom", "EA"),
+                                aircraft=item.get("aircraft_type"),
+                                condition=item.get("condition_preference", "NE"),
+                            )
+                    db_service.update_rfq_status(rfq_id, "Pending_Internal_Review")
+                    db_service.add_audit_log(
+                        rfq_id,
+                        "RFQIntakeAgent",
+                        "intake_review",
+                        f"AOG/urgent RFQ requires internal review: {res.error_message}",
+                        "WARNING",
+                        json.dumps(intake_data),
+                    )
+                    return {
+                        "status": "Pending_Internal_Review",
+                        "message": "AOG/urgent RFQ parsed and queued for internal review.",
+                        "review_required": True,
+                    }
                 db_service.update_rfq_status(rfq_id, "Intake_Failed")
                 db_service.add_audit_log(
                     rfq_id, "RFQIntakeAgent", "intake_parse", 

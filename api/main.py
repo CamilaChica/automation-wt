@@ -133,18 +133,29 @@ async def security_headers(request: Request, call_next):
         extra={"request_id": request_id, "method": request.method, "path": request.url.path, "status_code": response.status_code, "duration_ms": duration_ms},
     )
     return response
+runtime_env = os.getenv("WT_ENV", os.getenv("WT_AUTH_ENV", "development")).strip().lower()
 configured_origins = {
     origin.strip()
-    for origin in os.getenv("FRONTEND_ORIGIN", "").split(",")
+    for value in (os.getenv("FRONTEND_ORIGINS", ""), os.getenv("FRONTEND_ORIGIN", ""))
+    for origin in value.split(",")
     if origin.strip()
 }
-allowed_origins = sorted(configured_origins | {
+development_origins = {
     "http://localhost:3000",
     "http://localhost:5173",
+    "http://localhost:4173",
+    "http://localhost:4174",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:4173",
+    "http://127.0.0.1:4174",
+}
+production_origins = {
     "https://winged-tycoons-frontend.onrender.com",
     "https://wingedtycoons.com",
     "https://rfq.wingedtycoons.com",
-})
+}
+allowed_origins = sorted(configured_origins | (production_origins if runtime_env == "production" else development_origins))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,

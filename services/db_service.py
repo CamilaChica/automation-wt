@@ -263,6 +263,12 @@ class MockDatabaseService:
             rfq.customer_name = customer_name.strip()
         if customer_email:
             rfq.customer_email = customer_email.strip().lower()
+        operations_store.upsert_customer(
+            customer_id=f"CUS-{rfq.customer_email.lower()}",
+            company_name=rfq.customer_name,
+            contact_name=rfq.customer_name,
+            email=rfq.customer_email,
+        )
         self._persist_state()
         return rfq
 

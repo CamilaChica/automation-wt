@@ -21,6 +21,7 @@ const InternalApp: React.FC = () => {
   const [isAuditLogOpen, setIsAuditLogOpen] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AgentAuditLog[]>([]);
   const [auditRfqId, setAuditRfqId] = useState('');
+  const [isLiveAuditUnavailable, setIsLiveAuditUnavailable] = useState(false);
 
   const sampleLogs: AgentAuditLog[] = [
     {
@@ -76,8 +77,20 @@ const InternalApp: React.FC = () => {
   useEffect(() => {
     let active = true;
     const loadAuditFeed = async () => {
-      const [rfqs, events] = await Promise.all([apiService.getRFQs(), apiService.getAutomationEvents()]);
+      const rfqs = await apiService.getRFQs();
       if (!active || rfqs.length === 0) return;
+      let events: AutomationEvent[] = [];
+      try {
+        events = await apiService.getAutomationEvents();
+        if (active) setIsLiveAuditUnavailable(false);
+      } catch {
+        if (active) {
+          setIsLiveAuditUnavailable(true);
+          setAuditLogs(sampleLogs);
+          setAuditRfqId('WT-29471');
+        }
+        return;
+      }
       const detail = await apiService.getRFQDetail(rfqs[0].id);
       if (active) {
         setAuditRfqId(rfqs[0].id);
@@ -95,6 +108,7 @@ const InternalApp: React.FC = () => {
 
     void loadAuditFeed().catch(() => {
       if (active) {
+        setIsLiveAuditUnavailable(true);
         setAuditLogs(sampleLogs);
         setAuditRfqId('WT-29471');
       }
@@ -180,6 +194,7 @@ const InternalApp: React.FC = () => {
         onClose={() => setIsAuditLogOpen(false)}
         logs={auditLogs.length ? auditLogs : sampleLogs}
         rfqId={auditRfqId || 'Live operations'}
+        isLiveAuditUnavailable={isLiveAuditUnavailable}
       />
     </div>
   );
