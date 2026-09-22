@@ -117,7 +117,8 @@ def _normalize_part_number(raw: str) -> str:
     - Convert to uppercase.
     - Preserve hyphens as they are structurally significant.
     """
-    return re.sub(r"\s+", "", raw.strip()).upper()
+    normalized = re.sub(r"\s*-\s*", "-", raw.strip())
+    return re.sub(r"\s+", "", normalized).upper()
 
 
 def _extract_email(text: str) -> Optional[str]:
@@ -465,6 +466,7 @@ class RFQIntakeAgent(BaseAgent):
 
         # Prefer the validated model extraction when a provider is configured;
         # local parsing remains the bounded fallback for provider outages.
+        llm_extraction_used = False
         try:
             llm_data = await asyncio.to_thread(
                 extract_email_intelligence,
@@ -473,9 +475,10 @@ class RFQIntakeAgent(BaseAgent):
                 router=self.llm_router,
             )
             if llm_data.items:
+                llm_extraction_used = True
                 extracted_items = [
                     {
-                        "requested_part_number": item.part_number.upper(),
+                        "requested_part_number": _normalize_part_number(item.part_number),
                         "quantity": item.quantity,
                         "uom": "EA",
                         "aircraft_type": None,
@@ -483,14 +486,42 @@ class RFQIntakeAgent(BaseAgent):
                     }
                     for item in llm_data.items
                 ]
-                part_number = extracted_items[0]["requested_part_number"]
+                part_number = _normalize_part_number(extracted_items[0]["requested_part_number"])
                 quantity = extracted_items[0]["quantity"]
                 condition = extracted_items[0]["condition_preference"]
                 customer_name = llm_data.customer_name or customer_name
                 company = llm_data.customer_company or company
-                customer_email = llm_data.customer_email or customer_email
+                customer_email = (llm_data.customer_email or customer_email or "").strip().lower() or None
         except Exception as exc:
             logger.warning("rfq_llm_extraction_fallback error=%s", type(exc).__name__)
+
+        is_partsbase = "partsbase.com" in raw_text.lower()
+        explicit_partsbase_fallback = bool(
+            customer_email
+            and extracted_items
+            and re.search(r"(?:Part\s*(?:Number|No\.?|#)|P/?N|PN)\s*[:#]", raw_text, re.IGNORECASE)
+        )
+        if is_partsbase and not llm_extraction_used and not explicit_partsbase_fallback:
+            return AgentResponse(
+                success=False,
+                data={
+                    "rfq_id": rfq_id,
+                    "status": "NEEDS_CLARIFICATION",
+                    "customer_name": customer_name,
+                    "company": company,
+                    "part_number": part_number,
+                    "quantity": quantity,
+                    "customer_email": customer_email,
+                    "items": [],
+                    "missing_fields": ["live LLM extraction"],
+                    "ambiguous_fields": [],
+                    "priority": priority,
+                    "AOG_status": aog_status,
+                    "certification_requirements": certifications,
+                },
+                error_message="PartsBase RFQ held: live LLM extraction was unavailable; no outbound supplier email was sent.",
+                escalation_triggered=self.metadata.escalation_rules[0],
+            )
 
         # ── 2. Priority ─────────────────────────────────────────────────
         priority = _determine_priority(aog_status, raw_text)
@@ -548,6 +579,7 @@ class RFQIntakeAgent(BaseAgent):
         # ── 7. Compose response payload ─────────────────────────────────
         payload = intake_output.model_dump()
         payload["quantity_defaulted"] = quantity_defaulted
+        payload["llm_extraction_used"] = llm_extraction_used
         payload["customer_email"] = customer_email  # legacy key
         payload["items"] = items                    # legacy key
 

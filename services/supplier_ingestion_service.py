@@ -17,6 +17,7 @@ class SupplierEmailIngestionService:
     def ingest_email(self, email_text: str, mailbox: str = "purchasing", message_id: Optional[str] = None, attachments: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         try:
             extracted = self.extractor.extract(email_text)
+            deterministic_part_number = extracted.get("part_number")
             try:
                 llm_data = extract_email_intelligence(
                     email_text,
@@ -29,7 +30,10 @@ class SupplierEmailIngestionService:
                     extracted.update({
                         "supplier_name": llm_data.supplier_name or extracted.get("supplier_name"),
                         "supplier_email": llm_data.supplier_email or extracted.get("supplier_email"),
-                        "part_number": item.part_number.upper(),
+                        "part_number": (
+                            deterministic_part_number
+                            or re.sub(r"\s*[-]\s*", "-", item.part_number).replace(" ", "").upper()
+                        ),
                         "quantity_available": item.quantity,
                         "unit_cost": item.unit_price,
                         "certificate_type": (item.trace_documents[0] if item.trace_documents else None) or extracted.get("certificate_type"),

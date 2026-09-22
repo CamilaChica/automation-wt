@@ -1,5 +1,7 @@
 import json
+import os
 import unittest
+from unittest.mock import patch
 
 from services.email_intelligence import extract_email_intelligence
 from services.llm_provider import LLMProvider, LLMResponse, LLMRouter
@@ -54,11 +56,12 @@ class FakeEmailProvider(LLMProvider):
 
 class EmailIntelligenceTests(unittest.TestCase):
     def test_structured_extraction_preserves_all_line_items_and_identity(self):
-        result = extract_email_intelligence(
-            "PartsBase table email",
-            task="rfq_extraction",
-            router=LLMRouter({"openai": FakeEmailProvider()}),
-        )
+        with patch.dict(os.environ, {"LLM_LIVE_ENABLED": "true"}, clear=False):
+            result = extract_email_intelligence(
+                "PartsBase table email",
+                task="rfq_extraction",
+                router=LLMRouter({"openai": FakeEmailProvider()}),
+            )
 
         self.assertEqual(result.customer_company, "Innovation Aerospace, LLC")
         self.assertEqual([item.part_number for item in result.items], ["5-89356-42", "060-1234-00"])
