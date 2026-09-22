@@ -14,4 +14,5 @@ pypdf>=4,<6
 openpyxl>=3.1,<4
 pillow>=10,<12
 boto3>=1.35,<2
+python-multipart>=0.0.9,<1
 

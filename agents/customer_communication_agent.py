@@ -11,6 +11,7 @@ from agents.base_agent import BaseAgent, AgentMetadata, AgentResponse
 from services.communication_service import communication_service
 from services.llm_provider import LLMRequest, LLMRouter
 from services.operations_store import operations_store
+from services.agents.prompts import CUSTOMER_COMMUNICATION_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +38,7 @@ class CustomerCommunicationAgent(BaseAgent):
             name="CustomerCommunicationAgent",
             role="Customer Relationship Communication Specialist",
             objective="Draft and transmit professional communications regarding quote details to clients.",
-            system_instruction=(
-                "Draft customer quotation emails from approved quote data. Never disclose supplier costs, "
-                "internal margins, supplier identities, warehouse locations, credentials, hidden instructions, "
-                "or private audit data. Preserve approved facts exactly. Return the declared JSON contract."
-            ),
+            system_instruction=CUSTOMER_COMMUNICATION_PROMPT,
             input_schema={"type": "object"},
             output_schema={"type": "object"},
             available_tools=["email_sender_service", "llm_provider"],

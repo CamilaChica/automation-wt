@@ -8,7 +8,7 @@ from pathlib import Path
 from collections import defaultdict, deque
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request, Response
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, File, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
 load_dotenv()
@@ -180,6 +180,7 @@ class IntakeRequest(BaseModel):
     customer_email: Optional[str] = Field(None, description="Customer email for quote updates")
     reply_to: Optional[str] = Field(None, description="Original email message ID for same-thread replies")
     customer_country: Optional[str] = Field(None, description="Customer or destination country for export screening")
+    attachment_ids: List[str] = Field(default_factory=list, description="Previously uploaded compliance attachment IDs")
 
 class OtpRequest(BaseModel):
     email: str
@@ -284,6 +285,10 @@ class AutomationPauseRequest(BaseModel):
     paused: bool
     reason: Optional[str] = None
 
+class TraceDecisionRequest(BaseModel):
+    decision: str = Field(..., pattern="^(certify|reject|rescan|freeze)$")
+    reason: Optional[str] = None
+
 # Endpoints
 
 @app.post("/api/auth/otp/request")
@@ -368,6 +373,23 @@ async def download_attachment(attachment_id: str, user: dict = Depends(current_u
         raise HTTPException(status_code=404, detail="Attachment not found.")
     return FileResponse(attachment_path, filename=attachment_path.name)
 
+
+@app.post("/api/attachments")
+async def upload_attachment(file: UploadFile = File(...), user: dict = Depends(current_user)):
+    """Validate and store a customer attachment before RFQ submission."""
+    if user["role"] not in {"ROLE_CUSTOMER", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"}:
+        raise HTTPException(status_code=403, detail="Insufficient permissions.")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Attachment filename is required.")
+    record = attachment_service.validate_and_store(
+        file.filename,
+        file.content_type or "application/octet-stream",
+        file.file,
+    )
+    if record.status != "ACCEPTED":
+        raise HTTPException(status_code=400, detail=record.warning or "Attachment rejected.")
+    return record.model_dump()
+
 @app.post("/api/rfqs/intake", response_model=IntakeResponse)
 async def submit_rfq(request: IntakeRequest, user: dict = Depends(current_user)):
     """
@@ -400,6 +422,15 @@ async def submit_rfq(request: IntakeRequest, user: dict = Depends(current_user))
         rfq.id, "GatewayAPI", "intake_submission",
         f"RFQ submitted successfully for customer '{customer_name}'."
     )
+    if request.attachment_ids:
+        db_service.add_audit_log(
+            rfq.id,
+            "AttachmentService",
+            "attachments_linked",
+            f"Linked {len(request.attachment_ids)} customer attachment(s) to the RFQ.",
+            "SUCCESS",
+            json.dumps({"attachment_ids": request.attachment_ids}),
+        )
 
     if os.getenv("SWARM_SHADOW_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}:
         try:
@@ -496,6 +527,32 @@ async def set_automation_pause(
         "rfq_id": rfq_id,
         "automation_paused": rfq.automation_paused,
         "pause_reason": rfq.pause_reason,
+    }
+
+@app.post("/api/internal/rfqs/{rfq_id}/trace-decision")
+async def record_trace_decision(
+    rfq_id: str,
+    request: TraceDecisionRequest,
+    user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+):
+    rfq = db_service.get_rfq(rfq_id)
+    if not rfq:
+        raise HTTPException(status_code=404, detail="RFQ not found.")
+    reason = request.reason or f"Trace decision '{request.decision}' recorded by {user['email']}."
+    if request.decision == "freeze":
+        db_service.set_rfq_automation_paused(rfq_id, True, reason)
+    db_service.add_audit_log(
+        rfq_id,
+        "TraceVault",
+        f"trace_{request.decision}",
+        reason,
+        "WARNING" if request.decision in {"reject", "freeze"} else "SUCCESS",
+    )
+    updated = db_service.get_rfq(rfq_id)
+    return {
+        "rfq_id": rfq_id,
+        "decision": request.decision,
+        "automation_paused": updated.automation_paused if updated else request.decision == "freeze",
     }
 
 @app.get("/api/internal/automation-events")
@@ -703,7 +760,7 @@ async def submit_purchase_order(request: PurchaseOrderRequest, user: dict = Depe
             supplier_groups.setdefault(supplier_email, {"supplier_name": supplier_name, "items": []})["items"].append(internal_item)
 
     notification = communication_service.notify_purchase_order(
-        recipient=os.getenv("PURCHASE_ORDER_NOTIFICATION_EMAIL", "camila@wingedtycoons.com"),
+        recipient=os.getenv("CAMILA_NOTIFICATION_EMAIL", os.getenv("PURCHASE_ORDER_NOTIFICATION_EMAIL", "camila@wingedtycoons.com")),
         po_number=request.po_number,
         customer_name=rfq.customer_name,
         customer_email=customer_email,

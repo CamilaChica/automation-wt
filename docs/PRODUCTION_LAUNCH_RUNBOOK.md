@@ -8,6 +8,7 @@ This runbook is an operational checklist, not a substitute for deployment, legal
 - Select managed PostgreSQL for shared API and worker state.
 - Select Redis or an edge provider for distributed rate limiting.
 - Configure Microsoft Graph credentials and mailbox permissions in the secret store.
+- Configure `CAMILA_NOTIFICATION_EMAIL` for PO alerts and `INVENTORY_INGESTION_MAILBOX` for the purchasing worker.
 - Confirm whether billing is manual or integrated with a payment provider.
 
 ## Staging Gate

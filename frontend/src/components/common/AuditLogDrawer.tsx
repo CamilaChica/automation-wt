@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { AgentAuditLog } from '../../types';
 import { X, CheckCircle, AlertTriangle, XCircle, Bot, Cpu, ShieldCheck, DollarSign, Send, Search } from 'lucide-react';
 
@@ -17,6 +17,15 @@ export const AuditLogDrawer: React.FC<AuditLogDrawerProps> = ({
   rfqId,
   isLiveAuditUnavailable = false
 }) => {
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const getAgentIcon = (name: string) => {
@@ -60,12 +69,12 @@ export const AuditLogDrawer: React.FC<AuditLogDrawerProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-sm animate-fade-in">
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-sm animate-fade-in" role="dialog" aria-modal="true" aria-labelledby="audit-log-title" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
       <div className="w-full max-w-md bg-white dark:bg-card-dark border-l border-slate-200 dark:border-slate-800 h-full flex flex-col justify-between shadow-2xl font-sans">
         {/* Header */}
         <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-900/90">
           <div>
-            <h3 className="font-display font-bold text-sm text-slate-900 dark:text-slate-100 uppercase flex items-center space-x-2">
+            <h3 id="audit-log-title" className="font-display font-bold text-sm text-slate-900 dark:text-slate-100 uppercase flex items-center space-x-2">
               <Bot className="w-4 h-4 text-aero-blue" />
               <span>MULTI-AGENT REASONING TIMELINE</span>
             </h3>
@@ -73,6 +82,7 @@ export const AuditLogDrawer: React.FC<AuditLogDrawerProps> = ({
           </div>
           <button
             onClick={onClose}
+            aria-label="Close audit log"
             className="p-1.5 rounded-lg bg-white dark:bg-slate-800 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white border border-slate-200 dark:border-slate-700"
           >
             <X className="w-4 h-4" />

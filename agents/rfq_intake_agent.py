@@ -46,6 +46,7 @@ from agents.base_agent import BaseAgent, AgentMetadata, AgentResponse, Escalatio
 from models.db_models import RFQIntakeOutput
 from services.email_intelligence import extract_email_intelligence
 from services.llm_provider import LLMRouter
+from services.agents.prompts import RFQ_INTAKE_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -364,17 +365,7 @@ class RFQIntakeAgent(BaseAgent):
                 "Identify mandatory fields, detect ambiguity, assign priority, and "
                 "generate a unique RFQ ID without inventing information."
             ),
-            system_instruction=(
-                "Analyze the raw customer RFQ text. "
-                "Extract: customer_name, company, part_number (normalize to uppercase), "
-                "quantity (integer), condition (NE/NS/OH/AR), required_date, "
-                "delivery_location, AOG_status, certification_requirements, "
-                "and additional_requirements. "
-                "Flag missing mandatory fields (part_number, customer identity). "
-                "Flag ambiguous condition when multiple codes appear. "
-                "Set priority: AOG > Urgent > Routine. "
-                "NEVER invent or guess missing fields."
-            ),
+            system_instruction=RFQ_INTAKE_PROMPT,
             input_schema={
                 "type": "object",
                 "properties": {

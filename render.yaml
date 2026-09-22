@@ -81,6 +81,12 @@ services:
         value: "2"
       - key: PURCHASE_ORDER_NOTIFICATION_EMAIL
         value: "camila@wingedtycoons.com"
+      - key: CAMILA_NOTIFICATION_EMAIL
+        value: "camila@wingedtycoons.com"
+      - key: INVENTORY_INGESTION_MAILBOX
+        value: "purchasing"
+      - key: INVENTORY_INGESTION_POLL_INTERVAL_SECONDS
+        value: "60"
       - key: AFTERSHIP_API_KEY
         sync: false
       - key: AFTERSHIP_BASE_URL
@@ -133,6 +139,8 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python worker.py
     envVars:
+      - key: INVENTORY_INGESTION_WORKER_ENABLED
+        value: "true"
       - key: WT_AUTH_ENV
         value: "production"
       - key: WT_AUTH_SECRET
@@ -187,4 +195,35 @@ services:
         sync: false
       - key: AZURE_STORAGE_CONTAINER
         value: "winged-tycoons-backups"
+
+  - type: worker
+    name: winged-inventory-ingestion
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m services.inventory_ingestion_worker
+    envVars:
+      - key: INVENTORY_INGESTION_POSTGRES_ENABLED
+        value: "true"
+      - key: INVENTORY_INGESTION_MAILBOX
+        value: "purchasing"
+      - key: INVENTORY_INGESTION_POLL_INTERVAL_SECONDS
+        value: "60"
+      - key: PURCHASING_EMAIL_USERNAME
+        sync: false
+      - key: PURCHASING_EMAIL_PASSWORD
+        sync: false
+      - key: AZURE_TENANT_ID
+        sync: false
+      - key: AZURE_CLIENT_ID
+        sync: false
+      - key: AZURE_CLIENT_SECRET
+        sync: false
+      - key: GRAPH_MAILBOX_USER
+        value: "purchasing@wingedtycoons.com"
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPPLIER_DATABASE_PATH
+        value: "/tmp/supplier_email_store.db"
+      - key: MAILBOX_MAX_AGE_DAYS
+        value: "7"
 

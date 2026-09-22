@@ -260,9 +260,15 @@ export const apiService = {
     }
   },
 
-  async submitCustomerRFQ(raw_text: string, customer_name: string, customer_email: string): Promise<{ rfq_id: string; status: string; message: string }> {
+  async uploadAttachment(file: File): Promise<{ attachment_id: string; filename: string; status: string }> {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await axios.post(`${API_BASE}/attachments`, form);
+    return res.data;
+  },
+  async submitCustomerRFQ(raw_text: string, customer_name: string, customer_email: string, attachment_ids: string[] = []): Promise<{ rfq_id: string; status: string; message: string }> {
     try {
-      const res = await axios.post(`${API_BASE}/rfqs/intake`, { raw_text, customer_name, customer_email });
+      const res = await axios.post(`${API_BASE}/rfqs/intake`, { raw_text, customer_name, customer_email, attachment_ids });
       return res.data;
     } catch (error) {
       if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
@@ -463,5 +469,9 @@ export const apiService = {
         message: `Quote ${quote_id} rejected by ${operator_name}.`
       };
     }
+  },
+  async recordTraceDecision(rfq_id: string, decision: 'certify' | 'reject' | 'rescan' | 'freeze', reason?: string): Promise<{ decision: string; automation_paused: boolean }> {
+    const res = await axios.post(`${API_BASE}/internal/rfqs/${encodeURIComponent(rfq_id)}/trace-decision`, { decision, reason });
+    return res.data;
   }
 };

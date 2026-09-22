@@ -14,6 +14,7 @@ from agents.quote_generation_agent import QuoteGenerationAgent
 from agents.customer_communication_agent import CustomerCommunicationAgent
 from services.communication_service import communication_service
 from services.storage import storage_service
+from services.agents.prompts import AgentPipelineState
 
 
 def _lead_time_days(value: Any) -> Optional[int]:
@@ -514,6 +515,23 @@ class OrchestrationService:
 
     async def _dispatch_customer_quote(self, rfq: Any, quote: Any) -> AgentResponse:
         quote_items = db_service.get_quote_items(quote.id)
+        pipeline_state = AgentPipelineState(
+            rfq_id=rfq.id,
+            customer_email=rfq.customer_email,
+            customer_name=rfq.customer_name,
+            requested_items=[
+                {
+                    "part_number": item.part_number,
+                    "quantity": item.quantity,
+                    "condition": item.condition,
+                }
+                for item in quote_items
+            ],
+            quote_id=quote.id,
+            quote_total=quote.total_amount,
+            lead_time_days=quote.lead_time_days,
+            communication_status="READY",
+        )
         # PartsBase's message belongs to PartsBase, not the embedded requester.
         # Send a new message to the embedded customer instead of Graph-replying
         # to the PartsBase source message.
@@ -546,7 +564,7 @@ class OrchestrationService:
                 ],
             },
             "reply_to": reply_to,
-        })
+        }, context={"pipeline_state": pipeline_state})
 
     async def approve_and_send_quote(self, quote_id: str, operator_name: str, overrides: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """

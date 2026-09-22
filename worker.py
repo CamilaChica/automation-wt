@@ -3,6 +3,7 @@
 import logging
 import os
 import re
+import json
 import time
 import asyncio
 from datetime import datetime, timezone
@@ -47,12 +48,47 @@ async def _ingest_sales_message(message: dict[str, str]) -> None:
         logger.warning("Sales message %s has no valid sender; skipped", message.get("message_id", "unknown"))
         return
     body = (message.get("body") or "").strip()
-    if not body:
+    attachments = message.get("attachments") or []
+    if not body and not attachments:
         return
+    sender_email = sender.lower()
+    detail_request = re.search(
+        r"\b(certificate|certification|8130|easa|image|photo|shipping dimensions|dimensions|additional details|more information)\b",
+        f"{message.get('subject', '')} {body}",
+        re.IGNORECASE,
+    )
+    existing = next(
+        (
+            candidate for candidate in reversed(db_service.list_rfqs())
+            if candidate.customer_email.lower() == sender_email
+            and candidate.status in {"Quote_Sent", "Pending_PO_Review", "Purchase_Order_Received"}
+        ),
+        None,
+    )
+    if existing and detail_request:
+        quote = db_service.get_quote_by_rfq(existing.id)
+        if quote:
+            response = communication_service.send_customer_information_response(
+                recipient=sender,
+                customer_name=existing.customer_name,
+                quote_id=quote.id,
+                request_text=body,
+                reply_to=message.get("message_id") or existing.thread_id,
+            )
+            db_service.add_audit_log(
+                existing.id,
+                "CustomerCommunicationAgent",
+                "customer_detail_response",
+                "Sent an immediate threaded response to a customer quote-detail request.",
+                "SUCCESS",
+                json.dumps({"communication_id": response.get("communication_id"), "request": body[:500]}),
+            )
+            logger.info("Customer detail reply %s handled for RFQ %s", message.get("message_id", "unknown"), existing.id)
+            return
     rfq = db_service.create_rfq(
         customer_name=sender.split("@", 1)[0].replace(".", " ").title(),
         customer_email=sender,
-        raw_text=build_email_context(f"From: {sender}\nSubject: {message.get('subject', '')}\n\n{body}", message.get("attachments")),
+        raw_text=build_email_context(f"From: {sender}\nSubject: {message.get('subject', '')}\n\n{body}", attachments),
         thread_id=message.get("message_id") or None,
     )
     await orchestration_service.process_rfq_pipeline(rfq.id)
@@ -86,7 +122,10 @@ def run() -> None:
                 supplier_db.mark_communication_task_retry(task["id"], "scheduled communication dispatch failed")
                 logger.exception("Scheduled communication failed for task %s", task["id"])
 
-        for mailbox in ("sales", "purchasing"):
+        mailboxes = ["sales"]
+        if os.getenv("INVENTORY_INGESTION_WORKER_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
+            mailboxes.append("purchasing")
+        for mailbox in mailboxes:
             try:
                 messages = fetch_inbox_messages(mailbox)
                 logger.info("Mailbox %s: read %d message bodies", mailbox, len(messages))
@@ -96,7 +135,7 @@ def run() -> None:
                         logger.info("Mailbox %s skipped already processed message %s", mailbox, message_id)
                         continue
                     body = (message.get("body") or "").strip()
-                    if not body:
+                    if not body and not message.get("attachments"):
                         continue
                     email_text = (
                         f"From: {message.get('from', '')}\n"

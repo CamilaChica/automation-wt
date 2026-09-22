@@ -30,7 +30,8 @@ async function installApiRoutes(page: Page) {
     if (path.endsWith('/supplier-offers')) body = [];
     if (path.endsWith('/internal/shipments')) body = [];
     if (path.endsWith('/internal/automation-events')) body = [];
-    if (request.method() === 'POST') body = { rfq_id: 'WT-SMOKE', status: 'Pending_Internal_Review', message: 'ok' };
+    if (path.endsWith('/attachments')) body = { attachment_id: 'ATT-E2E-00000000', filename: 'euc.pdf', status: 'ACCEPTED' };
+    else if (request.method() === 'POST') body = { rfq_id: 'WT-SMOKE', status: 'Pending_Internal_Review', message: 'ok' };
 
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
   });

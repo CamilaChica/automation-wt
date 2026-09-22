@@ -130,6 +130,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         {/* Theme Toggle Switch */}
         <button
           onClick={onToggleTheme}
+          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
           title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} Mode`}
           className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800/80 text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:border-aero-blue transition-all"
         >

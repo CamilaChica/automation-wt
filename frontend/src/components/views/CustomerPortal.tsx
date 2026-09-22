@@ -14,7 +14,7 @@ export const CustomerPortal: React.FC = () => {
   const [quantity, setQuantity] = useState(1);
   const [details, setDetails] = useState('');
   const [agreementSigned, setAgreementSigned] = useState(false);
-  const [complianceFileName, setComplianceFileName] = useState<string | null>(null);
+  const [complianceFile, setComplianceFile] = useState<File | null>(null);
   const [trackingStatus, setTrackingStatus] = useState<string | null>(null);
   const [quoteId, setQuoteId] = useState('');
   const [poNumber, setPoNumber] = useState('');
@@ -55,10 +55,12 @@ export const CustomerPortal: React.FC = () => {
     }
     setIsSubmitting(true);
     try {
+      const attachmentIds = complianceFile ? [(await apiService.uploadAttachment(complianceFile)).attachment_id] : [];
       const response = await apiService.submitCustomerRFQ(
         `Customer request for P/N ${partNumber}, quantity ${quantity}. ${details}`,
         customerName,
-        customerEmail
+        customerEmail,
+        attachmentIds,
       );
       setNotice(`Request ${response.rfq_id} received. Our parts team will email ${customerEmail} with availability and pricing.`);
       setTrackingStatus('Processing Autonomous Fulfillment');
@@ -179,10 +181,10 @@ export const CustomerPortal: React.FC = () => {
                 <input
                   type="file"
                   accept=".pdf,application/pdf"
-                  onChange={event => setComplianceFileName(event.target.files?.[0]?.name ?? null)}
+                  onChange={event => setComplianceFile(event.target.files?.[0] ?? null)}
                   className="mt-2 block w-full text-xs text-slate-400"
                 />
-                {complianceFileName && <span className="mt-2 block text-xs text-emerald-300">Uploaded: {complianceFileName}</span>}
+                {complianceFile && <span className="mt-2 block text-xs text-emerald-300">Ready to upload: {complianceFile.name}</span>}
               </label>
               <label className="flex items-center gap-2 text-xs text-slate-300">
                 <input
@@ -194,7 +196,7 @@ export const CustomerPortal: React.FC = () => {
               </label>
               <button disabled={isSubmitting} className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-400 px-4 py-3 font-bold text-slate-950 hover:bg-cyan-300 disabled:opacity-60">{isSubmitting ? 'Sending request...' : 'Send request'} <ArrowRight className="h-4 w-4" /></button>
             </div>
-            {notice && <p className="mt-4 flex gap-2 rounded-xl bg-emerald-400/10 p-3 text-sm text-emerald-300"><CheckCircle2 className="h-5 w-5 shrink-0" />{notice}</p>}
+            {notice && <p role="status" aria-live="polite" className="mt-4 flex gap-2 rounded-xl bg-emerald-400/10 p-3 text-sm text-emerald-300"><CheckCircle2 className="h-5 w-5 shrink-0" />{notice}</p>}
             {trackingStatus && (
               <p className="mt-3 rounded-xl border border-cyan-400/40 bg-cyan-400/10 p-3 text-xs font-semibold text-cyan-300">
                 Tracking status: {trackingStatus}

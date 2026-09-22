@@ -1,6 +1,7 @@
 from typing import Dict, Any, List, Optional
 from agents.base_agent import BaseAgent, AgentMetadata, AgentResponse, EscalationRule
 from services.supplier_database import supplier_db
+from services.agents.prompts import SUPPLIER_COMMUNICATION_PROMPT
 
 
 class SupplierDiscoveryAgent(BaseAgent):
@@ -16,10 +17,7 @@ class SupplierDiscoveryAgent(BaseAgent):
             name="SupplierDiscoveryAgent",
             role="Strategic Supplier Sourcing Agent",
             objective="Query mock supplier networks to source parts and obtain pricing, availability, and certification details.",
-            system_instruction=(
-                "You search external supplier databases when parts are out of stock. Collect prices, quantity, lead times, and certification information. "
-                "If no suppliers have the part, escalate to human review."
-            ),
+            system_instruction=SUPPLIER_COMMUNICATION_PROMPT,
             input_schema={
                 "type": "object",
                 "properties": {

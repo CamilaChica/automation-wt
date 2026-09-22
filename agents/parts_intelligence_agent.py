@@ -2,6 +2,7 @@ import re
 from typing import Dict, Any, Optional
 from agents.base_agent import BaseAgent, AgentMetadata, AgentResponse, EscalationRule
 from tools.tool_interfaces import SearchPartsCatalogTool
+from services.agents.prompts import SOURCING_PROMPT
 
 # Part number must contain only alphanumeric characters and hyphens, minimum 3 chars
 _PN_FORMAT_REGEX = re.compile(r"^[A-Z0-9][A-Z0-9\-]{1,}[A-Z0-9]$")
@@ -30,14 +31,7 @@ class PartsIntelligenceAgent(BaseAgent):
                 "and a confidence score. Flag any unknown or ambiguous part numbers for "
                 "human review."
             ),
-            system_instruction=(
-                "Inspect part numbers from the validated RFQ. Standardize hyphenation, "
-                "spacing, and casing before lookup. Search the parts catalog for exact "
-                "matches first, then normalized/fuzzy matches, then alternate PNs. "
-                "Never assume compatibility — only return alternates explicitly listed in "
-                "the catalog entry. If multiple parts match ambiguously, halt for human "
-                "review. If the part is entirely unknown, flag it and escalate."
-            ),
+            system_instruction=SOURCING_PROMPT,
             input_schema={
                 "type": "object",
                 "properties": {

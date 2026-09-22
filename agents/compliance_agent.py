@@ -1,6 +1,7 @@
 from typing import Dict, Any, Optional, List, Tuple
 import datetime
 from agents.base_agent import BaseAgent, AgentMetadata, AgentResponse, EscalationRule
+from services.agents.prompts import COMPLIANCE_PROMPT
 
 class ComplianceAgent(BaseAgent):
     # Mock documentation records (in lieu of a real database)
@@ -39,11 +40,7 @@ class ComplianceAgent(BaseAgent):
             name="ComplianceAgent",
             role="Aviation Compliance & Quality Assurance Auditor",
             objective="Inspect part pedigree, trace documentation, and supplier regulatory compliance.",
-            system_instruction=(
-                "You audit part sources. Check certificate presence (e.g., FAA Form 8130-3, EASA Form 1). "
-                "Verify trace logs are intact. Flag unvetted suppliers or safety warnings. "
-                "If critical documents are missing or risk levels are high, halt for review."
-            ),
+            system_instruction=COMPLIANCE_PROMPT,
             input_schema={
                 "type": "object",
                 "properties": {

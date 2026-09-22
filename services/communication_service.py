@@ -424,6 +424,43 @@ class CommunicationService:
         )
         return result
 
+    def send_customer_information_response(
+        self,
+        *,
+        recipient: str,
+        customer_name: str,
+        quote_id: str,
+        request_text: str,
+        reply_to: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Reply in-thread to a customer asking for quote supporting details."""
+        quote = db_service.get_quote(quote_id)
+        if not quote:
+            raise ValueError(f"Quote {quote_id} was not found for customer response.")
+        items = db_service.get_quote_items(quote_id)
+        requested = request_text.strip() or "your requested supporting information"
+        item_lines = "\n".join(
+            f"- {item.part_number}: certification {item.certificate_type or 'available upon request'}, "
+            f"trace status {item.compliance_status}, lead time {item.lead_time_days if item.lead_time_days is not None else 'to be confirmed'} days"
+            for item in items
+        )
+        body = (
+            f"Dear {safe_display_text(customer_name)},\n\n"
+            f"Thank you for your follow-up regarding quotation {quote_id}. We received your request for: {requested}\n\n"
+            "The currently approved information is:\n"
+            f"{item_lines or '- Supporting quote details are available from our sales team.'}\n\n"
+            "We will provide any additional certificate copies, images, or shipping dimensions that are available in the same email thread. "
+            "Please let us know if you need a specific document or delivery detail.\n\n"
+            "Kind regards,\nWinged Tycoons Aviation Team"
+        )
+        return self._send(
+            "sales",
+            recipient,
+            f"Re: Quotation {quote_id} - requested details",
+            body,
+            reply_to=reply_to,
+        )
+
     def schedule_customer_followup(
         self,
         recipient: str,

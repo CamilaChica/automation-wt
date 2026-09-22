@@ -21,6 +21,25 @@ export const TraceVaultView: React.FC = () => {
   const [hardFreezeEnabled, setHardFreezeEnabled] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [decisionLoading, setDecisionLoading] = useState(false);
+
+  const recordDecision = async (decision: 'certify' | 'reject' | 'rescan' | 'freeze') => {
+    if (!activeTab) {
+      setNotice('Select an RFQ before recording a trace decision.');
+      return;
+    }
+    setDecisionLoading(true);
+    try {
+      await apiService.recordTraceDecision(activeTab, decision);
+      setVerificationPassed(decision === 'certify');
+      setHardFreezeEnabled(decision === 'freeze');
+      setNotice(`Trace decision ${decision} recorded for ${activeTab}.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Unable to record trace decision.');
+    } finally {
+      setDecisionLoading(false);
+    }
+  };
 
   const loadRfqs = async () => {
     setLoading(true);
@@ -220,34 +239,31 @@ export const TraceVaultView: React.FC = () => {
           {/* Action Buttons */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 font-display pt-2">
             <button
-              onClick={() => {
-                setVerificationPassed(true);
-                setHardFreezeEnabled(false);
-              }}
+              type="button"
+              disabled={decisionLoading}
+              onClick={() => void recordDecision('certify')}
               className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 text-xs"
             >
               <CheckCircle2 className="w-4 h-4" />
               <span>ACCEPT & CERTIFY</span>
             </button>
             <button
-              onClick={() => {
-                setVerificationPassed(false);
-                setHardFreezeEnabled(false);
-              }}
+              type="button"
+              disabled={decisionLoading}
+              onClick={() => void recordDecision('reject')}
               className="bg-red-500 hover:bg-red-600 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-red-500/20 flex items-center justify-center space-x-2 text-xs"
             >
               <XCircle className="w-4 h-4" />
               <span>REJECT DOC</span>
             </button>
-            <button onClick={() => setNotice('Document re-scan requested. Backend OCR processing is not yet connected to this view.')} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 text-xs">
+            <button type="button" disabled={decisionLoading} onClick={() => void recordDecision('rescan')} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 text-xs">
               <FileSearch className="w-4 h-4" />
               <span>REQUEST RE-SCAN</span>
             </button>
             <button
-              onClick={() => {
-                setVerificationPassed(false);
-                setHardFreezeEnabled(true);
-              }}
+              type="button"
+              disabled={decisionLoading}
+              onClick={() => void recordDecision('freeze')}
               className="bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 px-4 rounded-xl border border-red-500/60 flex items-center justify-center space-x-2 text-xs"
             >
               <AlertOctagon className="w-4 h-4 text-red-300" />

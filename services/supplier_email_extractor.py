@@ -41,6 +41,10 @@ class SupplierEmailExtractor:
         certificate = self._extract_certificate(normalized)
         lead_time_days = self._extract_lead_time(normalized)
         condition = self._extract_condition(normalized)
+        description = self._extract_labeled_value(normalized, "description|part description")
+        availability_location = self._extract_labeled_value(normalized, "location|warehouse|ship from")
+        warranty_terms = self._extract_labeled_value(normalized, "warranty|guarantee")
+        trace_documents = [certificate] if certificate else []
 
         return {
             "supplier_name": supplier_name,
@@ -51,9 +55,17 @@ class SupplierEmailExtractor:
             "certificate_type": certificate or "FAA 8130-3",
             "lead_time_days": lead_time_days or 3,
             "condition_code": condition or "NE",
+            "description": description,
+            "availability_location": availability_location,
+            "warranty_terms": warranty_terms,
+            "trace_documents": trace_documents,
             "approval_status": "Approved",
             "confidence": 0.96,
         }
+
+    def _extract_labeled_value(self, text: str, labels: str) -> Optional[str]:
+        match = re.search(rf"(?:{labels})\s*[:=-]\s*([^\r\n]+)", text, flags=re.IGNORECASE)
+        return match.group(1).strip() if match else None
 
     def _validate_quote_signal(self, text: str) -> None:
         lowered = text.lower()
@@ -169,7 +181,8 @@ class SupplierEmailExtractor:
         for pattern in explicit_patterns:
             match = re.search(pattern, text, flags=re.IGNORECASE)
             if match:
-                candidate = re.sub(r"\s*[-]\s*", "-", match.group(1)).upper()
+                raw_candidate = re.split(r"\s+-\s+", match.group(1), maxsplit=1)[0]
+                candidate = re.sub(r"\s*[-]\s*", "-", raw_candidate).upper()
                 if valid_candidate(candidate):
                     return candidate
 
