@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 from alembic import context
 from sqlalchemy import pool
@@ -10,6 +13,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from models.async_models import Base
 
 config = context.config
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 if os.getenv("DATABASE_URL"):
     config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"].replace("postgresql://", "postgresql+asyncpg://", 1))
 target_metadata = Base.metadata
