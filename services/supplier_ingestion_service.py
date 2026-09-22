@@ -14,7 +14,7 @@ class SupplierEmailIngestionService:
         self.extractor = SupplierEmailExtractor()
         self.llm_router = LLMRouter()
 
-    def ingest_email(self, email_text: str, mailbox: str = "purchasing", message_id: Optional[str] = None) -> Dict[str, Any]:
+    def ingest_email(self, email_text: str, mailbox: str = "purchasing", message_id: Optional[str] = None, attachments: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         try:
             extracted = self.extractor.extract(email_text)
             try:
@@ -22,6 +22,7 @@ class SupplierEmailIngestionService:
                     email_text,
                     task="supplier_quote_extraction",
                     router=self.llm_router,
+                    attachments=attachments,
                 )
                 if llm_data.items:
                     item = llm_data.items[0]

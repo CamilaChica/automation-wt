@@ -17,6 +17,7 @@ from services.communication_service import communication_service
 from services.supplier_database import supplier_db
 from services.db_service import db_service
 from services.orchestration_service import orchestration_service
+from services.document_parser import build_email_context
 from scripts.backup_sqlite import main as backup_sqlite
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -51,7 +52,7 @@ async def _ingest_sales_message(message: dict[str, str]) -> None:
     rfq = db_service.create_rfq(
         customer_name=sender.split("@", 1)[0].replace(".", " ").title(),
         customer_email=sender,
-        raw_text=f"From: {sender}\nSubject: {message.get('subject', '')}\n\n{body}",
+        raw_text=build_email_context(f"From: {sender}\nSubject: {message.get('subject', '')}\n\n{body}", message.get("attachments")),
         thread_id=message.get("message_id") or None,
     )
     await orchestration_service.process_rfq_pipeline(rfq.id)
@@ -107,7 +108,7 @@ def run() -> None:
                         if message_id:
                             supplier_db.save_email(mailbox, message_id, message.get("from", ""), message.get("subject", ""), body)
                         continue
-                    result = loader.load_raw_email_text(email_text, mailbox=mailbox, message_id=message_id or None)
+                    result = loader.load_raw_email_text(email_text, mailbox=mailbox, message_id=message_id or None, attachments=message.get("attachments"))
                     logger.info("Mailbox %s processed message %s -> %s", mailbox, message_id, result)
                     if result.get("success") and mailbox == "purchasing":
                         sender = message.get("from", "")

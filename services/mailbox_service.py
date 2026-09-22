@@ -7,6 +7,7 @@ authentication is disabled by Microsoft 365.
 """
 
 import email
+import base64
 import imaplib
 import os
 import re
@@ -40,6 +41,21 @@ def _extract_body_from_message(message: email.message.Message) -> str:
     if payload:
         return payload.decode(errors="ignore")
     return message.get_payload() or ""
+
+
+def _extract_attachments_from_message(message: email.message.Message) -> list[dict[str, object]]:
+    attachments = []
+    for part in message.walk():
+        filename = part.get_filename()
+        content = part.get_payload(decode=True)
+        if not filename or not content:
+            continue
+        attachments.append({
+            "filename": filename,
+            "content_type": part.get_content_type(),
+            "content": content,
+        })
+    return attachments
 
 
 @dataclass(frozen=True)
@@ -118,7 +134,7 @@ def _fetch_graph_inbox_messages(mailbox: str, limit: int = 25) -> list[dict[str,
     cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat().replace("+00:00", "Z")
     url = (
         f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/messages"
-        f"?$top={limit}&$filter=receivedDateTime ge {cutoff}&$orderby=receivedDateTime desc"
+        f"?$top={limit}&$select=id,from,subject,receivedDateTime,hasAttachments&$filter=receivedDateTime ge {cutoff}&$orderby=receivedDateTime desc"
     )
     response = requests.get(url, headers=headers, timeout=30)
     response.raise_for_status()
@@ -134,8 +150,31 @@ def _fetch_graph_inbox_messages(mailbox: str, limit: int = 25) -> list[dict[str,
             "subject": item.get("subject", ""),
             "date": item.get("receivedDateTime") or item.get("sentDateTime", ""),
             "body": body,
+            "attachments": _fetch_graph_attachments(mailbox_user, str(item.get("id", "")), token) if item.get("hasAttachments") else [],
         })
     return results
+
+
+def _fetch_graph_attachments(mailbox_user: str, message_id: str, token: str) -> list[dict[str, object]]:
+    if not message_id:
+        return []
+    response = requests.get(
+        f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/messages/{message_id}/attachments",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    attachments = []
+    for item in response.json().get("value", []):
+        content = item.get("contentBytes")
+        if not content:
+            continue
+        attachments.append({
+            "filename": item.get("name", "attachment"),
+            "content_type": item.get("contentType", "application/octet-stream"),
+            "content": base64.b64decode(content),
+        })
+    return attachments
 
 
 def fetch_inbox_messages(mailbox: str, limit: int = 25) -> list[dict[str, str]]:
@@ -178,6 +217,7 @@ def fetch_inbox_messages(mailbox: str, limit: int = 25) -> list[dict[str, str]]:
                 "subject": message.get("Subject", ""),
                 "date": message.get("Date", ""),
                 "body": body,
+                "attachments": _extract_attachments_from_message(message),
             })
         return results
     finally:
