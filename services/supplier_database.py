@@ -107,6 +107,8 @@ class SupplierDatabase:
                     due_at TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'pending',
                     attempts INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL DEFAULT 5,
+                    last_error TEXT,
                     created_at TEXT NOT NULL,
                     sent_at TEXT
                 );
@@ -119,6 +121,8 @@ class SupplierDatabase:
                 ("availability_location", "TEXT"),
                 ("warranty_terms", "TEXT"),
                 ("trace_documents", "TEXT"),
+                ("max_attempts", "INTEGER NOT NULL DEFAULT 5"),
+                ("last_error", "TEXT"),
             ):
                 existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(supplier_parts)")}
                 if column not in existing_columns:
@@ -296,10 +300,35 @@ class SupplierDatabase:
 
     def mark_communication_task_failed(self, task_id: str) -> None:
         with self._connection() as conn:
+            row = conn.execute("SELECT attempts, max_attempts FROM communication_tasks WHERE id = ?", (task_id,)).fetchone()
+            if not row:
+                return
+            next_attempt = int(row["attempts"] or 0) + 1
+            status = "dead_letter" if next_attempt >= int(row["max_attempts"] or 5) else "pending"
             conn.execute(
-                "UPDATE communication_tasks SET status = 'failed', attempts = attempts + 1 WHERE id = ?",
-                (task_id,),
+                "UPDATE communication_tasks SET status = ?, attempts = ?, last_error = ? WHERE id = ?",
+                (status, next_attempt, "dispatch failed", task_id),
             )
+
+    def mark_communication_task_retry(self, task_id: str, error: str) -> None:
+        """Requeue transient failures; move exhausted tasks to the DLQ."""
+        with self._connection() as conn:
+            row = conn.execute("SELECT attempts, max_attempts FROM communication_tasks WHERE id = ?", (task_id,)).fetchone()
+            if not row:
+                return
+            next_attempt = int(row["attempts"] or 0) + 1
+            status = "dead_letter" if next_attempt >= int(row["max_attempts"] or 5) else "pending"
+            conn.execute(
+                "UPDATE communication_tasks SET status = ?, attempts = ?, last_error = ? WHERE id = ?",
+                (status, next_attempt, str(error)[:1000], task_id),
+            )
+
+    def list_dead_letter_tasks(self) -> List[Dict[str, Any]]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM communication_tasks WHERE status = 'dead_letter' ORDER BY created_at DESC"
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def cancel_communication_task(self, task_key: str) -> None:
         with self._connection() as conn:

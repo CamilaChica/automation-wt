@@ -83,7 +83,7 @@ def run() -> None:
                 else:
                     logger.info("Dry-run scheduled %s communication retained for delivery", task["task_type"])
             except Exception:
-                supplier_db.mark_communication_task_failed(task["id"])
+                supplier_db.mark_communication_task_retry(task["id"], "scheduled communication dispatch failed")
                 logger.exception("Scheduled communication failed for task %s", task["id"])
 
         for mailbox in ("sales", "purchasing"):
