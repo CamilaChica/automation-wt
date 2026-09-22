@@ -82,6 +82,18 @@ def _send_or_preview(action: dict[str, Any], send_live: bool, confirm_live_dispa
     return action
 
 
+def _is_external_supplier_recipient(value: str) -> bool:
+    address = str(value or "").strip().lower()
+    if "@" not in address:
+        return False
+    local, domain = address.split("@", 1)
+    return (
+        local not in {"mailer-daemon", "postmaster", "noreply", "no-reply"}
+        and not domain.endswith("wingedtycoons.com")
+        and not domain.endswith("onmicrosoft.com")
+    )
+
+
 def run_purchasing(args: argparse.Namespace) -> dict[str, Any]:
     cutoff = datetime.now(timezone.utc) - _parse_window(args.window)
     messages = fetch_inbox_messages("purchasing", limit=args.limit)
@@ -102,7 +114,7 @@ def run_purchasing(args: argparse.Namespace) -> dict[str, Any]:
         if result.get("success"):
             missing = _missing_supplier_fields(email_text, result)
             record["missing_fields"] = missing
-            if missing and "@" in str(message.get("from", "")):
+            if missing and _is_external_supplier_recipient(str(message.get("from", ""))):
                 action = {
                     "recipient": message["from"],
                     "subject": f"Re: Quote request {result.get('part_number', '')} - information required",
