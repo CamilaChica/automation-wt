@@ -8,7 +8,7 @@ LIVE_API_URL = os.getenv("LIVE_API_URL", "").rstrip("/")
 LIVE_API_TOKEN = os.getenv("LIVE_API_TOKEN", "")
 
 
-class TestLiveRFQIntake(unittest.TestCase):
+class TestLiveAOGIntake(unittest.TestCase):
     def test_live_aog_rfq_intake_returns_non_failed_status(self):
         if not LIVE_API_URL or not LIVE_API_TOKEN:
             self.skipTest("Set LIVE_API_URL and LIVE_API_TOKEN to run the deployed AOG intake smoke test.")

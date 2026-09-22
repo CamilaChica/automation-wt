@@ -34,6 +34,16 @@ This runbook is an operational checklist, not a substitute for deployment, legal
 - Privacy policy, terms, retention, and export-control procedures are published
 - Rollback owner and incident contact are assigned
 
+## Deferred Production Cutovers
+
+Complete and verify these environment-gated cutovers from the Render/production shell before enabling production traffic:
+
+1. Apply PostgreSQL schema migrations with `alembic upgrade head`.
+2. Configure active Microsoft Graph mailbox credentials: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_SECRET` (or the equivalent deployment secret names).
+3. Implement and configure the planned durable cloud attachment storage integration in `services/storage.py`, then verify upload/download behavior against the production bucket or container.
+4. Configure production Twilio credentials: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM_NUMBER`.
+5. Run `/ready` and the production smoke tests after each cutover; keep outbound email and autonomous dispatch disabled until the corresponding verification passes.
+
 ## Rollback
 
 1. Disable autonomous dispatch and outbound email.
