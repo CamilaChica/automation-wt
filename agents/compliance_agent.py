@@ -99,6 +99,7 @@ class ComplianceAgent(BaseAgent):
         trace_issue = False
         requirement_issue = False
         sanctions_issue = False
+        documentation_issue = False
         # Retrieve mock document record for the part
         record = next((doc for doc in self.MOCK_DOCUMENTS if doc["part_number"] == part_number), None)
         if not record:
@@ -127,12 +128,16 @@ class ComplianceAgent(BaseAgent):
                     or "blacklist" in supplier_identity
                     or supplier_name in {"Suspect Supplier Corp", "Blacklisted Co", "Blacklist Spares"}
                 )
+                if supplier_blocked:
+                    issues.append(f"Supplier '{supplier_name}' is not approved.")
+                    sanctions_issue = True
                 if source == "Supplier" and cert_type in valid_certs and has_trace and not supplier_blocked:
                     # A new supplier offer can be compliant before catalog enrichment;
                     # require explicit certificate and trace evidence rather than inventing catalog data.
                     pass
                 else:
                     issues.append(f"No documentation found for part number {part_number}.")
+                    documentation_issue = True
         else:
             # Supplier approval check
             if not record.get("supplier_approved", False):
@@ -164,7 +169,7 @@ class ComplianceAgent(BaseAgent):
             compliance_status = "APPROVED"
         elif sanctions_issue:
             compliance_status = "REJECTED"
-        elif (trace_issue and len(issues) == 1) or requirement_issue:
+        elif (trace_issue and len(issues) == 1) or requirement_issue or documentation_issue:
             compliance_status = "HUMAN_REVIEW_REQUIRED"
         else:
             compliance_status = "REJECTED"

@@ -1,9 +1,9 @@
 services:
   - type: web
-    name: winged-api
+    name: backend
     runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python run_service.py
+    buildCommand: pip install -r requirements.txt && alembic upgrade head
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /ready
     autoDeploy: true
     disk:
@@ -11,6 +11,8 @@ services:
       mountPath: /var/data
       sizeGB: 10
     envVars:
+      - key: WT_ENV
+        value: "production"
       - key: WT_AUTH_ENV
         value: "production"
       - key: WT_AUTH_SECRET
@@ -30,6 +32,26 @@ services:
       - key: AZURE_CLIENT_SECRET
         sync: false
       - key: GRAPH_MAILBOX_USER
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: MICROSOFT_TENANT_ID
+        sync: false
+      - key: MICROSOFT_CLIENT_ID
+        sync: false
+      - key: MICROSOFT_CLIENT_SECRET
+        sync: false
+      - key: MICROSOFT_MAILBOX_ADDRESS
+        sync: false
+      - key: AWS_S3_BUCKET_NAME
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_REGION
+        value: "us-east-1"
+      - key: TWILIO_FROM_PHONE_NUMBER
         sync: false
       - key: EMAIL_SEND_ENABLED
         value: "true"
@@ -96,6 +118,15 @@ services:
       - key: FRONTEND_ORIGIN
         value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com,https://rfq.wingedtycoons.com"
 
+  - type: static
+    name: frontend
+    buildCommand: npm --prefix frontend install && npm --prefix frontend run build
+    staticPublishPath: frontend/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
   - type: worker
     name: winged-worker
     runtime: python
@@ -157,23 +188,3 @@ services:
       - key: AZURE_STORAGE_CONTAINER
         value: "winged-tycoons-backups"
 
-  - type: web
-    name: winged-customer-web-2
-    runtime: node
-    rootDir: apps/web
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NEXT_PUBLIC_API_URL
-        sync: false
-      - key: NEXT_PUBLIC_SITE_URL
-        value: "https://rfq.wingedtycoons.com"
-      - key: NEXT_PUBLIC_APP_NAME
-        value: "Winged Tycoons"
-      - key: NODE_ENV
-        value: "production"
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /

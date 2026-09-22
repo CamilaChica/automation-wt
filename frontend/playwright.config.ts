@@ -29,5 +29,10 @@ export default defineConfig({
       testDir: './tests/e2e-ui',
       use: { ...devices['Desktop Chrome'] },
     },
+    {
+      name: 'ui-gadgets',
+      testDir: './e2e',
+      use: { ...devices['Desktop Chrome'] },
+    },
   ],
 });

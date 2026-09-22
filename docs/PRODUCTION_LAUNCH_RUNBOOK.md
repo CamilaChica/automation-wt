@@ -40,8 +40,8 @@ Complete and verify these environment-gated cutovers from the Render/production 
 
 1. Apply PostgreSQL schema migrations with `alembic upgrade head`.
 2. Configure active Microsoft Graph mailbox credentials: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_SECRET` (or the equivalent deployment secret names).
-3. Implement and configure the planned durable cloud attachment storage integration in `services/storage.py`, then verify upload/download behavior against the production bucket or container.
-4. Configure production Twilio credentials: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM_NUMBER`.
+3. Configure AWS S3 attachment storage with `AWS_S3_BUCKET_NAME`, `AWS_ACCESS_KEY_ID`, and `AWS_SECRET_ACCESS_KEY`, then verify upload/download behavior through `services/storage.py`.
+4. Configure production Twilio credentials: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM_PHONE_NUMBER`.
 5. Run `/ready` and the production smoke tests after each cutover; keep outbound email and autonomous dispatch disabled until the corresponding verification passes.
 
 ## Rollback

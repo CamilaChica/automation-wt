@@ -15,7 +15,7 @@ class TwilioService:
     def __init__(self):
         self.account_sid = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
         self.auth_token = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
-        self.from_number = os.getenv("TWILIO_FROM_NUMBER", "").strip()
+        self.from_number = os.getenv("TWILIO_FROM_PHONE_NUMBER", os.getenv("TWILIO_FROM_NUMBER", "")).strip()
         self.enabled = os.getenv("TWILIO_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
         self.base_url = os.getenv("TWILIO_BASE_URL", "https://api.twilio.com/2010-04-01").rstrip("/")
 
@@ -37,7 +37,7 @@ class TwilioService:
 
         if not self.account_sid or not self.auth_token or not self.from_number:
             raise RuntimeError(
-                "TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER are required when Twilio is enabled."
+                "TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_PHONE_NUMBER are required when Twilio is enabled."
             )
         self._validate_phone(self.from_number)
         response = requests.post(

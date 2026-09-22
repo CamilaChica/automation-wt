@@ -176,7 +176,13 @@ class CommunicationService:
         recipients = [supplier.get("email") for supplier in supplier_db.list_suppliers() if supplier.get("email")]
         configured = os.getenv("SUPPLIER_REQUEST_RECIPIENTS", "")
         recipients.extend(address.strip() for address in configured.split(",") if address.strip())
-        recipients = list(dict.fromkeys(recipients))
+        recipients = [
+            address for address in dict.fromkeys(recipients)
+            if address and "@" in address
+            and address.split("@", 1)[0].lower() not in {"mailer-daemon", "postmaster", "noreply", "no-reply"}
+            and not address.lower().endswith("@wingedtycoons.com")
+            and not address.lower().endswith("@onmicrosoft.com")
+        ]
         results = []
         for recipient in recipients:
             supplier_contact = next(

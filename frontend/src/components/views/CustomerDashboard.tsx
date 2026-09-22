@@ -944,7 +944,7 @@ export const CustomerDashboard: React.FC = () => {
               </div>
 
               <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
-                <button className="w-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-display font-bold py-2 rounded-xl text-xs flex items-center justify-center space-x-1.5 hover:opacity-90 transition-opacity">
+                <button type="button" onClick={() => window.open('https://www.flightaware.com/', '_blank', 'noopener,noreferrer')} className="w-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-display font-bold py-2 rounded-xl text-xs flex items-center justify-center space-x-1.5 hover:opacity-90 transition-opacity">
                   <ExternalLink className="w-3.5 h-3.5" />
                   <span>Open Carrier Live Radar (FlightAware)</span>
                 </button>

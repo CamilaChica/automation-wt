@@ -13,6 +13,7 @@ from agents.pricing_agent import PricingAgent
 from agents.quote_generation_agent import QuoteGenerationAgent
 from agents.customer_communication_agent import CustomerCommunicationAgent
 from services.communication_service import communication_service
+from services.storage import storage_service
 
 
 def _lead_time_days(value: Any) -> Optional[int]:
@@ -30,6 +31,7 @@ def _is_partsbase_rfq(rfq: Any) -> bool:
 
 class OrchestrationService:
     def __init__(self):
+        self.storage = storage_service
         self.intake_agent = RFQIntakeAgent()
         self.parts_intel_agent = PartsIntelligenceAgent()
         self.inventory_agent = InventoryAgent()
@@ -493,10 +495,15 @@ class OrchestrationService:
 
             status = "Quote_Sent"
             if context["has_low_margin_escalation"]:
+                margin_rule_payload = (
+                    context["margin_esc_rule"].model_dump()
+                    if hasattr(context["margin_esc_rule"], "model_dump")
+                    else context["margin_esc_rule"]
+                )
                 db_service.add_audit_log(
                     rfq_id, "PricingAgent", "low_margin_autonomous_dispatch",
                     "Quote dispatched autonomously despite low-margin escalation; PO review remains human-gated.",
-                    "WARNING", json.dumps(context["margin_esc_rule"]),
+                    "WARNING", json.dumps(margin_rule_payload),
                 )
             db_service.add_audit_log(
                 rfq_id, "CustomerCommunicationAgent", "email_dispatch",

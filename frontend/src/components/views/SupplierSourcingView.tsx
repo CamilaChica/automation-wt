@@ -17,6 +17,7 @@ export const SupplierSourcingView: React.FC = () => {
   const [selectedRfqId, setSelectedRfqId] = useState<string | null>(null);
   const [liveOffers, setLiveOffers] = useState<any[]>([]);
   const [activeRfqs, setActiveRfqs] = useState<any[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     void apiService.getSupplierOffers(selectedPn).then(setLiveOffers).catch(() => setLiveOffers([]));
@@ -44,6 +45,7 @@ export const SupplierSourcingView: React.FC = () => {
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
+      {notice && <div role="status" className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
       {/* Top Row: Global Sourcing Matrix & Part Sourcing Terminal & Performance */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column (5 cols): GLOBAL SOURCING MATRIX */}
@@ -89,7 +91,7 @@ export const SupplierSourcingView: React.FC = () => {
                       </div>
                     </td>
                     <td className="py-2.5 text-right">
-                      <button className="bg-blue-50 dark:bg-aero-blue/20 hover:bg-aero-blue text-aero-blue hover:text-white px-2.5 py-1 rounded-lg text-[10px] font-semibold border border-blue-200 dark:border-aero-blue/40 transition-colors">
+                      <button type="button" onClick={() => setSelectedRfqId(rfq.id)} className="bg-blue-50 dark:bg-aero-blue/20 hover:bg-aero-blue text-aero-blue hover:text-white px-2.5 py-1 rounded-lg text-[10px] font-semibold border border-blue-200 dark:border-aero-blue/40 transition-colors">
                         View Sourcing
                       </button>
                     </td>
@@ -147,14 +149,14 @@ export const SupplierSourcingView: React.FC = () => {
 
           {/* Sourcing Action Triggers */}
           <div className="grid grid-cols-3 gap-2 pt-2">
-            <button className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2 px-2 rounded-xl text-[10px] flex items-center justify-center space-x-1 shadow-sm">
+            <button type="button" onClick={() => setNotice(`Added ${selectedPn} to the active quote.`)} className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2 px-2 rounded-xl text-[10px] flex items-center justify-center space-x-1 shadow-sm">
               <PlusCircle className="w-3 h-3" />
               <span>ADD TO QUOTE</span>
             </button>
-            <button className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2 px-2 rounded-xl text-[10px] border border-slate-200 dark:border-slate-700">
+            <button type="button" onClick={() => setNotice(`Purchase order workflow opened for ${selectedPn}.`)} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2 px-2 rounded-xl text-[10px] border border-slate-200 dark:border-slate-700">
               ISSUE PO
             </button>
-            <button className="bg-amber-50 dark:bg-amber-600/20 hover:bg-amber-100 text-amber-700 dark:text-amber-300 font-bold py-2 px-2 rounded-xl text-[10px] border border-amber-200 dark:border-amber-500/40">
+            <button type="button" onClick={() => setNotice(`Document audit opened for ${selectedPn}.`)} className="bg-amber-50 dark:bg-amber-600/20 hover:bg-amber-100 text-amber-700 dark:text-amber-300 font-bold py-2 px-2 rounded-xl text-[10px] border border-amber-200 dark:border-amber-500/40">
               DOC AUDIT
             </button>
           </div>
@@ -236,7 +238,7 @@ export const SupplierSourcingView: React.FC = () => {
                     {item.cond}
                   </span>
                   <span className="font-bold text-slate-900 dark:text-slate-100">{item.price}</span>
-                  <button className="bg-aero-blue hover:bg-blue-600 text-white px-3 py-1 rounded-xl text-[10px] font-bold shadow-sm transition-colors">
+                  <button type="button" onClick={() => setNotice(`Added ${item.pn} from ${item.supplier} to the working quote.`)} className="bg-aero-blue hover:bg-blue-600 text-white px-3 py-1 rounded-xl text-[10px] font-bold shadow-sm transition-colors">
                     Quick-Add
                   </button>
                 </div>

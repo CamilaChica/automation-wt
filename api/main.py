@@ -12,6 +12,9 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request, R
 from fastapi.responses import FileResponse
 
 load_dotenv()
+from config.env_check import validate_production_environment
+
+validate_production_environment()
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from models.db_models import RFQ, RFQItem, Quote, QuoteItem, AgentAuditLog, Supplier
@@ -342,7 +345,7 @@ async def ready():
         db_service.list_rfqs()
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"database not ready: {exc}") from exc
-    return {"status": "ready"}
+    return {"status": "ready", "database": {"healthy": True}}
 
 
 @app.get("/api/attachments/{attachment_id}")

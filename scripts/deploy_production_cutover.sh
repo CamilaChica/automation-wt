@@ -4,6 +4,12 @@ set -euo pipefail
 # Run this from the Render API Shell, where the private PostgreSQL hostname resolves.
 # Secrets are validated by presence only and never printed.
 
+if [ -f .env ]; then
+  set -a
+  . ./.env
+  set +a
+fi
+
 python scripts/verify_production_env.py
 alembic upgrade head
 python scripts/seed_aviation_parts.py

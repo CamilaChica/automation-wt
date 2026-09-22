@@ -15,6 +15,8 @@ export const FulfillmentHubView: React.FC = () => {
   const [shipments, setShipments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [airworthinessVerified, setAirworthinessVerified] = useState(true);
 
   const loadShipments = async () => {
     setLoading(true);
@@ -32,6 +34,7 @@ export const FulfillmentHubView: React.FC = () => {
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
+      {notice && <div role="status" className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
       {/* Stage Progress Breadcrumb Tracker */}
       <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between font-mono text-[11px] gap-2">
@@ -163,7 +166,7 @@ export const FulfillmentHubView: React.FC = () => {
               </div>
             </div>
 
-            <button className="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-display font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 transition-colors">
+            <button type="button" onClick={() => setNotice('ATA 300 packaging tags queued for printing.')} className="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-display font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 transition-colors">
               <Printer className="w-4 h-4 text-aero-blue" />
               <span>PRINT ATA 300 CAT I TAGS</span>
             </button>
@@ -185,9 +188,9 @@ export const FulfillmentHubView: React.FC = () => {
           <div className="space-y-3 font-mono text-[11px]">
             <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-900/80 p-3 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200">
               <span className="font-semibold">Verified Airworthiness</span>
-              <div className="w-9 h-5 bg-emerald-500 rounded-full flex items-center justify-end p-0.5 cursor-pointer">
+              <button type="button" aria-label="Toggle verified airworthiness" aria-pressed={airworthinessVerified} onClick={() => setAirworthinessVerified(value => !value)} className={`w-9 h-5 rounded-full flex items-center p-0.5 cursor-pointer transition-colors ${airworthinessVerified ? 'bg-emerald-500 justify-end' : 'bg-slate-400 justify-start'}`}>
                 <div className="w-4 h-4 rounded-full bg-white shadow" />
-              </div>
+              </button>
             </div>
 
             <div className="bg-slate-50 dark:bg-slate-900/80 p-3 rounded-xl border border-slate-200 dark:border-slate-800 space-y-1">
@@ -195,7 +198,7 @@ export const FulfillmentHubView: React.FC = () => {
               <div className="text-emerald-700 dark:text-emerald-400 font-bold">DIGITAL TAMPER-EVIDENT STAMPS</div>
             </div>
 
-            <button className="w-full bg-blue-50 hover:bg-blue-100 dark:bg-aero-blue/20 dark:hover:bg-aero-blue text-aero-blue dark:text-aero-blue dark:hover:text-white border border-blue-200 dark:border-aero-blue/40 font-bold py-2.5 px-3 rounded-xl text-xs transition-colors">
+            <button type="button" onClick={() => setNotice('Serialized tamper-evident stamps queued for the compliance packet.')} className="w-full bg-blue-50 hover:bg-blue-100 dark:bg-aero-blue/20 dark:hover:bg-aero-blue text-aero-blue dark:text-aero-blue dark:hover:text-white border border-blue-200 dark:border-aero-blue/40 font-bold py-2.5 px-3 rounded-xl text-xs transition-colors">
               SERIALIZED TAMPER-EVIDENT STAMPS
             </button>
 
