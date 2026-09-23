@@ -81,6 +81,26 @@ class InventoryIngestionWorker:
         finally:
             await engine.dispose()
 
+    def _resume_waiting_rfqs(self, part_number: str) -> None:
+        if not part_number:
+            return
+        from services.db_service import db_service
+        from services.orchestration_service import orchestration_service
+
+        for rfq in db_service.list_rfqs():
+            if rfq.status != "Supplier_Sourcing":
+                continue
+            if not any(
+                (item.resolved_part_number or item.requested_part_number).upper() == part_number.upper()
+                for item in db_service.get_rfq_items(rfq.id)
+            ):
+                continue
+            try:
+                pipeline_result = asyncio.run(orchestration_service.process_rfq_pipeline(rfq.id))
+                logger.info("Resumed RFQ %s after supplier update for %s -> %s", rfq.id, part_number, pipeline_result.get("status"))
+            except Exception:
+                logger.exception("Failed to resume RFQ %s after supplier update for %s", rfq.id, part_number)
+
     def process_message(self, message: dict[str, Any]) -> dict[str, Any]:
         message_id = str(message.get("message_id") or "").strip()
         if message_id and supplier_db.is_email_processed(self.mailbox, message_id):
@@ -95,6 +115,31 @@ class InventoryIngestionWorker:
             message_id=message_id or None,
             attachments=message.get("attachments") or [],
         )
+        if not result.get("success") and "No part number detected" in str(result.get("error")):
+            pdf_attachments = [
+                attachment for attachment in message.get("attachments") or []
+                if str(attachment.get("content_type", "")).lower() == "application/pdf"
+                or str(attachment.get("filename", "")).lower().endswith(".pdf")
+            ]
+            sender = str(message.get("from") or "").strip()
+            if pdf_attachments and "@" in sender:
+                communication_service.request_supplier_body_quote(
+                    recipient=sender,
+                    part_reference=str(message.get("subject") or "supplier quotation"),
+                    reply_to=message_id or None,
+                )
+                supplier_db.save_email(
+                    mailbox=self.mailbox,
+                    message_id=message_id or f"unreadable-pdf-{time.time_ns()}",
+                    sender=sender,
+                    subject=str(message.get("subject") or ""),
+                    body=body,
+                )
+                result = {
+                    **result,
+                    "success": False,
+                    "status": "Unreadable_PDF_Clarification_Sent",
+                }
         mirror_warning = None
         if result.get("success"):
             try:
@@ -115,6 +160,7 @@ class InventoryIngestionWorker:
                     reply_to=message_id or None,
                     quantity=int(result.get("quantity_available") or 1),
                 )
+            self._resume_waiting_rfqs(str(result.get("part_number") or ""))
         response = {"message_id": message_id, "result": result, "success": bool(result.get("success"))}
         if mirror_warning:
             response["persistence_warning"] = mirror_warning

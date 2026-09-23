@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-DB_PATH = Path(os.getenv("SUPPLIER_DATABASE_PATH", str(Path(__file__).resolve().parent.parent / "data" / "supplier_email_store.db")))
+DEFAULT_DATA_ROOT = Path(os.getenv("WORKER_DATA_ROOT", "/var/data"))
+DB_PATH = Path(os.getenv("SUPPLIER_DATABASE_PATH", str(DEFAULT_DATA_ROOT / "supplier_email_store.db")))
 logger = logging.getLogger("winged-tycoons.supplier-database")
 
 
@@ -20,9 +21,9 @@ def _writable_database_path(configured_path: Path) -> Path:
         probe.unlink(missing_ok=True)
         return configured_path
     except (OSError, PermissionError) as exc:
-        fallback = Path("/tmp") / configured_path.name
+        fallback = DEFAULT_DATA_ROOT / configured_path.name
         fallback.parent.mkdir(parents=True, exist_ok=True)
-        logger.warning("Configured supplier database path is not writable; using ephemeral fallback path=%s error=%s", fallback, type(exc).__name__)
+        logger.warning("Configured supplier database path is not writable; using Render data path=%s error=%s", fallback, type(exc).__name__)
         return fallback
 
 

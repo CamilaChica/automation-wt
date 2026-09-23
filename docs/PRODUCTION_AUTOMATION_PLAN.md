@@ -33,7 +33,7 @@ Move Winged Tycoons from a credible demo workflow to a reliable procurement auto
 - The deployed `/ready` response currently reports `inventory_postgres_mirror_enabled=false`; update the Render worker environment and redeploy it.
 - A customer RFQ request that receives HTTP `401` is rejected before the intake handler runs and is not persisted; verify the session before treating the RFQ as received.
 - The operational RFQ/quote/communication store remains SQLite-compatible until its PostgreSQL repository migration is completed.
-- Render service disks are service-scoped; `winged-worker` and `winged-inventory-ingestion` do not share the same SQLite supplier database. PostgreSQL must become the shared source of truth before relying on cross-worker supplier state.
+- Render service disks are service-scoped; `winged-tycoons-email-worker` and `winged-inventory-ingestion` do not share the same SQLite supplier database. PostgreSQL must become the shared source of truth before relying on cross-worker supplier state.
 - Autonomous outbound email remains subject to existing fail-closed and human-review policies.
 
 ## Next production actions
@@ -44,16 +44,24 @@ Move Winged Tycoons from a credible demo workflow to a reliable procurement auto
 4. Run the live production smoke suite with `LIVE_API_URL` and `LIVE_API_TOKEN`.
 5. Migrate RFQ, quote, communication, PO, and audit persistence to PostgreSQL before claiming PostgreSQL-primary production readiness.
 
-### Exact Render migration procedure
+### No-shell Render migration procedure
 
-Run this from the Render Shell attached to the `backend` service, whose repository root is `/opt/render/project/src`:
+Do not use Render Shell for the normal deployment path. The `backend` service already runs the migration automatically during every deployment:
 
-```bash
-cd /opt/render/project/src
-alembic upgrade head
-python scripts/verify_production_env.py
-curl --fail-with-body --silent --show-error http://127.0.0.1:${PORT:-10000}/ready
+```text
+pip install -r requirements.txt && alembic upgrade head
 ```
+
+Use the Render Dashboard instead:
+
+1. Open the `backend` service for this repository.
+2. Confirm `DATABASE_URL` is configured in Environment.
+3. Select **Manual Deploy** -> **Deploy latest commit**.
+4. Wait for the build log to show `alembic upgrade head` completed successfully.
+5. Confirm the health check is green at `/ready`.
+6. Deploy `winged-inventory-ingestion` from the same commit after the backend migration succeeds.
+
+This migration runs against PostgreSQL during the Render build and does not call the LLM or consume model tokens. Render Shell is only a troubleshooting fallback, not a required step.
 
 The `winged-inventory-ingestion` service is an existing separate Render worker declared in `render.yaml`. It is not a new database; it continuously polls `purchasing@wingedtycoons.com`, parses supplier messages and attachments, and mirrors normalized rows to PostgreSQL when its `DATABASE_URL` and `INVENTORY_INGESTION_POSTGRES_ENABLED=true` are configured.
 

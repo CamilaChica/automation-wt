@@ -217,6 +217,48 @@ class CommunicationService:
         body = self._missing_fields_request(part_number, missing_fields)
         return self._send("purchasing", recipient, subject, body, reply_to=reply_to)
 
+    def request_stale_supplier_confirmation(
+        self,
+        recipient: str,
+        supplier_name: str,
+        part_number: str,
+        quantity: int,
+        reply_to: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        subject = f"Re: Quote confirmation request - {part_number.upper()}"
+        body = (
+            f"Hello {supplier_name},\n\n"
+            f"We are reviewing your previous quotation for part {part_number.upper()} (quantity {quantity}). "
+            "Please confirm in this same email thread whether the quoted material is still available and whether "
+            "the price, condition, certification, lead time, and quote validity remain current.\n\n"
+            "If any detail has changed, please provide the updated value and attach the applicable trace documentation.\n\n"
+            "Best regards,\nWinged Tycoons Purchasing Team"
+        )
+        return self._send("purchasing", recipient, subject, body, reply_to=reply_to)
+
+    def request_supplier_body_quote(
+        self,
+        recipient: str,
+        part_reference: str = "the quoted part",
+        reply_to: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        subject = f"Re: Quote details required - {part_reference}"
+        body = (
+            "Hello,\n\n"
+            "We could not read the quotation attachment in your email. Please reply in this same email thread "
+            "with the quotation details in the message body so we can process your response:\n"
+            "- Part number\n"
+            "- Quantity available\n"
+            "- Unit price and currency\n"
+            "- Condition\n"
+            "- Release certificate and trace documentation\n"
+            "- Lead time\n"
+            "- Quote validity or expiration date\n\n"
+            "Please do not send a new thread; replying here preserves the quote reference.\n\n"
+            "Best regards,\nWinged Tycoons Purchasing Team"
+        )
+        return self._send("purchasing", recipient, subject, body, reply_to=reply_to)
+
     def notify_purchase_order(
         self,
         recipient: str,

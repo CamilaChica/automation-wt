@@ -70,6 +70,18 @@ class ProductionAuthConfigTests(unittest.TestCase):
                 self.assertIn("Secure", set_cookie)
                 self.assertIn("SameSite=Strict", set_cookie)
 
+    def test_internal_sign_in_rejects_non_wingedtycoons_domains(self):
+        with patch.dict(os.environ, {"WT_AUTH_ENV": "production", "WT_AUTH_SECRET": "test-secret"}, clear=False):
+            with self.assertRaises(Exception):
+                request_otp("user@gmail.com", "ROLE_INTERNAL", "External User")
+
+            with self.assertRaises(Exception):
+                request_otp("user@wingedtycoons.org", "ROLE_INTERNAL", "External User")
+
+
+if __name__ == "__main__":
+    unittest.main()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from services.supplier_database import supplier_db
 from services.supplier_email_extractor import SupplierEmailExtractor
 from services.email_intelligence import extract_email_intelligence
+from services.document_parser import build_email_context
 from services.llm_provider import LLMRouter
 
 
@@ -16,7 +17,8 @@ class SupplierEmailIngestionService:
 
     def ingest_email(self, email_text: str, mailbox: str = "purchasing", message_id: Optional[str] = None, attachments: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         try:
-            extracted = self.extractor.extract(email_text)
+            attachment_context = build_email_context(email_text, attachments)
+            extracted = self.extractor.extract(attachment_context)
             deterministic_part_number = extracted.get("part_number")
             structured_items: list[dict[str, Any]] = []
             try:

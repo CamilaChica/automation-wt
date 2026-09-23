@@ -437,6 +437,8 @@ class RFQIntakeAgent(BaseAgent):
         # ── 1. Extract all fields ───────────────────────────────────────
         rfq_id       = _generate_rfq_id()
         customer_name, company, customer_email = _extract_customer_info(raw_text)
+        customer_name = str(inputs.get("customer_name") or customer_name or "").strip() or None
+        customer_email = str(inputs.get("customer_email") or customer_email or "").strip().lower() or None
         extracted_items = _extract_line_items(raw_text)
         part_number_raw = _extract_part_number(raw_text)
         part_number  = _normalize_part_number(part_number_raw) if part_number_raw else None

@@ -144,17 +144,15 @@ services:
         destination: /index.html
 
   - type: worker
-    name: winged-worker
+    name: winged-tycoons-email-worker
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: python worker.py
     disk:
-      name: winged-worker-data
+      name: winged-email-worker-data
       mountPath: /var/data
       sizeGB: 10
     envVars:
-      - key: INVENTORY_INGESTION_WORKER_ENABLED
-        value: "true"
       - key: WT_AUTH_ENV
         value: "production"
       - key: WT_AUTH_SECRET
@@ -215,6 +213,10 @@ services:
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: python -m services.inventory_ingestion_worker
+    disk:
+      name: winged-ingestion-data
+      mountPath: /var/data
+      sizeGB: 10
     envVars:
       - key: INVENTORY_INGESTION_POSTGRES_ENABLED
         value: "true"
@@ -236,8 +238,10 @@ services:
         value: "purchasing@wingedtycoons.com"
       - key: DATABASE_URL
         sync: false
+      - key: OPERATIONS_DB_PATH
+        value: "/var/data/operations.db"
       - key: SUPPLIER_DATABASE_PATH
-        value: "/tmp/supplier_email_store.db"
+        value: "/var/data/supplier_email_store.db"
       - key: MAILBOX_MAX_AGE_DAYS
         value: "7"
 

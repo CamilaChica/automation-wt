@@ -242,6 +242,18 @@ class TestRFQIntakeAgent(unittest.TestCase):
         ids = {self._run(raw).data["rfq_id"] for _ in range(5)}
         self.assertEqual(len(ids), 5, "All generated RFQ IDs should be unique")
 
+        def test_structured_customer_metadata_completes_raw_portal_request(self):
+            result = asyncio.run(self.agent.execute({
+                "raw_text": "Customer request for P/N 822-1287-121, quantity 4, condition OH.",
+                "customer_name": "Camila Global Test",
+                "customer_email": "andrekchir@gmail.com",
+            }))
+
+            self.assertTrue(result.success)
+            self.assertEqual(result.data["customer_name"], "Camila Global Test")
+            self.assertEqual(result.data["customer_email"], "andrekchir@gmail.com")
+            self.assertEqual(result.data["items"][0]["quantity"], 4)
+
     def test_part_number_normalization(self):
         """Part numbers with mixed case and extra spaces are normalized to uppercase."""
         raw = (

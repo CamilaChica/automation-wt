@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ArrowRight, CheckCircle2, Clock3, FileSearch, LogOut, Plane, Search, ShieldCheck } from 'lucide-react';
 import { apiService } from '../../services/api';
 import { BrandMark } from '../common/BrandMark';
+import { normalizeQuantityInput } from '../../utils/quantity';
 
 type CatalogResult = Awaited<ReturnType<typeof apiService.searchCatalog>>[number];
 
@@ -67,7 +68,7 @@ export const CustomerPortal: React.FC = () => {
         customerEmail,
         attachmentIds,
       );
-      setNotice(`Request ${response.rfq_id} received. Our parts team will email ${customerEmail} with availability and pricing.`);
+      setNotice(response.message || `Request ${response.rfq_id} received.`);
       setTrackingStatus('Processing Autonomous Fulfillment');
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'RFQ submission failed. Please retry.');
@@ -191,7 +192,16 @@ export const CustomerPortal: React.FC = () => {
                 <label htmlFor="rfq-part-number" className="sr-only">Part number</label>
                   <input id="rfq-part-number" name="part-number" autoComplete="off" required value={partNumber} onChange={event => setPartNumber(event.target.value)} placeholder="e.g., BACB30LU-4" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
                 <label htmlFor="rfq-quantity" className="sr-only">Quantity</label>
-                <input id="rfq-quantity" name="quantity" required type="number" min="1" value={quantity} onChange={event => setQuantity(Number(event.target.value))} className="w-24 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
+                <input
+                  id="rfq-quantity"
+                  name="quantity"
+                  required
+                  type="number"
+                  min="1"
+                  value={quantity}
+                  onChange={event => setQuantity(normalizeQuantityInput(event.target.value))}
+                  className="w-24 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none"
+                />
               </div>
                 <label htmlFor="rfq-condition" className="sr-only">Target condition</label>
                 <select id="rfq-condition" name="condition" required value={condition} onChange={event => setCondition(event.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 focus:ring-2 focus:ring-cyan-400 focus:outline-none"><option value="">Select target condition</option><option value="NE">NE - New</option><option value="FN">FN - Factory New</option><option value="NS">NS - New Surplus</option><option value="OH">OH - Overhauled</option><option value="SVC">SVC - Serviceable</option><option value="RP">RP - Repaired</option><option value="AR">AR - As Removed</option><option value="IN">IN - Inspected</option></select>

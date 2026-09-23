@@ -56,6 +56,32 @@ class TestSupplierEmailIngestion(unittest.TestCase):
         self.assertEqual(offers[0]["part_number"], "060-1234-00")
         self.assertEqual(offers[0]["unit_cost"], 1100.0)
 
+    @patch("services.supplier_ingestion_service.extract_email_intelligence", side_effect=RuntimeError("LLM disabled in test"))
+    @patch("services.supplier_ingestion_service.build_email_context")
+    def test_ingest_supplier_pdf_quote_when_part_number_is_only_in_attachment(self, mock_context, _mock_llm):
+        mock_context.return_value = (
+            "From: sales@wyattaerospace.com\n"
+            "Subject: Quote attached\n\n"
+            "Please see attached quotation.\n\n"
+            "Attachment quote.pdf:\n"
+            "Quote Number: READY-QU-965064\n"
+            "Part Number: 822-1287-121\n"
+            "Quantity Available: 2\n"
+            "Unit Price: $1250.00\n"
+            "Condition: OH\n"
+            "FAA 8130-3 certificate included.\n"
+            "Lead time: 5 days."
+        )
+
+        result = SupplierEmailIngestionService().ingest_email(
+            "From: sales@wyattaerospace.com\nSubject: Quote attached\n\nPlease see attached quotation.",
+            attachments=[{"filename": "quote.pdf", "content_type": "application/pdf", "content": b"%PDF-1.4"}],
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["part_number"], "822-1287-121")
+        mock_context.assert_called_once()
+
     def test_supplier_discovery_reads_persistent_supplier_records(self):
         db_service.save_supplier_offer(
             supplier_name="Vanguard Spares",

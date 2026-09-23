@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 from agents.base_agent import BaseAgent, AgentMetadata, AgentResponse, EscalationRule
 from services.supplier_database import supplier_db
@@ -79,8 +80,10 @@ class SupplierDiscoveryAgent(BaseAgent):
         )
         super().__init__(metadata)
         self._event_quotes: Dict[str, List[Dict[str, Any]]] = {}
+        self.last_stale_offers: List[Dict[str, Any]] = []
 
     REQUIRED_TRACE_CERTIFICATES = {"FAA 8130-3", "EASA Form 1", "FAA_8130_3", "EASA_FORM_1"}
+    OFFER_FRESHNESS_DAYS = 30
 
     def select_vendor(self, quotes: List[Dict[str, Any]], max_lead_time_days: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """Filter unsafe offers and rank remaining vendors by 60/20/20 score."""
@@ -152,14 +155,31 @@ class SupplierDiscoveryAgent(BaseAgent):
         )
 
     def search_suppliers(self, part_number: str, quantity: int) -> List[Dict[str, Any]]:
-        """Return the top supplier offers stored in SQLite for a part number."""
+        """Return fresh offers and retain stale records for confirmation outreach."""
         if not part_number:
             return []
 
         records = supplier_db.find_supplier_offers(part_number, quantity_needed=quantity)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=self.OFFER_FRESHNESS_DAYS)
+        fresh_records: List[Dict[str, Any]] = []
+        self.last_stale_offers = []
+        for record in records:
+            if not record.get("updated_at"):
+                fresh_records.append(record)
+                continue
+            try:
+                updated_at = datetime.fromisoformat(str(record.get("updated_at")).replace("Z", "+00:00"))
+                if updated_at.tzinfo is None:
+                    updated_at = updated_at.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                updated_at = datetime.min.replace(tzinfo=timezone.utc)
+            if updated_at >= cutoff:
+                fresh_records.append(record)
+            else:
+                self.last_stale_offers.append(record)
         ranked: List[Dict[str, Any]] = []
 
-        for record in records:
+        for record in fresh_records:
             unit_cost = float(record.get("unit_cost") or 0.0)
             lead_time = int(record.get("lead_time_days") or 0)
             confidence = float(record.get("confidence") or 0.0)
@@ -180,6 +200,7 @@ class SupplierDiscoveryAgent(BaseAgent):
             ranked.append({
                 "supplier_id": record.get("supplier_id", ""),
                 "supplier_name": record.get("supplier_name", "Unknown Supplier"),
+                "supplier_email": record.get("supplier_email", ""),
                 "part_number": part_number.upper(),
                 "unit_cost": unit_cost,
                 "quantity_available": int(record.get("quantity_available") or 0),

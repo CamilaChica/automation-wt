@@ -503,7 +503,7 @@ async def submit_rfq(request: IntakeRequest, user: dict = Depends(current_user))
     status = pipeline_res.get("status", rfq.status)
     error = pipeline_res.get("error", "")
     
-    msg = "RFQ received and processed successfully."
+    msg = f"RFQ received and processed successfully. Quote response sent to {customer_email}."
     if "Failed" in status or "Halted" in status or "Warning" in status:
         msg = f"RFQ pipeline halted or failed: {error}"
         

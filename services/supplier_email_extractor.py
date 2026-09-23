@@ -165,8 +165,12 @@ class SupplierEmailExtractor:
             normalized = re.sub(r"\s*[-]\s*", "-", value).upper()
             segments = normalized.split("-")
             digit_count = len(re.findall(r"\d", normalized))
+            reference_prefixes = (
+                "READY-QU", "RFQ", "QTE", "QUOTE", "PO", "ORDER", "INVOICE", "BILL",
+            )
             return (
                 normalized not in metadata_tokens
+                and not any(normalized == prefix or normalized.startswith(f"{prefix}-") for prefix in reference_prefixes)
                 and not normalized.startswith(("RT-PBILL", "PBILL"))
                 and bool(re.search(r"\d", normalized))
                 and len(normalized) <= 40

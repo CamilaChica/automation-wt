@@ -22,7 +22,12 @@ from services.document_parser import build_email_context
 from scripts.backup_sqlite import main as backup_sqlite
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
-logger = logging.getLogger("winged-tycoons-mailbox-worker")
+logger = logging.getLogger("winged-tycoons-email-worker")
+
+
+def _mailboxes_to_poll() -> list[str]:
+    """The email worker owns customer RFQs; supplier mail belongs to ingestion worker."""
+    return ["sales"]
 
 
 def _missing_supplier_fields(email_text: str, result: dict) -> list[str]:
@@ -41,7 +46,7 @@ def _missing_supplier_fields(email_text: str, result: dict) -> list[str]:
     return missing
 
 
-async def _ingest_sales_message(message: dict[str, str]) -> None:
+async def _ingest_sales_message(message: dict[str, str]) -> bool:
     """Create and process a customer RFQ received by the sales mailbox."""
     sender = (message.get("from") or "").strip()
     if "@" not in sender:
@@ -50,7 +55,7 @@ async def _ingest_sales_message(message: dict[str, str]) -> None:
     body = (message.get("body") or "").strip()
     attachments = message.get("attachments") or []
     if not body and not attachments:
-        return
+        return True
     sender_email = sender.lower()
     detail_request = re.search(
         r"\b(certificate|certification|8130|easa|image|photo|shipping dimensions|dimensions|additional details|more information)\b",
@@ -84,7 +89,7 @@ async def _ingest_sales_message(message: dict[str, str]) -> None:
                 json.dumps({"communication_id": response.get("communication_id"), "request": body[:500]}),
             )
             logger.info("Customer detail reply %s handled for RFQ %s", message.get("message_id", "unknown"), existing.id)
-            return
+            return True
     rfq = db_service.create_rfq(
         customer_name=sender.split("@", 1)[0].replace(".", " ").title(),
         customer_email=sender,
@@ -93,6 +98,7 @@ async def _ingest_sales_message(message: dict[str, str]) -> None:
     )
     await orchestration_service.process_rfq_pipeline(rfq.id)
     logger.info("Sales mailbox message %s ingested as RFQ %s", message.get("message_id", "unknown"), rfq.id)
+    return True
 
 
 def run() -> None:
@@ -122,10 +128,7 @@ def run() -> None:
                 supplier_db.mark_communication_task_retry(task["id"], "scheduled communication dispatch failed")
                 logger.exception("Scheduled communication failed for task %s", task["id"])
 
-        mailboxes = ["sales"]
-        if os.getenv("INVENTORY_INGESTION_WORKER_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
-            mailboxes.append("purchasing")
-        for mailbox in mailboxes:
+        for mailbox in _mailboxes_to_poll():
             try:
                 messages = fetch_inbox_messages(mailbox)
                 logger.info("Mailbox %s: read %d message bodies", mailbox, len(messages))
@@ -143,11 +146,29 @@ def run() -> None:
                         f"{body}"
                     )
                     if mailbox == "sales":
-                        asyncio.run(_ingest_sales_message(message))
-                        if message_id:
+                        processed = asyncio.run(_ingest_sales_message(message))
+                        if message_id and processed:
                             supplier_db.save_email(mailbox, message_id, message.get("from", ""), message.get("subject", ""), body)
                         continue
                     result = loader.load_raw_email_text(email_text, mailbox=mailbox, message_id=message_id or None, attachments=message.get("attachments"))
+                    if (
+                        not result.get("success")
+                        and "No part number detected" in str(result.get("error"))
+                        and any(
+                            str(attachment.get("content_type", "")).lower() == "application/pdf"
+                            or str(attachment.get("filename", "")).lower().endswith(".pdf")
+                            for attachment in message.get("attachments") or []
+                        )
+                        and "@" in str(message.get("from") or "")
+                    ):
+                        clarification = communication_service.request_supplier_body_quote(
+                            recipient=str(message["from"]),
+                            part_reference=str(message.get("subject") or "supplier quotation"),
+                            reply_to=message_id or None,
+                        )
+                        if message_id:
+                            supplier_db.save_email(mailbox, message_id, message.get("from", ""), message.get("subject", ""), body)
+                        result = {**result, "status": "Unreadable_PDF_Clarification_Sent", "clarification": clarification}
                     logger.info("Mailbox %s processed message %s -> %s", mailbox, message_id, result)
                     if result.get("success") and mailbox == "purchasing":
                         sender = message.get("from", "")

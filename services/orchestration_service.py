@@ -72,7 +72,11 @@ class OrchestrationService:
         # 1. RFQ Intake Check
         if rfq.status == "Intake":
             db_service.add_audit_log(rfq_id, "Orchestrator", "transition", "Starting RFQ Intake processing stage.")
-            res = await self.intake_agent.execute({"raw_text": rfq.raw_text})
+            res = await self.intake_agent.execute({
+                "raw_text": rfq.raw_text,
+                "customer_name": rfq.customer_name,
+                "customer_email": rfq.customer_email,
+            })
             
             if not res.success:
                 intake_data = res.data or {}
@@ -237,6 +241,35 @@ class OrchestrationService:
                     })
 
                     if not sup_res.success:
+                        stale_offers = self.supplier_agent.last_stale_offers
+                        if stale_offers:
+                            confirmations = []
+                            seen_suppliers = set()
+                            for offer in stale_offers:
+                                supplier_email = str(offer.get("supplier_email") or "").strip().lower()
+                                if not supplier_email or supplier_email in seen_suppliers:
+                                    continue
+                                seen_suppliers.add(supplier_email)
+                                confirmations.append(
+                                    communication_service.request_stale_supplier_confirmation(
+                                        recipient=supplier_email,
+                                        supplier_name=str(offer.get("supplier_name") or "Supplier Team"),
+                                        part_number=item.resolved_part_number,
+                                        quantity=shortage_qty,
+                                        reply_to=offer.get("source_email_id"),
+                                    )
+                                )
+                            db_service.add_audit_log(
+                                rfq_id, "SupplierCommunicationAgent", "supplier_availability_confirmation",
+                                f"Requested current availability from {len(confirmations)} supplier(s) using previous quote threads.",
+                                "SUCCESS" if confirmations else "WARNING", json.dumps(confirmations),
+                            )
+                            return {
+                                "status": "Supplier_Confirmation_Requested",
+                                "error": f"All stored supplier quotes for '{item.resolved_part_number}' are older than 30 days.",
+                                "supplier_confirmation_count": len(confirmations),
+                                "supplier_confirmations": confirmations,
+                            }
                         request_results = communication_service.request_part_quotes(
                             item.resolved_part_number,
                             shortage_qty,

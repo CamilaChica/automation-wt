@@ -115,9 +115,10 @@ def _user_row(email: str) -> Optional[sqlite3.Row]:
 def request_otp(email: str, role: str, full_name: str = "") -> tuple[str, str]:
     normalized = email.strip().lower()
     role = normalize_role(role)
-    if role == ROLE_INTERNAL and not normalized.endswith(f"@{INTERNAL_DOMAIN}"):
-        raise HTTPException(400, "Internal users must use a Winged Tycoons email.")
-    if role == ROLE_CUSTOMER and normalized.endswith(f"@{INTERNAL_DOMAIN}"):
+    email_domain = normalized.rsplit("@", 1)[-1] if "@" in normalized else ""
+    if role == ROLE_INTERNAL and email_domain != INTERNAL_DOMAIN:
+        raise HTTPException(400, "Internal access is restricted to wingedtycoons.com accounts.")
+    if role == ROLE_CUSTOMER and email_domain == INTERNAL_DOMAIN:
         raise HTTPException(400, "Use the internal sign-in for Winged Tycoons staff.")
 
     now = int(time.time())
