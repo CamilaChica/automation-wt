@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowRight, CheckCircle2, Clock3, FileSearch, Plane, Search, ShieldCheck } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Clock3, FileSearch, LogOut, Plane, Search, ShieldCheck } from 'lucide-react';
 import { apiService } from '../../services/api';
 import { BrandMark } from '../common/BrandMark';
 
@@ -115,7 +115,7 @@ export const CustomerPortal: React.FC = () => {
             <BrandMark />
             <span className="font-display text-lg font-bold tracking-wide">WINGED TYCOONS</span>
           </a>
-          <a href="mailto:parts@wingedtycoons.com" className="text-sm text-slate-300 hover:text-white">Need help? Contact parts desk</a>
+          <div className="flex items-center gap-4"><a href="mailto:parts@wingedtycoons.com" className="text-sm text-slate-300 hover:text-white">Need help? Contact parts desk</a><button type="button" onClick={() => { void apiService.signOut().finally(() => { window.location.href = '/'; }); }} className="flex items-center gap-1 text-sm text-slate-300 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"><LogOut className="h-4 w-4" /> Sign out</button></div>
         </div>
       </header>
 

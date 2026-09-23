@@ -341,6 +341,10 @@ async def otp_verify(request: OtpVerifyRequest, response: Response):
         email=result["email"],
     )
 
+@app.post("/api/auth/logout", status_code=204)
+async def logout(response: Response):
+    response.delete_cookie("wt_session", secure=os.getenv("WT_AUTH_ENV", "development").strip().lower() == "production", samesite="Strict")
+
 @app.get("/")
 async def root():
     return {

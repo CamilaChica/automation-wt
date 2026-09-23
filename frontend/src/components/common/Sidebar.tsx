@@ -145,7 +145,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) =
 
         <button
           onClick={() => {
-            apiService.logout();
+            void apiService.signOut();
             window.location.href = '/internal';
           }}
           className="mt-2 w-full flex items-center justify-center space-x-2 py-1.5 rounded text-xs text-slate-400 hover:text-aog-red transition-colors"

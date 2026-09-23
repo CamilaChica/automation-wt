@@ -209,6 +209,13 @@ export const apiService = {
     return res.data;
   },
 
+  async signOut(): Promise<void> {
+    try {
+      await axios.post(`${API_BASE}/auth/logout`);
+    } finally {
+      this.logout();
+    }
+  },
   logout() {
     localStorage.removeItem('wt_access_token');
     localStorage.removeItem('wt_role');

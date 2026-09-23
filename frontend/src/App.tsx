@@ -13,11 +13,12 @@ import { CustomerPortal } from './components/views/CustomerPortal';
 import { SwarmSimulationView } from './components/views/SwarmSimulationView';
 import { AuthScreen } from './components/common/AuthScreen';
 import { apiService } from './services/api';
+import { getThemePreference, getViewPreference, setThemePreference, setViewPreference } from './services/preferences';
 
 const InternalApp: React.FC = () => {
   const [authenticated, setAuthenticated] = useState(apiService.getRole() === 'internal');
-  const [currentView, setCurrentView] = useState<ViewMode>('customer');
-  const [theme, setTheme] = useState<ThemeMode>('light');
+  const [currentView, setCurrentViewState] = useState<ViewMode>(getViewPreference());
+  const [theme, setThemeState] = useState<ThemeMode>(getThemePreference());
   const [isAuditLogOpen, setIsAuditLogOpen] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AgentAuditLog[]>([]);
   const [auditRfqId, setAuditRfqId] = useState('');
@@ -141,7 +142,15 @@ const InternalApp: React.FC = () => {
   }, [theme]);
 
   const toggleTheme = () => {
-    setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
+    setThemeState(prev => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      setThemePreference(next);
+      return next;
+    });
+  };
+  const setCurrentView = (view: ViewMode) => {
+    setViewPreference(view);
+    setCurrentViewState(view);
   };
 
   const renderActiveView = () => {
