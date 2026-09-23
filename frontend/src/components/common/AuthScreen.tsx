@@ -100,14 +100,14 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated, o
 
   return (
     <div className={`min-h-screen ${isCustomer ? 'bg-slate-50 text-slate-900' : 'bg-slate-950 text-slate-100'} flex items-center justify-center p-6`}>
-      <form onSubmit={submit} className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-8 shadow-xl">
+      <form onSubmit={submit} className={`w-full max-w-md rounded-3xl border p-8 shadow-xl ${isCustomer ? 'border-slate-200 bg-white' : 'border-slate-700 bg-slate-900 text-slate-100'}`}>
         <div className="mb-8 flex items-center gap-3">
           <BrandMark />
           <div><p className="font-display text-lg font-bold">WINGED TYCOONS</p><p className="text-xs uppercase tracking-wider text-slate-400">{isCustomer ? 'Customer portal' : 'Internal command center'}</p></div>
         </div>
         <div className="mb-6 flex items-start gap-3"><LockKeyhole className="mt-1 h-5 w-5 text-aero-blue" /><div><h1 className="font-display text-2xl font-bold">Secure sign in</h1><p className="mt-1 text-sm text-slate-500">Your access is restricted to the {isCustomer ? 'customer portal' : 'internal operations workspace'}.</p></div></div>
-        <label htmlFor="auth-email" className="mb-4 block text-sm font-semibold">Work email<input id="auth-email" name="email" autoComplete="email" required type="email" value={email} onChange={event => setEmail(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-300 bg-transparent px-4 py-3 outline-none focus:border-aero-blue" /></label>
-        {challengeId && <label htmlFor="auth-otp" className="mb-5 block text-sm font-semibold">One-time code<input id="auth-otp" name="one-time-code" autoComplete="one-time-code" required inputMode="numeric" pattern="[0-9]{6}" value={otp} onChange={event => setOtp(event.target.value)} placeholder="6-digit code" className="mt-2 w-full rounded-xl border border-slate-300 bg-transparent px-4 py-3 outline-none focus:border-aero-blue" /></label>}
+        <label htmlFor="auth-email" className="mb-4 block text-sm font-semibold">Work email<input id="auth-email" name="email" autoComplete="email" required type="email" value={email} onChange={event => setEmail(event.target.value)} className={`mt-2 w-full rounded-xl border px-4 py-3 outline-none focus:ring-2 focus:ring-aero-blue focus:outline-none ${isCustomer ? 'border-slate-300 bg-white text-slate-900' : 'border-slate-600 bg-slate-950 text-slate-100'}`} /></label>
+        {challengeId && <label htmlFor="auth-otp" className="mb-5 block text-sm font-semibold">One-time code<input id="auth-otp" name="one-time-code" autoComplete="one-time-code" required inputMode="numeric" pattern="[0-9]{6}" value={otp} onChange={event => setOtp(event.target.value)} placeholder="6-digit code" className={`mt-2 w-full rounded-xl border px-4 py-3 outline-none focus:ring-2 focus:ring-aero-blue focus:outline-none ${isCustomer ? 'border-slate-300 bg-white text-slate-900' : 'border-slate-600 bg-slate-950 text-slate-100'}`} /></label>}
         <button disabled={loading} className="w-full rounded-xl bg-aero-blue px-4 py-3 font-bold text-white hover:bg-blue-600 disabled:opacity-60">{loading ? 'Working...' : challengeId ? 'Verify code' : 'Send one-time code'}</button>
         {isDevelopmentAuth && developmentOtp && (
           <p className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
