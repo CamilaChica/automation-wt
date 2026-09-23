@@ -15,6 +15,18 @@
   }
 }
 
+/* Customer portal is intentionally light by default; keep its existing utility markup readable. */
+.customer-portal-light .bg-slate-950 { background-color: #ffffff !important; }
+.customer-portal-light .bg-slate-950\/70 { background-color: rgb(248 250 252 / 0.95) !important; }
+.customer-portal-light .bg-slate-900 { background-color: #ffffff !important; }
+.customer-portal-light .bg-slate-900\/70 { background-color: rgb(255 255 255 / 0.95) !important; }
+.customer-portal-light .border-slate-800 { border-color: rgb(226 232 240) !important; }
+.customer-portal-light .border-slate-700 { border-color: rgb(203 213 225) !important; }
+.customer-portal-light .text-slate-100 { color: rgb(15 23 42) !important; }
+.customer-portal-light .text-slate-300 { color: rgb(71 85 105) !important; }
+.customer-portal-light .text-slate-400 { color: rgb(100 116 139) !important; }
+.customer-portal-light .text-slate-500 { color: rgb(100 116 139) !important; }
+
 @layer base {
   body {
     font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, sans-serif;

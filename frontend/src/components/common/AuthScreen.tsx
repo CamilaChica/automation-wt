@@ -99,8 +99,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated, o
   };
 
   return (
-    <div className={`min-h-screen ${isCustomer ? 'bg-slate-950 text-white' : 'bg-slate-100 text-slate-900'} flex items-center justify-center p-6`}>
-      <form onSubmit={submit} className={`w-full max-w-md rounded-3xl border p-8 shadow-xl ${isCustomer ? 'border-slate-800 bg-slate-900' : 'border-slate-200 bg-white'}`}>
+    <div className={`min-h-screen ${isCustomer ? 'bg-slate-50 text-slate-900' : 'bg-slate-950 text-slate-100'} flex items-center justify-center p-6`}>
+      <form onSubmit={submit} className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-8 shadow-xl">
         <div className="mb-8 flex items-center gap-3">
           <BrandMark />
           <div><p className="font-display text-lg font-bold">WINGED TYCOONS</p><p className="text-xs uppercase tracking-wider text-slate-400">{isCustomer ? 'Customer portal' : 'Internal command center'}</p></div>

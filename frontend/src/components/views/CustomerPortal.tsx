@@ -120,14 +120,14 @@ export const CustomerPortal: React.FC = () => {
   }, [trackingToken, shipment]);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="border-b border-slate-800 bg-slate-950/95">
+    <div className="customer-portal-light min-h-screen bg-slate-50 text-slate-900">
+      <header className="border-b border-slate-200 bg-white/95">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
           <a href="/" className="flex items-center gap-3">
             <BrandMark />
             <span className="font-display text-lg font-bold tracking-wide">WINGED TYCOONS</span>
           </a>
-          <div className="flex items-center gap-4"><a href="mailto:parts@wingedtycoons.com" className="text-sm text-slate-300 hover:text-white">Need help? Contact parts desk</a><button type="button" onClick={() => { void apiService.signOut().finally(() => { window.location.href = '/'; }); }} className="flex items-center gap-1 text-sm text-slate-300 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"><LogOut className="h-4 w-4" /> Sign out</button></div>
+          <div className="flex items-center gap-4"><a href="mailto:parts@wingedtycoons.com" className="text-sm text-slate-600 hover:text-slate-900">Need help? Contact parts desk</a><button type="button" onClick={() => { void apiService.signOut().finally(() => { window.location.href = '/'; }); }} className="flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"><LogOut className="h-4 w-4" /> Sign out</button></div>
         </div>
       </header>
 
@@ -144,7 +144,7 @@ export const CustomerPortal: React.FC = () => {
             [ShieldCheck, 'Traceable options', 'See available condition and certification information.'],
             [Clock3, 'Fast RFQ response', 'Our team validates sourcing and sends a quote by email.']
           ].map(([Icon, title, description]) => (
-            <div key={title as string} className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+            <div key={title as string} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <Icon className="mb-4 h-5 w-5 text-cyan-400" />
               <h2 className="font-display font-bold">{title as string}</h2>
               <p className="mt-2 text-sm text-slate-400">{description as string}</p>
@@ -153,7 +153,7 @@ export const CustomerPortal: React.FC = () => {
         </section>
 
         <section className="grid gap-8 lg:grid-cols-[1.15fr_0.85fr]">
-          <div className="rounded-3xl border border-slate-800 bg-slate-900 p-6">
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="mb-5 flex items-center justify-between">
               <div>
                 <h2 className="font-display text-xl font-bold">Parts availability</h2>
@@ -163,14 +163,14 @@ export const CustomerPortal: React.FC = () => {
             </div>
             <form onSubmit={handleSearch} className="flex gap-3">
               <label htmlFor="catalog-search" className="sr-only">Search aircraft parts</label>
-              <input id="catalog-search" name="catalog-search" autoComplete="off" aria-label="Search aircraft parts" value={query} onChange={event => setQuery(event.target.value)} placeholder="e.g., 060-1234-00" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
+              <input id="catalog-search" name="catalog-search" autoComplete="off" aria-label="Search aircraft parts" value={query} onChange={event => setQuery(event.target.value)} placeholder="e.g., 060-1234-00" className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
               <button className="rounded-xl bg-cyan-400 px-4 py-3 font-bold text-slate-950 hover:bg-cyan-300" aria-label="Search parts"><Search className="h-4 w-4" /></button>
             </form>
             <div className="mt-5 space-y-3">
               {isSearching && <p className="text-sm text-slate-400">Searching catalog...</p>}
               {!isSearching && results.length === 0 && <p className="text-sm text-slate-400">No matching parts found. Submit a request and we will source it.</p>}
               {results.map((item, index) => (
-                <button key={`${item.part_number}-${item.condition_code}-${index}`} onClick={() => setPartNumber(item.part_number)} className="w-full rounded-2xl border border-slate-800 bg-slate-950/70 p-4 text-left hover:border-cyan-400/70">
+                <button key={`${item.part_number}-${item.condition_code}-${index}`} onClick={() => setPartNumber(item.part_number)} className="w-full rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left hover:border-cyan-400/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">
                   <div className="flex items-center justify-between"><span className="font-mono font-bold">{item.part_number}</span><span className="text-xs text-emerald-400">{item.quantity_available} available</span></div>
                   <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-400"><span>{item.condition_code}</span><span>•</span><span>{item.certificate_type}</span><span>•</span><span>{item.has_full_trace ? 'Full trace available' : 'Trace review required'}</span></div>
                 </button>

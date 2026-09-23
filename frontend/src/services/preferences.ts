@@ -12,8 +12,9 @@ function setCookie(name: string, value: string): void {
   document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; Max-Age=${COOKIE_MAX_AGE}; Path=/; SameSite=Lax`;
 }
 
-export function getThemePreference(): ThemeMode {
-  return getCookie('wt_theme') === 'dark' ? 'dark' : 'light';
+export function getThemePreference(defaultTheme: ThemeMode = 'light'): ThemeMode {
+  const value = getCookie('wt_theme');
+  return value === 'dark' || value === 'light' ? value : defaultTheme;
 }
 
 export function setThemePreference(theme: ThemeMode): void {

@@ -18,7 +18,7 @@ import { getThemePreference, getViewPreference, setThemePreference, setViewPrefe
 const InternalApp: React.FC = () => {
   const [authenticated, setAuthenticated] = useState(apiService.getRole() === 'internal');
   const [currentView, setCurrentViewState] = useState<ViewMode>(getViewPreference());
-  const [theme, setThemeState] = useState<ThemeMode>(getThemePreference());
+  const [theme, setThemeState] = useState<ThemeMode>(getThemePreference('dark'));
   const [isAuditLogOpen, setIsAuditLogOpen] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AgentAuditLog[]>([]);
   const [auditRfqId, setAuditRfqId] = useState('');
