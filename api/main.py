@@ -160,7 +160,7 @@ production_origins = {
     "https://wingedtycoons.com",
     "https://rfq.wingedtycoons.com",
 }
-allowed_origins = sorted(configured_origins | (production_origins if runtime_env == "production" else development_origins))
+allowed_origins = sorted(configured_origins | development_origins | (production_origins if runtime_env == "production" else set()))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,

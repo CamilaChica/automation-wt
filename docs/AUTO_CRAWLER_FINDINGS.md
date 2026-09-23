@@ -145,6 +145,17 @@ Fresh backend validation:
 
 These are local regression findings; the deployed authenticated UI crawl still reported zero page errors, console errors, and failed HTTP responses.
 
+## Follow-up Regression Loop
+
+Targeted rerun after fixes:
+
+- Agent harness, agent evaluation, prompt-safety, UX accessibility, API security headers, catalog search, and normalized persistence group: **passed** (`55 passed, 3 skipped`).
+- Frontend unit tests: **8 passed**.
+- Frontend production build: **passed**.
+- Deployed crawler: **passed**.
+
+The full backend suite has previously shown order-sensitive persistence failures when run after the broader test collection. The normalized persistence test passes in isolation and in the focused regression group; this should be stabilized before using the full suite as a release gate.
+
 ## Prioritized Todo List
 
 ### P0: Before relying on this as a production gate

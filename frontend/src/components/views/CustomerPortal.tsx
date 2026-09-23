@@ -229,7 +229,7 @@ export const CustomerPortal: React.FC = () => {
                 />
                 I confirm this request contains accurate part and quantity information.
               </label>
-              <button disabled={isSubmitting} className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-400 px-4 py-3 font-bold text-slate-950 hover:bg-cyan-300 disabled:opacity-60">{isSubmitting ? 'Submitting RFQ...' : 'Send request'} <ArrowRight className="h-4 w-4" /></button>
+              <button disabled={isSubmitting} className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-400 px-4 py-3 font-bold text-slate-950 hover:bg-cyan-300 disabled:opacity-60">{isSubmitting ? 'Sending request...' : 'Send request'} <ArrowRight className="h-4 w-4" /></button>
             </div>
             {notice && <p role="status" aria-live="polite" className="mt-4 flex gap-2 rounded-xl bg-emerald-400/10 p-3 text-sm text-emerald-300"><CheckCircle2 className="h-5 w-5 shrink-0" />{notice}</p>}
             {trackingStatus && (
@@ -253,7 +253,7 @@ export const CustomerPortal: React.FC = () => {
               <label htmlFor="po-export" className="block text-xs text-slate-300">Signed export certification<input id="po-export" name="po-export" required type="file" accept=".pdf,application/pdf" onChange={event => setExportCertificate(event.target.files?.[0] ?? null)} className="mt-1 block w-full text-xs" /></label>
               <label htmlFor="po-kyc" className="block text-xs text-slate-300">Signed KYC form<input id="po-kyc" name="po-kyc" required type="file" accept=".pdf,application/pdf" onChange={event => setKycForm(event.target.files?.[0] ?? null)} className="mt-1 block w-full text-xs" /></label>
               <label htmlFor="po-document" className="block text-xs text-slate-300">Purchase order document<input id="po-document" name="po-document" required type="file" accept=".pdf,application/pdf" onChange={event => setPoDocument(event.target.files?.[0] ?? null)} className="mt-1 block w-full text-xs" /></label>
-              <button disabled={isSubmittingPo || !exportCertificate || !kycForm || !poDocument} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-400 px-4 py-3 font-bold text-slate-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">{isSubmittingPo ? 'Uploading documents and submitting...' : 'Submit purchase order'} <ArrowRight className="h-4 w-4" /></button>
+              <button disabled={isSubmittingPo} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-400 px-4 py-3 font-bold text-slate-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">{isSubmittingPo ? 'Sending purchase order...' : 'Submit purchase order'} <ArrowRight className="h-4 w-4" /></button>
             </div>
           </form>
 
