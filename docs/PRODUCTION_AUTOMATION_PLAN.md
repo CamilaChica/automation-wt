@@ -315,6 +315,19 @@ Verification evidence:
 
 This does **not** claim that the operational repositories have been migrated to PostgreSQL. `services/operations_store.py` remains the SQLite-compatible operational repository for local/test compatibility. The remaining production migration is to implement and deploy PostgreSQL repositories for RFQs, quotes, communications, audit/workflow state, tasks, handoffs, and idempotency, then verify live `/ready` reports `storage_engine=postgresql` and `postgres_primary_migration_required=false`.
 
+## Shared Operational Repository Implementation
+
+The shared PostgreSQL foundation is now present in source:
+
+- `models/operational_models.py` defines the 11 operational domains: RFQs, RFQ items, supplier offers, quotes, quote items, communications, audit events, workflow state, communication tasks, inbound message idempotency, and agent handoffs.
+- `migrations/versions/0003_shared_operational_state.py` creates those PostgreSQL tables and indexes.
+- `repositories/` contains async-session repositories for RFQs, quotes, communications, workflow state, and idempotency claims.
+- `IdempotencyRepository.claim()` performs the existence check and insert in the caller's transaction.
+- Alembic imports the operational models so metadata registration includes the shared tables.
+- Production `OperationsStore` initialization now fails if `DATABASE_URL` is missing instead of silently using SQLite.
+
+This is the schema/repository foundation, not a completed runtime cutover. Existing API and worker orchestration still use compatibility services in places; the next migration step is to route those call sites through the repositories and verify a live PostgreSQL deployment before enabling customer traffic.
+
 ## Production Failure Analysis & Remediation Plan
 
 ### 1. Root Cause Summary (Post-Deployment Audit)

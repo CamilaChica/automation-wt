@@ -16,6 +16,9 @@ SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema.sql"
 
 class OperationsStore:
     def __init__(self, path: str | Path | None = None):
+        production = os.getenv("ENVIRONMENT", os.getenv("WT_ENV", "development")).strip().lower() == "production"
+        if production and not os.getenv("DATABASE_URL", "").strip():
+            raise RuntimeError("DATABASE_URL is required for production operational persistence.")
         configured = path or os.getenv("OPERATIONS_DB_PATH")
         self.path = Path(configured) if configured else DEFAULT_PATH
         self.path.parent.mkdir(parents=True, exist_ok=True)

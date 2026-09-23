@@ -11,6 +11,7 @@ from sqlalchemy import inspect, pool, text
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from models.async_models import Base
+import models.operational_models  # noqa: F401 - register shared operational tables
 
 config = context.config
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
