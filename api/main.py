@@ -27,6 +27,7 @@ from services.carrier_tracking_service import carrier_tracking_service
 from services.twilio_service import twilio_service
 from services.freight_service import FreightRequest, freight_rate_service
 from services.operations_store import operations_store
+from services.persistence_status import persistence_status
 from services.export_control_service import export_control_service
 from services.attachment_service import AttachmentService
 from services.swarm_runtime import swarm_runtime
@@ -350,7 +351,7 @@ async def ready():
         db_service.list_rfqs()
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"database not ready: {exc}") from exc
-    return {"status": "ready", "database": {"healthy": True}}
+    return {"status": "ready", "database": {"healthy": True}, "persistence": persistence_status()}
 
 
 @app.get("/api/attachments/{attachment_id}")

@@ -18,6 +18,7 @@ class SupplierEmailIngestionService:
         try:
             extracted = self.extractor.extract(email_text)
             deterministic_part_number = extracted.get("part_number")
+            structured_items: list[dict[str, Any]] = []
             try:
                 llm_data = extract_email_intelligence(
                     email_text,
@@ -26,6 +27,7 @@ class SupplierEmailIngestionService:
                     attachments=attachments,
                 )
                 if llm_data.items:
+                    structured_items = [item.model_dump() for item in llm_data.items]
                     item = llm_data.items[0]
                     extracted.update({
                         "supplier_name": llm_data.supplier_name or extracted.get("supplier_name"),
@@ -76,23 +78,49 @@ class SupplierEmailIngestionService:
                 body=email_text,
             )
 
-            supplier_db.save_supplier_offer(
-                supplier_name=supplier_name,
-                supplier_email=supplier_email,
-                part_number=part_number,
-                quantity_available=quantity,
-                unit_cost=float(unit_cost),
-                certificate_type=certificate,
-                lead_time_days=int(lead_time),
-                approval_status=extracted.get("approval_status", "Approved"),
-                condition_code=condition,
-                source_email_id=source_email_id,
-                confidence=float(extracted.get("confidence", 0.9)),
-                description=extracted.get("description", ""),
-                availability_location=extracted.get("availability_location"),
-                warranty_terms=extracted.get("warranty_terms"),
-                trace_documents=extracted.get("trace_documents", []),
-            )
+            items = []
+            for index, item in enumerate(structured_items or [{
+                "part_number": part_number,
+                "quantity": quantity,
+                "unit_price": unit_cost,
+                "condition_code": condition,
+                "trace_documents": extracted.get("trace_documents", []),
+                "description": extracted.get("description", ""),
+                "availability_location": extracted.get("availability_location"),
+                "warranty_terms": extracted.get("warranty_terms"),
+                "lead_time_days": lead_time,
+            }]):
+                item_part_number = str(item.get("part_number") or part_number).strip().upper()
+                item_quantity = int(item.get("quantity") or quantity or 1)
+                item_price = float(item.get("unit_price") if item.get("unit_price") is not None else unit_cost or 0.0)
+                item_certificate = (item.get("trace_documents") or [certificate])[0] if (item.get("trace_documents") or [certificate]) else certificate
+                item_source_id = source_email_id if index == 0 else f"{source_email_id}:{index}"
+                supplier_db.save_supplier_offer(
+                    supplier_name=supplier_name,
+                    supplier_email=supplier_email,
+                    part_number=item_part_number,
+                    quantity_available=item_quantity,
+                    unit_cost=item_price,
+                    certificate_type=item_certificate,
+                    lead_time_days=int(item.get("lead_time_days") or lead_time),
+                    approval_status=extracted.get("approval_status", "Approved"),
+                    condition_code=item.get("condition_code") or condition,
+                    source_email_id=item_source_id,
+                    confidence=float(extracted.get("confidence", 0.9)),
+                    description=item.get("description") or extracted.get("description", ""),
+                    availability_location=item.get("availability_location") or extracted.get("availability_location"),
+                    warranty_terms=item.get("warranty_terms") or extracted.get("warranty_terms"),
+                    trace_documents=item.get("trace_documents") or extracted.get("trace_documents", []),
+                )
+                items.append({
+                    "part_number": item_part_number,
+                    "quantity_available": item_quantity,
+                    "unit_cost": item_price,
+                    "certificate_type": item_certificate,
+                    "lead_time_days": int(item.get("lead_time_days") or lead_time),
+                    "condition_code": item.get("condition_code") or condition,
+                    "source_email_id": item_source_id,
+                })
 
             return {
                 "success": True,
@@ -105,6 +133,7 @@ class SupplierEmailIngestionService:
                 "warranty_terms": extracted.get("warranty_terms"),
                 "trace_documents": extracted.get("trace_documents", []),
                 "source_email_id": source_email_id,
+                "items": items,
             }
         except Exception as exc:  # pragma: no cover - defensive
             return {"success": False, "error": str(exc)}

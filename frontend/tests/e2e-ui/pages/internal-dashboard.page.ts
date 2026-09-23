@@ -1,7 +1,8 @@
 import { expect, type Page } from '@playwright/test';
 
 export class InternalDashboardPage {
-  constructor(readonly page: Page) {}
+  readonly page: Page;
+  constructor(page: Page) { this.page = page; }
 
   async open() {
     await this.page.goto('/');

@@ -117,18 +117,18 @@ test.describe('UI gadget clickability', () => {
     await page.locator('input[type="file"]').setInputFiles({ name: 'euc.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4') });
     await page.getByRole('checkbox').check();
 
-    await page.getByPlaceholder('Company or contact name').fill('E2E Customer');
-    await page.getByPlaceholder('Work email').first().fill('e2e@example.com');
-    await page.getByPlaceholder('Part number', { exact: true }).fill('32-11-45-01');
+    await page.getByPlaceholder('e.g., Global Airlines').fill('E2E Customer');
+    await page.getByPlaceholder('e.g., buyer@airline.com').first().fill('e2e@example.com');
+    await page.getByPlaceholder('e.g., BACB30LU-4').fill('32-11-45-01');
     await page.getByRole('button', { name: /Send request/i }).click();
     await expect(page.getByText(/Request WT-SMOKE received/i)).toBeVisible();
 
-    await page.getByPlaceholder('Quote reference, e.g. QTE-123456').fill('QTE-E2E');
-    await page.getByPlaceholder('Your purchase order number').fill('PO-E2E');
-    await page.getByRole('button', { name: /Submit purchase order/i }).click();
+      await page.getByPlaceholder('e.g., QTE-123456').fill('QTE-E2E');
+      await page.getByPlaceholder('e.g., PO-1001').fill('PO-E2E');
+      await page.getByRole('button', { name: /Submit purchase order/i }).click();
     await expect(page.getByText(/Purchase order PO-E2E received/i)).toBeVisible();
 
-    await page.getByPlaceholder('Tracking token').fill('tracking-e2e');
+      await page.getByPlaceholder('Enter your tracking token').fill('tracking-e2e');
     await page.getByRole('button', { name: 'Track shipment' }).click();
     await assertNoRuntimeErrors(page);
   });

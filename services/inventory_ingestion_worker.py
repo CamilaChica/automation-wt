@@ -87,8 +87,15 @@ class InventoryIngestionWorker:
             message_id=message_id or None,
             attachments=message.get("attachments") or [],
         )
+        mirror_warning = None
         if result.get("success"):
-            asyncio.run(self._persist_postgres(result, message))
+            try:
+                for item in result.get("items") or [result]:
+                    item_result = {**result, **item}
+                    asyncio.run(self._persist_postgres(item_result, message))
+            except Exception as exc:
+                mirror_warning = f"PostgreSQL mirror pending: {type(exc).__name__}"
+                logger.exception("Supplier inventory mirror failed for %s", message_id or "unknown")
             sender = str(message.get("from") or "")
             if "@" in sender and result.get("unit_cost"):
                 communication_service.schedule_supplier_discount_request(
@@ -100,7 +107,10 @@ class InventoryIngestionWorker:
                     reply_to=message_id or None,
                     quantity=int(result.get("quantity_available") or 1),
                 )
-        return {"message_id": message_id, "result": result, "success": bool(result.get("success"))}
+        response = {"message_id": message_id, "result": result, "success": bool(result.get("success"))}
+        if mirror_warning:
+            response["persistence_warning"] = mirror_warning
+        return response
 
     def poll_once(self, limit: int = 25) -> list[dict[str, Any]]:
         messages = self.fetch_messages(self.mailbox, limit=limit)

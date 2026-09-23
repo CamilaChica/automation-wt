@@ -2,13 +2,15 @@ import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
 class RFQPage {
-  constructor(private page: import("@playwright/test").Page) {}
+  private page: import("@playwright/test").Page;
+  constructor(page: import("@playwright/test").Page) { this.page = page; }
   async open() { await this.page.goto("/rfq"); }
   form() { return this.page.locator("form.rfq-card"); }
 }
 
 class QuotePortalPage {
-  constructor(public page: import("@playwright/test").Page) {}
+  public page: import("@playwright/test").Page;
+  constructor(page: import("@playwright/test").Page) { this.page = page; }
   async open(id = "QTE-9921") { await this.page.goto(`/quotes/${id}`); }
   async uploadAndAccept() {
     await this.page.getByLabel("Purchase order PDF").setInputFiles({ name: "po-9921.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 PO") });

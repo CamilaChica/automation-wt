@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { RFQ, RFQDetailResponse, InventoryItem, Supplier, Quote, QuoteItem, AgentAuditLog, AutomationEvent } from '../types';
+import { RFQ, RFQDetailResponse, InventoryItem, Supplier, Quote, QuoteItem, AgentAuditLog, AutomationEvent, Shipment } from '../types';
 
 const hostedApiBase = window.location.hostname === 'winged-tycoons-frontend.onrender.com'
   ? 'https://winged-tycoons-api.onrender.com/api'
@@ -292,7 +292,7 @@ export const apiService = {
     const res = await axios.get(`${API_BASE}/supplier-offers`, { params: { part_number } });
     return res.data;
   },
-  async getShipments(): Promise<any[]> {
+  async getShipments(): Promise<Shipment[]> {
     const res = await axios.get(`${API_BASE}/internal/shipments`);
     return res.data;
   },

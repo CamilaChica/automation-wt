@@ -78,11 +78,17 @@ const InternalApp: React.FC = () => {
     let active = true;
     const loadAuditFeed = async () => {
       const rfqs = await apiService.getRFQs();
-      if (!active || rfqs.length === 0) return;
+      if (!active) return;
+      if (rfqs.length === 0) {
+        setIsLiveAuditUnavailable(true);
+        setAuditLogs(sampleLogs);
+        setAuditRfqId('Cached sample data');
+        return;
+      }
       let events: AutomationEvent[] = [];
       try {
         events = await apiService.getAutomationEvents();
-        if (active) setIsLiveAuditUnavailable(false);
+        if (active) setIsLiveAuditUnavailable(events.length === 0);
       } catch {
         if (active) {
           setIsLiveAuditUnavailable(true);
@@ -173,6 +179,13 @@ const InternalApp: React.FC = () => {
         theme={theme}
         onToggleTheme={toggleTheme}
         onSelectView={setCurrentView}
+        onSearch={(query) => {
+          const normalized = query.trim().toLowerCase();
+          if (normalized.includes('supplier') || normalized.includes('part')) setCurrentView('sourcing');
+          else if (normalized.includes('quote') || normalized.includes('sales')) setCurrentView('sales');
+          else if (normalized.includes('trace') || normalized.includes('compliance')) setCurrentView('trace-vault');
+          else if (normalized.includes('shipment') || normalized.includes('fulfillment')) setCurrentView('fulfillment');
+        }}
         onOpenAuditLog={() => setIsAuditLogOpen(true)}
       />
 

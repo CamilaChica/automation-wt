@@ -101,6 +101,26 @@ export interface QuoteItem {
   margin_percent: number;
   certificate_type: string;
   compliance_status: 'Pass' | 'Warn' | 'Fail';
+  attachments?: string[];
+  description?: string;
+  condition?: string;
+  lead_time_days?: number;
+}
+
+export interface ShipmentEvent {
+  id: string;
+  status: string;
+  location?: string;
+  description: string;
+}
+
+export interface Shipment {
+  id: string;
+  status: string;
+  carrier?: string;
+  tracking_number?: string;
+  estimated_delivery?: string;
+  events?: ShipmentEvent[];
 }
 
 export interface Quote {

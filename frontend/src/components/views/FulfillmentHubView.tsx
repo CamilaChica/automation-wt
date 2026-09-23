@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { apiService } from '../../services/api';
+import { Shipment } from '../../types';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { 
   QrCode, 
@@ -12,7 +13,7 @@ import {
 } from 'lucide-react';
 
 export const FulfillmentHubView: React.FC = () => {
-  const [shipments, setShipments] = useState<any[]>([]);
+  const [shipments, setShipments] = useState<Shipment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -76,9 +77,7 @@ export const FulfillmentHubView: React.FC = () => {
         </div>
         {error && <div role="alert" className="mt-4 flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700"><span>{error}</span><button type="button" onClick={() => void loadShipments()} className="font-bold underline">Retry</button></div>}
         <div className="mt-4 grid gap-3 md:grid-cols-3">
-          {loading && <p className="text-sm text-slate-400">Loading shipments...</p>}
-          {shipments.length === 0 && <p className="text-sm text-slate-400">No shipments are currently registered.</p>}
-          {shipments.slice(0, 6).map(shipment => (
+          {loading ? <p className="text-sm text-slate-400" role="status" aria-live="polite">Loading shipments...</p> : shipments.length === 0 ? <p className="text-sm text-slate-400">No shipments are currently registered.</p> : shipments.slice(0, 6).map(shipment => (
             <div key={shipment.id} className="rounded-xl border border-slate-200 dark:border-slate-800 p-3 text-xs">
               <div className="font-mono font-bold text-aero-blue">{shipment.id}</div>
               <div className="mt-1 font-semibold">{shipment.status}</div>

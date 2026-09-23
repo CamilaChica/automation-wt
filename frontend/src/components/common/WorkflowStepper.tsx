@@ -30,9 +30,12 @@ export const WorkflowStepper: React.FC<WorkflowStepperProps> = ({
 
           return (
             <React.Fragment key={idx}>
-              <div
+              <button
+                type="button"
                 onClick={() => onSelectStep?.(idx)}
-                className={`flex items-center space-x-1.5 cursor-pointer py-1.5 px-3 rounded-xl transition-all whitespace-nowrap ${
+                disabled={!onSelectStep}
+                aria-current={isCurrent ? 'step' : undefined}
+                className={`flex items-center space-x-1.5 ${onSelectStep ? 'cursor-pointer' : 'cursor-default'} py-1.5 px-3 rounded-xl transition-all whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${
                   isCurrent
                     ? 'bg-aero-blue text-white font-bold shadow-md shadow-aero-blue/20 ring-1 ring-aero-blue'
                     : isComplete
@@ -50,7 +53,7 @@ export const WorkflowStepper: React.FC<WorkflowStepperProps> = ({
                   </span>
                 )}
                 <span>{step.label}</span>
-              </div>
+              </button>
 
               {idx < steps.length - 1 && (
                 <ChevronRight className="w-3 h-3 text-slate-300 dark:text-slate-700 shrink-0" />

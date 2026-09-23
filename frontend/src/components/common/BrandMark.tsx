@@ -26,6 +26,8 @@ export const BrandMark: React.FC<BrandMarkProps> = ({ compact = false }) => {
       key={source}
       src={source}
       alt="Winged Tycoons Logo"
+      width={compact ? 28 : 44}
+      height={compact ? 28 : 44}
       className={compact ? 'h-7 w-7' : 'h-11 w-11'}
       onError={() => setSourceIndex(index => index + 1)}
     />

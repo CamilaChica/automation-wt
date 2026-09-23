@@ -419,8 +419,11 @@ export const CustomerDashboard: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   {/* Option A (Recommended / Internal Stock) */}
                   <div 
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setSelectedOption('A')}
-                    className={`p-3.5 rounded-xl border cursor-pointer relative transition-all ${
+                    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedOption('A'); } }}
+                    className={`p-3.5 rounded-xl border cursor-pointer relative transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${
                       selectedOption === 'A'
                         ? 'border-aero-blue bg-blue-50/50 dark:bg-blue-950/20 shadow-sm ring-1 ring-aero-blue'
                         : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-slate-50/50 dark:bg-slate-900/30'
@@ -453,8 +456,11 @@ export const CustomerDashboard: React.FC = () => {
 
                   {/* Option B (Overhauled / Frankfurt) */}
                   <div 
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setSelectedOption('B')}
-                    className={`p-3.5 rounded-xl border cursor-pointer relative transition-all ${
+                    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedOption('B'); } }}
+                    className={`p-3.5 rounded-xl border cursor-pointer relative transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${
                       selectedOption === 'B'
                         ? 'border-aero-blue bg-blue-50/50 dark:bg-blue-950/20 shadow-sm ring-1 ring-aero-blue'
                         : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-slate-50/50 dark:bg-slate-900/30'
@@ -481,8 +487,11 @@ export const CustomerDashboard: React.FC = () => {
 
                   {/* Option C (DFW Stock) */}
                   <div 
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setSelectedOption('C')}
-                    className={`p-3.5 rounded-xl border cursor-pointer relative transition-all ${
+                    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedOption('C'); } }}
+                    className={`p-3.5 rounded-xl border cursor-pointer relative transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${
                       selectedOption === 'C'
                         ? 'border-aero-blue bg-blue-50/50 dark:bg-blue-950/20 shadow-sm ring-1 ring-aero-blue'
                         : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-slate-50/50 dark:bg-slate-900/30'

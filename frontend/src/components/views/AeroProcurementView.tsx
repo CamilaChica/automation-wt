@@ -64,7 +64,7 @@ export const AeroProcurementView: React.FC = () => {
                 {rfqs.length === 0 && <tr><td colSpan={6} className="py-8 text-center text-slate-400">No active RFQs.</td></tr>}
                 {rfqs.map((rfq, idx) => {
                   const supplier = (['A', 'B', 'C'] as const)[idx % 3];
-                  return <tr key={rfq.id} tabIndex={0} role="button" onClick={() => setSelectedSupplier(supplier)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedSupplier(supplier); } }} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors">
+                  return <tr key={rfq.id} tabIndex={0} role="button" onClick={() => setSelectedSupplier(supplier)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedSupplier(supplier); } }} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors focus:outline-none focus-visible:bg-blue-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-aero-blue">
                     <td className="py-2.5 text-aero-blue font-bold">{rfq.id}</td>
                     <td className="py-2.5">
                       <div className="font-bold text-slate-900 dark:text-slate-200">{rfq.part_number || 'Pending extraction'}</div>
@@ -105,9 +105,9 @@ export const AeroProcurementView: React.FC = () => {
           {/* Source Matrix Cards */}
           <div className="grid grid-cols-3 gap-2.5 font-mono text-[11px]">
             {/* Supplier A */}
-            <div 
+            <button type="button"
               onClick={() => setSelectedSupplier('A')}
-              className={`p-3 rounded-xl border cursor-pointer transition-all ${
+              className={`p-3 rounded-xl border cursor-pointer transition-all text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${
                 selectedSupplier === 'A'
                   ? 'bg-blue-50/70 dark:bg-aero-blue/20 border-aero-blue text-slate-900 dark:text-white shadow-sm ring-1 ring-aero-blue'
                   : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-700'
@@ -123,12 +123,12 @@ export const AeroProcurementView: React.FC = () => {
                 <div>Cert: FAA 8130-3</div>
                 <div>Lead: Immediate</div>
               </div>
-            </div>
+            </button>
 
             {/* Supplier B */}
-            <div 
+            <button type="button"
               onClick={() => setSelectedSupplier('B')}
-              className={`p-3 rounded-xl border cursor-pointer transition-all ${
+              className={`p-3 rounded-xl border cursor-pointer transition-all text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${
                 selectedSupplier === 'B'
                   ? 'bg-blue-50/70 dark:bg-aero-blue/20 border-aero-blue text-slate-900 dark:text-white shadow-sm ring-1 ring-aero-blue'
                   : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-700'
@@ -144,12 +144,12 @@ export const AeroProcurementView: React.FC = () => {
                 <div>Location: FRA</div>
                 <div>Lead: 3 Days</div>
               </div>
-            </div>
+            </button>
 
             {/* Supplier C */}
-            <div 
+            <button type="button"
               onClick={() => setSelectedSupplier('C')}
-              className={`p-3 rounded-xl border cursor-pointer transition-all ${
+              className={`p-3 rounded-xl border cursor-pointer transition-all text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${
                 selectedSupplier === 'C'
                   ? 'bg-blue-50/70 dark:bg-aero-blue/20 border-aero-blue text-slate-900 dark:text-white shadow-sm ring-1 ring-aero-blue'
                   : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-700'
@@ -165,7 +165,7 @@ export const AeroProcurementView: React.FC = () => {
                 <div>Location: DFW</div>
                 <div>Lead: Hot Shot</div>
               </div>
-            </div>
+            </button>
           </div>
 
           {/* Traceability Compliance Vault */}

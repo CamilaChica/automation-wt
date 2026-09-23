@@ -150,7 +150,8 @@ export const CustomerPortal: React.FC = () => {
               <Plane className="h-6 w-6 text-cyan-400" />
             </div>
             <form onSubmit={handleSearch} className="flex gap-3">
-              <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search part number, e.g. 060-1234-00" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-cyan-400" />
+              <label htmlFor="catalog-search" className="sr-only">Search aircraft parts</label>
+              <input id="catalog-search" name="catalog-search" autoComplete="off" aria-label="Search aircraft parts" value={query} onChange={event => setQuery(event.target.value)} placeholder="e.g., 060-1234-00" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
               <button className="rounded-xl bg-cyan-400 px-4 py-3 font-bold text-slate-950 hover:bg-cyan-300" aria-label="Search parts"><Search className="h-4 w-4" /></button>
             </form>
             <div className="mt-5 space-y-3">
@@ -169,16 +170,23 @@ export const CustomerPortal: React.FC = () => {
             <h2 className="font-display text-xl font-bold">Request a quote</h2>
             <p className="mt-1 text-sm text-slate-300">Can’t find the exact part? Tell us what you need.</p>
             <div className="mt-5 space-y-3">
-              <input required value={customerName} onChange={event => setCustomerName(event.target.value)} placeholder="Company or contact name" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-cyan-400" />
-              <input required type="email" value={customerEmail} onChange={event => setCustomerEmail(event.target.value)} placeholder="Work email" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-cyan-400" />
+              <label htmlFor="customer-name" className="sr-only">Company or contact name</label>
+              <input id="customer-name" name="customer-name" autoComplete="organization" required value={customerName} onChange={event => setCustomerName(event.target.value)} placeholder="e.g., Global Airlines" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
+              <label htmlFor="customer-email" className="sr-only">Work email</label>
+              <input id="customer-email" name="customer-email" autoComplete="email" required type="email" value={customerEmail} onChange={event => setCustomerEmail(event.target.value)} placeholder="e.g., buyer@airline.com" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
               <div className="flex gap-3">
-                <input required value={partNumber} onChange={event => setPartNumber(event.target.value)} placeholder="Part number" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-cyan-400" />
-                <input required type="number" min="1" value={quantity} onChange={event => setQuantity(Number(event.target.value))} className="w-24 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-cyan-400" aria-label="Quantity" />
+                <label htmlFor="rfq-part-number" className="sr-only">Part number</label>
+                <input id="rfq-part-number" name="part-number" autoComplete="off" required value={partNumber} onChange={event => setPartNumber(event.target.value)} placeholder="e.g., BACB30LU-4" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
+                <label htmlFor="rfq-quantity" className="sr-only">Quantity</label>
+                <input id="rfq-quantity" name="quantity" required type="number" min="1" value={quantity} onChange={event => setQuantity(Number(event.target.value))} className="w-24 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
               </div>
-              <textarea value={details} onChange={event => setDetails(event.target.value)} placeholder="Condition, aircraft type, certification, delivery location..." rows={4} className="w-full resize-none rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-cyan-400" />
+              <label htmlFor="rfq-details" className="sr-only">RFQ details</label>
+              <textarea id="rfq-details" name="details" autoComplete="off" value={details} onChange={event => setDetails(event.target.value)} placeholder="Condition, aircraft type, certification, and delivery location" rows={4} className="w-full resize-none rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
               <label className="block rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-300">
                 End-user compliance PDF (EUC)
                 <input
+                  id="compliance-file"
+                  name="compliance-file"
                   type="file"
                   accept=".pdf,application/pdf"
                   onChange={event => setComplianceFile(event.target.files?.[0] ?? null)}
@@ -188,13 +196,15 @@ export const CustomerPortal: React.FC = () => {
               </label>
               <label className="flex items-center gap-2 text-xs text-slate-300">
                 <input
+                  id="agreement-signed"
+                  name="agreement-signed"
                   type="checkbox"
                   checked={agreementSigned}
                   onChange={event => setAgreementSigned(event.target.checked)}
                 />
                 I confirm this order and compliance documentation are valid for export screening.
               </label>
-              <button disabled={isSubmitting} className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-400 px-4 py-3 font-bold text-slate-950 hover:bg-cyan-300 disabled:opacity-60">{isSubmitting ? 'Sending request...' : 'Send request'} <ArrowRight className="h-4 w-4" /></button>
+              <button disabled={isSubmitting} className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-400 px-4 py-3 font-bold text-slate-950 hover:bg-cyan-300 disabled:opacity-60">{isSubmitting ? 'Submitting RFQ...' : 'Send request'} <ArrowRight className="h-4 w-4" /></button>
             </div>
             {notice && <p role="status" aria-live="polite" className="mt-4 flex gap-2 rounded-xl bg-emerald-400/10 p-3 text-sm text-emerald-300"><CheckCircle2 className="h-5 w-5 shrink-0" />{notice}</p>}
             {trackingStatus && (
@@ -208,9 +218,12 @@ export const CustomerPortal: React.FC = () => {
             <h2 className="font-display text-xl font-bold">Send a purchase order</h2>
             <p className="mt-1 text-sm text-slate-300">Use the quote reference from our email. Supplier details remain confidential.</p>
             <div className="mt-5 space-y-3">
-              <input required value={quoteId} onChange={event => setQuoteId(event.target.value)} placeholder="Quote reference, e.g. QTE-123456" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-emerald-400" />
-              <input required value={poNumber} onChange={event => setPoNumber(event.target.value)} placeholder="Your purchase order number" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-emerald-400" />
-              <input required type="email" value={customerEmail} onChange={event => setCustomerEmail(event.target.value)} placeholder="Work email" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-emerald-400" />
+              <label htmlFor="quote-id" className="sr-only">Quote reference</label>
+              <input id="quote-id" name="quote-id" autoComplete="off" required value={quoteId} onChange={event => setQuoteId(event.target.value)} placeholder="e.g., QTE-123456" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none" />
+              <label htmlFor="po-number" className="sr-only">Purchase order number</label>
+              <input id="po-number" name="po-number" autoComplete="off" required value={poNumber} onChange={event => setPoNumber(event.target.value)} placeholder="e.g., PO-1001" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none" />
+              <label htmlFor="po-email" className="sr-only">Purchase order work email</label>
+              <input id="po-email" name="po-email" autoComplete="email" required type="email" value={customerEmail} onChange={event => setCustomerEmail(event.target.value)} placeholder="e.g., buyer@airline.com" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none" />
               <button disabled={isSubmittingPo} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-400 px-4 py-3 font-bold text-slate-950 hover:bg-emerald-300 disabled:opacity-60">{isSubmittingPo ? 'Sending purchase order...' : 'Submit purchase order'} <ArrowRight className="h-4 w-4" /></button>
             </div>
           </form>
@@ -219,7 +232,8 @@ export const CustomerPortal: React.FC = () => {
             <h2 className="font-display text-xl font-bold">Track a shipment</h2>
             <p className="mt-1 text-sm text-slate-400">Enter the private tracking token from our shipment email.</p>
             <div className="mt-5 flex gap-3">
-              <input required value={trackingToken} onChange={event => setTrackingToken(event.target.value)} placeholder="Tracking token" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:border-cyan-400" />
+              <label htmlFor="tracking-token" className="sr-only">Tracking token</label>
+              <input id="tracking-token" name="tracking-token" autoComplete="off" required value={trackingToken} onChange={event => setTrackingToken(event.target.value)} placeholder="Enter your tracking token" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
               <button disabled={isTracking} className="rounded-xl bg-cyan-400 px-4 py-3 font-bold text-slate-950 disabled:opacity-60" aria-label="Track shipment">{isTracking ? '...' : 'Track'}</button>
             </div>
             {shipment && (
