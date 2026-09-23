@@ -33,8 +33,14 @@ services:
         sync: false
       - key: GRAPH_MAILBOX_USER
         sync: false
+      - key: GRAPH_MAILBOX_USER_SALES
+        value: "sales@wingedtycoons.com"
+      - key: GRAPH_MAILBOX_USER_PURCHASING
+        value: "purchasing@wingedtycoons.com"
       - key: DATABASE_URL
         sync: false
+      - key: INVENTORY_INGESTION_POSTGRES_ENABLED
+        value: "true"
       - key: MICROSOFT_TENANT_ID
         sync: false
       - key: MICROSOFT_CLIENT_ID
@@ -173,6 +179,10 @@ services:
         sync: false
       - key: GRAPH_MAILBOX_USER
         sync: false
+      - key: GRAPH_MAILBOX_USER_SALES
+        value: "sales@wingedtycoons.com"
+      - key: GRAPH_MAILBOX_USER_PURCHASING
+        value: "purchasing@wingedtycoons.com"
       - key: EMAIL_SEND_ENABLED
         value: "true"
       - key: OPENAI_API_KEY
