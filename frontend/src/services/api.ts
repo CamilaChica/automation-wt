@@ -37,7 +37,8 @@ axios.interceptors.response.use(
 
 const rethrowAuthError = (error: unknown): never => {
   if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) {
-    throw error;
+    apiService.logout();
+    throw new Error('Your session expired. Please sign in again.');
   }
   throw error;
 };

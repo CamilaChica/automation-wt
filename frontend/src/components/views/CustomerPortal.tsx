@@ -30,11 +30,12 @@ export const CustomerPortal: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
-  useEffect(() => {
-    void searchCatalog('');
-  }, []);
-
   const searchCatalog = async (value: string) => {
+    if (!value.trim()) {
+      setResults([]);
+      setNotice('Enter a part number to search availability.');
+      return;
+    }
     setIsSearching(true);
     try {
       setResults(await apiService.searchCatalog(value, condition || undefined));
@@ -193,7 +194,7 @@ export const CustomerPortal: React.FC = () => {
                 <input id="rfq-quantity" name="quantity" required type="number" min="1" value={quantity} onChange={event => setQuantity(Number(event.target.value))} className="w-24 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
               </div>
                 <label htmlFor="rfq-condition" className="sr-only">Target condition</label>
-                <select id="rfq-condition" name="condition" required value={condition} onChange={event => setCondition(event.target.value)} className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm focus:ring-2 focus:ring-cyan-400 focus:outline-none"><option value="">Select target condition</option><option value="NE">NE - New</option><option value="OH">OH - Overhauled</option><option value="AR">AR - As Removed</option><option value="NS">NS - New Surplus</option></select>
+                <select id="rfq-condition" name="condition" required value={condition} onChange={event => setCondition(event.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 focus:ring-2 focus:ring-cyan-400 focus:outline-none"><option value="">Select target condition</option><option value="NE">NE - New</option><option value="FN">FN - Factory New</option><option value="NS">NS - New Surplus</option><option value="OH">OH - Overhauled</option><option value="SVC">SVC - Serviceable</option><option value="RP">RP - Repaired</option><option value="AR">AR - As Removed</option><option value="IN">IN - Inspected</option></select>
               <label htmlFor="rfq-details" className="sr-only">RFQ details</label>
               <textarea id="rfq-details" name="details" autoComplete="off" value={details} onChange={event => setDetails(event.target.value)} placeholder="Condition, aircraft type, certification, and delivery location" rows={4} className="w-full resize-none rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
               <label className="block rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700">

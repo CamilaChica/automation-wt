@@ -237,6 +237,7 @@ class SupplierDatabase:
         }
 
     def find_supplier_offers(self, part_number: str, quantity_needed: int = 1) -> List[Dict[str, Any]]:
+        normalized_part = str(part_number or "").strip().upper()
         with self._connection() as conn:
             rows = conn.execute(
                 """
@@ -255,9 +256,37 @@ class SupplierDatabase:
                          sp.lead_time_days ASC
                 LIMIT 10
                 """,
-                (part_number.upper(), max(1, quantity_needed)),
+                (normalized_part, max(1, quantity_needed)),
             ).fetchall()
 
+        return [dict(row) for row in rows]
+
+    def search_supplier_offers(self, query: str, condition: str | None = None) -> List[Dict[str, Any]]:
+        normalized_query = str(query or "").strip().upper()
+        normalized_condition = str(condition or "").strip().upper()
+        if not normalized_query:
+            return []
+        clauses = ["sp.part_number LIKE ?"]
+        params: list[Any] = [f"%{normalized_query}%"]
+        if normalized_condition:
+            clauses.append("UPPER(COALESCE(sp.condition_code, '')) = ?")
+            params.append(normalized_condition)
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT sp.id AS supplier_part_id, sp.supplier_id, sp.part_number, sp.quantity_available,
+                       sp.unit_cost, sp.certificate_type, sp.lead_time_days, sp.condition_code,
+                       sp.approval_status, sp.confidence, s.company_name AS supplier_name,
+                       s.email AS supplier_email
+                FROM supplier_parts sp
+                JOIN suppliers s ON s.id = sp.supplier_id
+                WHERE {' AND '.join(clauses)}
+                  AND (sp.approval_status = 'Approved' OR s.approval_status = 'Approved')
+                ORDER BY sp.updated_at DESC, sp.unit_cost ASC
+                LIMIT 50
+                """,
+                params,
+            ).fetchall()
         return [dict(row) for row in rows]
 
     def get_supplier_offers_for_part(self, part_number: str) -> List[Dict[str, Any]]:

@@ -248,9 +248,13 @@ class SupplierEmailExtractor:
     def _extract_condition(self, text: str) -> Optional[str]:
         conditions = {
             "NE": r"\bNEW\b|\bNE\b",
+            "FN": r"\bFACTORY\s*NEW\b|\bFN\b",
+            "SVC": r"\bSERVICEABLE\b|\bSVC\b",
+            "RP": r"\bREPAIRED\b|\bRP\b",
             "OH": r"\bOVERHAULED\b|\bOH\b",
             "AR": r"\bAS\s*REMOVED\b|\bAR\b",
             "NS": r"\bNEW\s*SURPLUS\b|\bNS\b",
+            "IN": r"\bINSPECTED\b|\bIN\b",
         }
         for code, pattern in conditions.items():
             if re.search(pattern, text, flags=re.IGNORECASE):

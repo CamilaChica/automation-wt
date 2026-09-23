@@ -1008,21 +1008,38 @@ async def search_catalog(query: str = "", condition: Optional[str] = None, _user
     Deliberately omits internal costs, serial numbers, and warehouse locations.
     """
     normalized_query = query.strip().lower()
+    if not normalized_query:
+        return []
     normalized_condition = (condition or "").strip().upper()
-    if normalized_condition and normalized_condition not in {"NE", "OH", "AR", "NS"}:
-        raise HTTPException(status_code=400, detail="Condition must be NE, OH, AR, or NS.")
+    valid_conditions = {"NE", "FN", "NS", "OH", "SVC", "RP", "AR", "IN"}
+    if normalized_condition and normalized_condition not in valid_conditions:
+        raise HTTPException(status_code=400, detail="Condition must be NE, FN, NS, OH, SVC, RP, AR, or IN.")
     results = []
+    seen_parts: set[tuple[str, str]] = set()
     for item in db_service.inventory.values():
         if normalized_query and normalized_query not in item.part_number.lower():
             continue
         if normalized_condition and item.condition_code.upper() != normalized_condition:
             continue
+        key = (item.part_number.upper(), item.condition_code.upper())
+        seen_parts.add(key)
         results.append(CatalogItem(
             part_number=item.part_number,
             condition_code=item.condition_code,
             quantity_available=item.quantity_available,
             certificate_type=item.certificate_type,
             has_full_trace=item.has_full_trace,
+        ))
+    for offer in supplier_db.search_supplier_offers(query, normalized_condition or None):
+        key = (str(offer.get("part_number", "")).upper(), str(offer.get("condition_code") or "NE").upper())
+        if key in seen_parts:
+            continue
+        results.append(CatalogItem(
+            part_number=key[0],
+            condition_code=key[1],
+            quantity_available=int(offer.get("quantity_available") or 0),
+            certificate_type=offer.get("certificate_type") or "Available upon supplier confirmation",
+            has_full_trace=bool(offer.get("certificate_type")),
         ))
     return results
 
