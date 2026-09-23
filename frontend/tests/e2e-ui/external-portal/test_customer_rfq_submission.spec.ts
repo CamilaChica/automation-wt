@@ -26,11 +26,11 @@ test('blocks malformed customer input before submission', async ({ page }) => {
   await form.getByPlaceholder('e.g., Global Airlines').fill('Global Airlines');
   await form.getByPlaceholder('e.g., buyer@airline.com').fill('not-an-email');
   await form.getByPlaceholder('e.g., BACB30LU-4').fill('XYZ123');
-  await form.getByLabel('Quantity').fill('0');
-  await form.getByLabel(/I confirm this order/).check();
+  await form.getByLabel('Quantity', { exact: true }).fill('0');
+  await form.getByLabel(/I confirm this request/).check();
   await form.getByRole('button', { name: 'Send request' }).click();
 
   await expect(form.getByPlaceholder('e.g., buyer@airline.com')).toHaveAttribute('type', 'email');
-  await expect(form.getByLabel('Quantity')).toHaveAttribute('min', '1');
+  await expect(form.getByLabel('Quantity', { exact: true })).toHaveAttribute('min', '1');
   expect(intakeCalled).toBe(false);
 });

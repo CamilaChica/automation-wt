@@ -16,8 +16,9 @@ test('customer submission is visible to staff through shared API state', async (
   await customerPage.getByRole('form', { name: 'Request a quote form' }).getByPlaceholder('e.g., Global Airlines').fill('Global Airlines');
   await customerPage.getByRole('form', { name: 'Request a quote form' }).getByPlaceholder('e.g., buyer@airline.com').fill('buyer@example.com');
   await customerPage.getByRole('form', { name: 'Request a quote form' }).getByPlaceholder('e.g., BACB30LU-4').fill('XYZ123');
-  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByLabel('Quantity').fill('2');
-  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByLabel(/I confirm this order/).check();
+  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByLabel('Quantity', { exact: true }).fill('2');
+  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByLabel('Target condition').selectOption('NE');
+  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByLabel(/I confirm this request/).check();
   await customerPage.getByRole('form', { name: 'Request a quote form' }).getByRole('button', { name: 'Send request' }).click();
 
   await staffPage.route('**/api/rfqs', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([internalRfq]) }));

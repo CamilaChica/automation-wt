@@ -15,7 +15,7 @@ export const CustomerPortal: React.FC = () => {
   const [quantity, setQuantity] = useState(1);
   const [details, setDetails] = useState('');
   const [agreementSigned, setAgreementSigned] = useState(false);
-  const [complianceFile, setComplianceFile] = useState<File | null>(null);
+  const [partsListFile, setPartsListFile] = useState<File | null>(null);
   const [trackingStatus, setTrackingStatus] = useState<string | null>(null);
   const [quoteId, setQuoteId] = useState('');
   const [poNumber, setPoNumber] = useState('');
@@ -59,7 +59,7 @@ export const CustomerPortal: React.FC = () => {
     }
     setIsSubmitting(true);
     try {
-      const attachmentIds = complianceFile ? [(await apiService.uploadAttachment(complianceFile)).attachment_id] : [];
+      const attachmentIds = partsListFile ? [(await apiService.uploadAttachment(partsListFile)).attachment_id] : [];
       const response = await apiService.submitCustomerRFQ(
         `Customer request for P/N ${partNumber}, quantity ${quantity}, condition ${condition}. ${details}`,
         customerName,
@@ -196,17 +196,17 @@ export const CustomerPortal: React.FC = () => {
                 <select id="rfq-condition" name="condition" required value={condition} onChange={event => setCondition(event.target.value)} className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm focus:ring-2 focus:ring-cyan-400 focus:outline-none"><option value="">Select target condition</option><option value="NE">NE - New</option><option value="OH">OH - Overhauled</option><option value="AR">AR - As Removed</option><option value="NS">NS - New Surplus</option></select>
               <label htmlFor="rfq-details" className="sr-only">RFQ details</label>
               <textarea id="rfq-details" name="details" autoComplete="off" value={details} onChange={event => setDetails(event.target.value)} placeholder="Condition, aircraft type, certification, and delivery location" rows={4} className="w-full resize-none rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
-              <label className="block rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-300">
-                End-user compliance PDF (EUC)
+              <label className="block rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700">
+                Parts list or sourcing spreadsheet (optional)
                 <input
                   id="compliance-file"
-                  name="compliance-file"
+                  name="parts-list-file"
                   type="file"
-                  accept=".pdf,application/pdf"
-                  onChange={event => setComplianceFile(event.target.files?.[0] ?? null)}
-                  className="mt-2 block w-full text-xs text-slate-400"
+                  accept=".csv,.xlsx,.pdf,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/pdf"
+                  onChange={event => setPartsListFile(event.target.files?.[0] ?? null)}
+                  className="mt-2 block w-full text-xs text-slate-500"
                 />
-                {complianceFile && <span className="mt-2 block text-xs text-emerald-300">Ready to upload: {complianceFile.name}</span>}
+                {partsListFile && <span className="mt-2 block text-xs text-emerald-700">Ready to upload: {partsListFile.name}</span>}
               </label>
               <label className="flex items-center gap-2 text-xs text-slate-300">
                 <input
@@ -216,7 +216,7 @@ export const CustomerPortal: React.FC = () => {
                   checked={agreementSigned}
                   onChange={event => setAgreementSigned(event.target.checked)}
                 />
-                I confirm this order and compliance documentation are valid for export screening.
+                I confirm this request contains accurate part and quantity information.
               </label>
               <button disabled={isSubmitting} className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-400 px-4 py-3 font-bold text-slate-950 hover:bg-cyan-300 disabled:opacity-60">{isSubmitting ? 'Submitting RFQ...' : 'Send request'} <ArrowRight className="h-4 w-4" /></button>
             </div>

@@ -39,7 +39,7 @@ test('zero-human-in-the-loop autonomous flow across all interfaces', async ({ pa
       ]),
     });
   });
-  await page.route('**/api/attachments', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ attachment_id: 'ATT-E2E-2', filename: 'signed-export-compliance.pdf', status: 'ACCEPTED' }) }));
+  await page.route('**/api/attachments', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ attachment_id: 'ATT-E2E-2', filename: 'parts-list.csv', status: 'ACCEPTED' }) }));
   await page.route('**/api/rfqs/intake', async route => {
     intakeCalls += 1;
     await route.fulfill({
@@ -60,17 +60,18 @@ test('zero-human-in-the-loop autonomous flow across all interfaces', async ({ pa
   await page.getByPlaceholder('e.g., Global Airlines').fill('Global Airlines');
   await quoteForm.getByPlaceholder('e.g., buyer@airline.com').fill('mro.ops@globalairlines.com');
   await quoteForm.getByPlaceholder('e.g., BACB30LU-4').fill('AOG-9981');
-  await quoteForm.getByLabel('Quantity').fill('1');
+  await quoteForm.getByLabel('Quantity', { exact: true }).fill('1');
+  await quoteForm.getByLabel('Target condition').selectOption('NE');
   await page
     .getByPlaceholder('Condition, aircraft type, certification, and delivery location')
     .fill('AOG critical component. Need immediate dispatch with full ITAR docs.');
   await page.setInputFiles('input[type="file"]', {
-    name: 'signed-export-compliance.pdf',
-    mimeType: 'application/pdf',
-    buffer: Buffer.from('%PDF-1.4\n%signed-export-compliance\n'),
+    name: 'parts-list.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from('part_number,quantity,condition\nAOG-9981,1,NE\n'),
   });
   await page
-    .getByLabel(/I confirm this order and compliance documentation are valid for export screening\./)
+    .getByLabel(/I confirm this request contains accurate part and quantity information\./)
     .check();
   await page.getByRole('button', { name: 'Send request' }).click();
 
