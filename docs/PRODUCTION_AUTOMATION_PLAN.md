@@ -28,6 +28,7 @@ Move Winged Tycoons from a credible demo workflow to a reliable procurement auto
 - `INVENTORY_INGESTION_POSTGRES_ENABLED=true` is required for the dedicated ingestion worker to mirror normalized inventory into PostgreSQL.
 - The deployed `/ready` response currently reports `inventory_postgres_mirror_enabled=false`; update the Render worker environment and redeploy it.
 - The operational RFQ/quote/communication store remains SQLite-compatible until its PostgreSQL repository migration is completed.
+- Render service disks are service-scoped; `winged-worker` and `winged-inventory-ingestion` do not share the same SQLite supplier database. PostgreSQL must become the shared source of truth before relying on cross-worker supplier state.
 - Autonomous outbound email remains subject to existing fail-closed and human-review policies.
 
 ## Next production actions

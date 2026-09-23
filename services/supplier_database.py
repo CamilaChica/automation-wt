@@ -2,12 +2,28 @@ import json
 import os
 import sqlite3
 import uuid
+import logging
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 DB_PATH = Path(os.getenv("SUPPLIER_DATABASE_PATH", str(Path(__file__).resolve().parent.parent / "data" / "supplier_email_store.db")))
+logger = logging.getLogger("winged-tycoons.supplier-database")
+
+
+def _writable_database_path(configured_path: Path) -> Path:
+    try:
+        configured_path.parent.mkdir(parents=True, exist_ok=True)
+        probe = configured_path.parent / ".write-probe"
+        probe.touch(exist_ok=True)
+        probe.unlink(missing_ok=True)
+        return configured_path
+    except (OSError, PermissionError) as exc:
+        fallback = Path("/tmp") / configured_path.name
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        logger.warning("Configured supplier database path is not writable; using ephemeral fallback path=%s error=%s", fallback, type(exc).__name__)
+        return fallback
 
 
 def _now_iso() -> str:
@@ -16,8 +32,7 @@ def _now_iso() -> str:
 
 class SupplierDatabase:
     def __init__(self, db_path: str | Path = DB_PATH):
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.db_path = _writable_database_path(Path(db_path))
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:

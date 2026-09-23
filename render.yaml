@@ -138,6 +138,10 @@ services:
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: python worker.py
+    disk:
+      name: winged-worker-data
+      mountPath: /var/data
+      sizeGB: 10
     envVars:
       - key: INVENTORY_INGESTION_WORKER_ENABLED
         value: "true"
