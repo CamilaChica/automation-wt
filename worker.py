@@ -96,8 +96,15 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
         raw_text=build_email_context(f"From: {sender}\nSubject: {message.get('subject', '')}\n\n{body}", attachments),
         thread_id=message.get("message_id") or None,
     )
-    await orchestration_service.process_rfq_pipeline(rfq.id)
-    logger.info("Sales mailbox message %s ingested as RFQ %s", message.get("message_id", "unknown"), rfq.id)
+    pipeline_result = await orchestration_service.process_rfq_pipeline(rfq.id)
+    logger.info(
+        "Sales mailbox message %s ingested as RFQ %s pipeline_status=%s quote_id=%s error=%s",
+        message.get("message_id", "unknown"),
+        rfq.id,
+        pipeline_result.get("status", "unknown"),
+        pipeline_result.get("quote_id", ""),
+        pipeline_result.get("error", ""),
+    )
     return True
 
 
