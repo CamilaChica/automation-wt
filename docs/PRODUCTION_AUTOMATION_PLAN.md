@@ -2,6 +2,8 @@
 
 **Last verified:** 2026-09-23
 
+**Execution checkpoint:** Local regression gates pass (39 focused tests and Python compilation). Live API and frontend return HTTP `200`; `/ready` returns `ready`, but still reports `sqlite_compatibility_store`, `inventory_postgres_mirror_enabled=false`, and `postgres_primary_migration_required=true`. The protected mailbox health endpoint returns `401` without an internal session, so live mailbox connectivity and outbound delivery remain unverified.
+
 ## Goal
 
 Move Winged Tycoons from a credible demo workflow to a reliable procurement automation service for messy mail, supplier attachments, repeated follow-ups, PO alerts, and continuous inventory enrichment.
