@@ -39,6 +39,14 @@ services:
         value: "purchasing@wingedtycoons.com"
       - key: DATABASE_URL
         sync: false
+      - key: ALLOWED_ORIGINS
+        value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com,http://localhost:5173,http://localhost:3000"
+      - key: GRAPH_TENANT_ID
+        sync: false
+      - key: GRAPH_CLIENT_ID
+        sync: false
+      - key: GRAPH_CLIENT_SECRET
+        sync: false
       - key: INVENTORY_INGESTION_POSTGRES_ENABLED
         value: "true"
       - key: MICROSOFT_TENANT_ID
@@ -183,6 +191,8 @@ services:
         value: "sales@wingedtycoons.com"
       - key: GRAPH_MAILBOX_USER_PURCHASING
         value: "purchasing@wingedtycoons.com"
+      - key: ALLOWED_ORIGINS
+        value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com,http://localhost:5173,http://localhost:3000"
       - key: EMAIL_SEND_ENABLED
         value: "true"
       - key: OPENAI_API_KEY
@@ -248,6 +258,8 @@ services:
         value: "purchasing@wingedtycoons.com"
       - key: DATABASE_URL
         sync: false
+      - key: ALLOWED_ORIGINS
+        value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com,http://localhost:5173,http://localhost:3000"
       - key: OPERATIONS_DB_PATH
         value: "/var/data/operations.db"
       - key: SUPPLIER_DATABASE_PATH

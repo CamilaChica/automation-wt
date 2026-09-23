@@ -141,7 +141,7 @@ async def security_headers(request: Request, call_next):
 runtime_env = os.getenv("WT_ENV", os.getenv("WT_AUTH_ENV", "development")).strip().lower()
 configured_origins = {
     origin.strip()
-    for value in (os.getenv("FRONTEND_ORIGINS", ""), os.getenv("FRONTEND_ORIGIN", ""))
+    for value in (os.getenv("ALLOWED_ORIGINS", ""), os.getenv("FRONTEND_ORIGINS", ""), os.getenv("FRONTEND_ORIGIN", ""))
     for origin in value.split(",")
     if origin.strip()
 }
@@ -165,14 +165,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=[
-        "Accept",
-        "Authorization",
-        "Content-Type",
-        "X-CSRF-Token",
-        "X-Internal-Role",
-    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # API Schemas
@@ -365,11 +360,30 @@ async def healthz():
 
 @app.get("/ready")
 async def ready():
+    postgres_url = os.getenv("DATABASE_URL", "").strip()
+    production = os.getenv("WT_ENV", os.getenv("WT_AUTH_ENV", "development")).strip().lower() == "production"
+    postgres_healthy = False
+    if production and not postgres_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is required in production.")
+    if postgres_url:
+        engine = None
+        try:
+            engine = create_engine_from_environment()
+            async with engine.connect() as connection:
+                await connection.exec_driver_sql("SELECT 1")
+            postgres_healthy = True
+        except Exception as exc:
+            if production:
+                raise HTTPException(status_code=503, detail=f"PostgreSQL not ready: {type(exc).__name__}") from exc
+        finally:
+            if engine is not None:
+                await engine.dispose()
     try:
         db_service.list_rfqs()
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"database not ready: {exc}") from exc
-    return {"status": "ready", "database": {"healthy": True}, "persistence": persistence_status()}
+    persistence = persistence_status(postgres_healthy=postgres_healthy)
+    return {"status": "ready", "database": {"healthy": True}, "persistence": persistence, **persistence}
 
 
 @app.get("/api/attachments/{attachment_id}")

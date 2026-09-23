@@ -268,6 +268,27 @@ The requested infrastructure, persistence, UI, observability, and controlled-tes
 - Live mailbox health and end-to-end outbound delivery require an authenticated internal session and a real `Quote_Sent` / `transmission_status=SENT` trace.
 - The controlled RFQ test must be run only after the latest Render services are deployed and PostgreSQL connectivity is verified.
 
+## Emergency PostgreSQL Cutover Execution Result
+
+The emergency cutover changes are now fail-closed in source:
+
+- Production `/ready` requires `DATABASE_URL`.
+- Production `/ready` opens a PostgreSQL connection and executes `SELECT 1`.
+- Missing PostgreSQL configuration returns HTTP `503`.
+- Unreachable PostgreSQL returns HTTP `503`.
+- Readiness exposes `storage_engine`, `inventory_postgres_mirror_enabled`, and `postgres_primary_migration_required` at the response root and under `persistence`.
+- CORS now parses `ALLOWED_ORIGINS` while retaining the repository's local and production origin defaults.
+- Render declares explicit `ALLOWED_ORIGINS`, Graph credential aliases, mailbox identities, and PostgreSQL mirror configuration.
+
+Verification evidence:
+
+- Missing `DATABASE_URL` in production mode: HTTP `503`.
+- Unreachable PostgreSQL in production mode: HTTP `503`.
+- Backend focused gates: passed.
+- Frontend lint and build: passed.
+
+This does **not** claim that the operational repositories have been migrated to PostgreSQL. `services/operations_store.py` remains the SQLite-compatible operational repository for local/test compatibility. The remaining production migration is to implement and deploy PostgreSQL repositories for RFQs, quotes, communications, audit/workflow state, tasks, handoffs, and idempotency, then verify live `/ready` reports `storage_engine=postgresql` and `postgres_primary_migration_required=false`.
+
 ## Production Failure Analysis & Remediation Plan
 
 ### 1. Root Cause Summary (Post-Deployment Audit)
