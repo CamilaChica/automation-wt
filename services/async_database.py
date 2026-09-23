@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import AsyncIterator
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
@@ -72,7 +72,7 @@ async def upsert_aviation_part(session: AsyncSession, *, part_number: str, descr
     return result.scalar_one()
 
 
-async def upsert_supplier_quote(session: AsyncSession, *, supplier_email: str, part_id: str, quoted_price: Decimal | None, raw_email_id: str | None, has_trace_docs: bool, attachment_url: str | None = None) -> SupplierQuote:
+async def upsert_supplier_quote(session: AsyncSession, *, supplier_email: str, part_id: str, quoted_price: Decimal | None, raw_email_id: str | None, has_trace_docs: bool, attachment_url: str | None = None, quantity_available: int | None = None, condition_code: str | None = None, certificate_type: str | None = None, lead_time_days: int | None = None, availability_location: str | None = None, warranty_terms: str | None = None, trace_documents: str | None = None) -> SupplierQuote:
     quote_id = f"SQUOTE-{uuid.uuid4().hex[:12].upper()}"
     statement = insert(SupplierQuote).values(
         id=quote_id,
@@ -82,6 +82,13 @@ async def upsert_supplier_quote(session: AsyncSession, *, supplier_email: str, p
         raw_email_id=raw_email_id,
         has_trace_docs=has_trace_docs,
         attachment_url=attachment_url,
+        quantity_available=quantity_available,
+        condition_code=condition_code,
+        certificate_type=certificate_type,
+        lead_time_days=lead_time_days,
+        availability_location=availability_location,
+        warranty_terms=warranty_terms,
+        trace_documents=trace_documents,
     ).on_conflict_do_nothing(index_elements=[SupplierQuote.raw_email_id]).returning(SupplierQuote)
     result = await session.execute(statement)
     quote = result.scalar_one_or_none()
@@ -91,3 +98,25 @@ async def upsert_supplier_quote(session: AsyncSession, *, supplier_email: str, p
     if not existing:
         raise RuntimeError("Supplier quote upsert did not return or locate a quote row.")
     return existing
+
+
+async def search_supplier_inventory(session: AsyncSession, *, query: str, condition_code: str | None = None) -> list[dict]:
+    normalized = query.strip()
+    if not normalized:
+        return []
+    statement = select(AviationPart, SupplierQuote).join(SupplierQuote, SupplierQuote.part_id == AviationPart.id).where(
+        or_(AviationPart.part_number.ilike(f"%{normalized}%"), AviationPart.description.ilike(f"%{normalized}%"))
+    )
+    if condition_code:
+        statement = statement.where(SupplierQuote.condition_code.ilike(condition_code.strip()))
+    statement = statement.order_by(SupplierQuote.created_at.desc()).limit(50)
+    rows = (await session.execute(statement)).all()
+    return [{
+        "part_number": part.part_number,
+        "condition_code": quote.condition_code or part.condition_code or "NE",
+        "quantity_available": quote.quantity_available or 0,
+        "certificate_type": quote.certificate_type or "Available upon supplier confirmation",
+        "has_full_trace": bool(quote.has_trace_docs),
+        "lead_time_days": quote.lead_time_days,
+        "availability_location": quote.availability_location,
+    } for part, quote in rows]

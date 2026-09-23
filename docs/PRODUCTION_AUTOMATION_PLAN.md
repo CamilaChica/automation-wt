@@ -21,6 +21,7 @@ Move Winged Tycoons from a credible demo workflow to a reliable procurement auto
 
 1. **Persistence boundary and release gate**: complete for visibility and safe operation. RFQ, quote, communication, and PO state currently use the SQLite-compatible operational store; supplier inventory and quote mirrors use PostgreSQL when explicitly enabled. Production sign-off must not call this PostgreSQL-only until the operational store is migrated.
 2. **Supplier ingestion reliability**: complete. Message-id idempotency, multi-line extraction, attachment context, retryable PostgreSQL mirroring, and missing-field follow-up are implemented.
+	The PostgreSQL mirror now preserves searchable quantity, condition, certificate, lead time, location, warranty, and trace-document fields; the customer catalog searches that mirror when enabled.
 3. **Extraction and retrieval contracts**: complete. Subject/body/attachment provenance, validated structured output, multi-line preservation, and shared Pydantic state are implemented.
 4. **Communication and PO workflow**: complete. Threaded customer responses, supplier discount requests, customer chasing, PO notification, and communication audit records are implemented.
 5. **Reliability coverage**: complete for the current runtime boundary. Tests cover attachment-only mail, duplicate handling, multi-line supplier quotes, provider fallback, handoff persistence, customer replies, and failed mirror isolation.
@@ -63,6 +64,7 @@ Move Winged Tycoons from a credible demo workflow to a reliable procurement auto
 5. Confirm the worker log shows successful extraction, PostgreSQL upsert, and no fallback to an ephemeral `/tmp` database.
 6. Confirm `/ready` reports `inventory_postgres_mirror_enabled=true`.
 7. Confirm the API sourcing lookup can see the ingested supplier offer.
+8. Run the Alembic `0002_supplier_quote_inventory_fields` migration before enabling the mirror in production.
 
 ### Phase 3: Remove split-brain operational state
 

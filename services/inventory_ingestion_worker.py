@@ -8,6 +8,7 @@ mirrors normalized records into PostgreSQL when DATABASE_URL is configured.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -69,6 +70,13 @@ class InventoryIngestionWorker:
                     quoted_price=result.get("unit_cost"),
                     raw_email_id=result.get("source_email_id"),
                     has_trace_docs=bool(result.get("trace_documents") or result.get("certificate_type")),
+                    quantity_available=result.get("quantity_available"),
+                    condition_code=result.get("condition_code"),
+                    certificate_type=result.get("certificate_type"),
+                    lead_time_days=result.get("lead_time_days"),
+                    availability_location=result.get("availability_location"),
+                    warranty_terms=result.get("warranty_terms"),
+                    trace_documents=json.dumps(result.get("trace_documents") or []),
                 )
         finally:
             await engine.dispose()

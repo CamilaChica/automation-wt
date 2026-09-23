@@ -39,6 +39,13 @@ class SupplierQuote(Base):
     raw_email_id: Mapped[str | None] = mapped_column(String(128), index=True)
     has_trace_docs: Mapped[bool] = mapped_column(Boolean, default=False)
     attachment_url: Mapped[str | None] = mapped_column(Text)
+    quantity_available: Mapped[int | None] = mapped_column(Integer)
+    condition_code: Mapped[str | None] = mapped_column(String(8))
+    certificate_type: Mapped[str | None] = mapped_column(String(64))
+    lead_time_days: Mapped[int | None] = mapped_column(Integer)
+    availability_location: Mapped[str | None] = mapped_column(Text)
+    warranty_terms: Mapped[str | None] = mapped_column(Text)
+    trace_documents: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     part: Mapped[AviationPart] = relationship(back_populates="supplier_quotes")

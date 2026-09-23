@@ -28,6 +28,7 @@ from services.twilio_service import twilio_service
 from services.freight_service import FreightRequest, freight_rate_service
 from services.operations_store import operations_store
 from services.persistence_status import persistence_status
+from services.async_database import create_engine_from_environment, search_supplier_inventory, session_scope
 from services.export_control_service import export_control_service
 from services.attachment_service import AttachmentService
 from services.swarm_runtime import swarm_runtime
@@ -1030,6 +1031,28 @@ async def search_catalog(query: str = "", condition: Optional[str] = None, _user
             certificate_type=item.certificate_type,
             has_full_trace=item.has_full_trace,
         ))
+    if os.getenv("INVENTORY_INGESTION_POSTGRES_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        try:
+            engine = create_engine_from_environment()
+            try:
+                async with session_scope(engine) as session:
+                    postgres_results = await search_supplier_inventory(session, query=query, condition_code=normalized_condition or None)
+            finally:
+                await engine.dispose()
+            for item in postgres_results:
+                key = (str(item["part_number"]).upper(), str(item.get("condition_code") or "NE").upper())
+                if key in seen_parts:
+                    continue
+                seen_parts.add(key)
+                results.append(CatalogItem(
+                    part_number=key[0],
+                    condition_code=key[1],
+                    quantity_available=int(item.get("quantity_available") or 0),
+                    certificate_type=item.get("certificate_type") or "Available upon supplier confirmation",
+                    has_full_trace=bool(item.get("has_full_trace")),
+                ))
+        except Exception:
+            logger.exception("postgres_catalog_search_failed")
     for offer in supplier_db.search_supplier_offers(query, normalized_condition or None):
         key = (str(offer.get("part_number", "")).upper(), str(offer.get("condition_code") or "NE").upper())
         if key in seen_parts:
