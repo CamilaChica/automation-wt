@@ -4,7 +4,7 @@ from typing import Any, Dict, Iterable, List, Optional, Type
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from pydantic import BaseModel, ValidationError, create_model
+from pydantic import BaseModel, ConfigDict, ValidationError, create_model
 
 from agents.base_agent import AgentMetadata, BaseAgent
 from agents.compliance_agent import ComplianceAgent
@@ -106,7 +106,7 @@ def _sample_payload_for_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
-def _schema_to_pydantic_model(schema: Dict[str, Any], model_name: str):
+def _schema_to_pydantic_model(schema: Dict[str, Any], model_name: str, extra: str = "forbid"):
     properties = schema.get("properties", {})
     required_fields = set(schema.get("required", []))
     field_definitions: Dict[str, Any] = {}
@@ -140,14 +140,14 @@ def _schema_to_pydantic_model(schema: Dict[str, Any], model_name: str):
             if raw_types == "object":
                 nested = subschema.get("properties", {})
                 if nested:
-                    return _schema_to_pydantic_model(subschema, f"{model_name}_{name}")
+                    return _schema_to_pydantic_model(subschema, f"{model_name}_{name}", extra=extra)
                 return dict
             if raw_types == "array":
                 items = subschema.get("items", {"type": "string"})
                 item_type = map_type(items, name)
                 return List[item_type]
         if "properties" in subschema:
-            return _schema_to_pydantic_model(subschema, f"{model_name}_{name}")
+            return _schema_to_pydantic_model(subschema, f"{model_name}_{name}", extra=extra)
         return Any
 
     for field_name, field_schema in properties.items():
@@ -157,7 +157,7 @@ def _schema_to_pydantic_model(schema: Dict[str, Any], model_name: str):
         else:
             field_definitions[field_name] = (Optional[field_type], None)  # type: ignore[assignment]
 
-    return create_model(model_name, **field_definitions)
+    return create_model(model_name, __config__=ConfigDict(extra=extra), **field_definitions)
 
 
 def _enforce_permission(agent: BaseAgent, attempted_tool: str):
@@ -257,7 +257,7 @@ def test_agent_mock_execution_generates_valid_output(agent_factory, monkeypatch)
     assert response is not None
     assert "```" not in json.dumps(response.model_dump() if hasattr(response, "model_dump") else response.data)
 
-    output_model = _schema_to_pydantic_model(agent.metadata.output_schema, f"{agent.metadata.name}Output")
+    output_model = _schema_to_pydantic_model(agent.metadata.output_schema, f"{agent.metadata.name}Output", extra="ignore")
     if response.data:
         output_model.model_validate(response.data)
 
