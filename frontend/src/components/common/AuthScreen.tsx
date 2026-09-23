@@ -7,15 +7,17 @@ import { BrandMark } from './BrandMark';
 interface AuthScreenProps {
   role: 'customer' | 'internal';
   onAuthenticated: () => void;
+  onSwitchRole?: () => void;
 }
 
-export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated }) => {
+export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated, onSwitchRole }) => {
   const [email, setEmail] = useState(role === 'customer' ? '' : 'camila@wingedtycoons.com');
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [otp, setOtp] = useState('');
   const [developmentOtp, setDevelopmentOtp] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [deliveryFailed, setDeliveryFailed] = useState(false);
   const isCustomer = role === 'customer';
   const isDevelopmentAuth = import.meta.env.VITE_AUTH_ENV === 'development';
 
@@ -44,6 +46,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated })
       if (status === 429) {
         return detail ?? 'Too many attempts. Please wait and try again.';
       }
+      if (status === 503) {
+        return detail ?? 'The verification email service is temporarily unavailable. Please try again.';
+      }
     }
 
     if (error instanceof Error && error.message.trim().length > 0) {
@@ -52,16 +57,31 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated })
     return 'Sign-in failed. Check your credentials.';
   };
 
+  const requestCode = async () => {
+    setLoading(true);
+    setError(null);
+    setDeliveryFailed(false);
+    try {
+      const response = await apiService.requestOtp(email, role === 'customer' ? 'ROLE_CUSTOMER' : 'ROLE_INTERNAL');
+      setChallengeId(response.challenge_id);
+      setDevelopmentOtp(response.development_otp);
+    } catch (loginError) {
+      setDeliveryFailed(true);
+      setError(friendlyAuthError(loginError));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!challengeId) {
+      await requestCode();
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      if (!challengeId) {
-        const response = await apiService.requestOtp(email, role === 'customer' ? 'ROLE_CUSTOMER' : 'ROLE_INTERNAL');
-        setChallengeId(response.challenge_id);
-        setDevelopmentOtp(response.development_otp);
-      } else {
         const session = await apiService.verifyOtp(challengeId, otp);
         const isCorrectRole = role === 'customer'
           ? session.role === 'ROLE_CUSTOMER'
@@ -71,7 +91,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated })
           throw new Error(`Use the ${role} login for this application.`);
         }
         onAuthenticated();
-      }
     } catch (loginError) {
       setError(friendlyAuthError(loginError));
     } finally {
@@ -97,6 +116,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated })
           </p>
         )}
         {error && <p role="alert" aria-live="assertive" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+        {challengeId && <div className="mt-4 flex items-center justify-between gap-3 text-xs text-slate-500"><button type="button" onClick={() => { setChallengeId(null); setOtp(''); setError(null); setDeliveryFailed(false); }} className="font-semibold underline focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">Change email</button><button type="button" disabled={loading} onClick={() => { setChallengeId(null); setOtp(''); void requestCode(); }} className="font-semibold text-aero-blue underline disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">Resend code</button></div>}
+        {deliveryFailed && !challengeId && <p className="mt-3 text-xs text-slate-500">Check the verification mailbox configuration or contact support if the problem continues.</p>}
+        {onSwitchRole && !challengeId && <button type="button" onClick={onSwitchRole} className="mt-5 w-full rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:border-aero-blue hover:text-aero-blue focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">{isCustomer ? 'Team sign in' : 'Customer portal sign in'}</button>}
         <p className="mt-6 flex gap-2 text-xs text-slate-500"><ShieldCheck className="h-4 w-4 shrink-0" /> Sessions expire after 8 hours. Production deployments should replace demo users with an identity provider.</p>
       </form>
     </div>

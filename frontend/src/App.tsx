@@ -166,7 +166,7 @@ const InternalApp: React.FC = () => {
   };
 
   if (!authenticated) {
-    return <AuthScreen role="internal" onAuthenticated={() => setAuthenticated(true)} />;
+    return <AuthScreen role="internal" onAuthenticated={() => setAuthenticated(true)} onSwitchRole={() => { window.location.href = '/customer-portal'; }} />;
   }
 
   return (
@@ -215,7 +215,7 @@ const InternalApp: React.FC = () => {
 
 const CustomerPortalRoute: React.FC = () => {
   const [authenticated, setAuthenticated] = useState(apiService.getRole() === 'customer');
-  return authenticated ? <CustomerPortal /> : <AuthScreen role="customer" onAuthenticated={() => setAuthenticated(true)} />;
+  return authenticated ? <CustomerPortal /> : <AuthScreen role="customer" onAuthenticated={() => setAuthenticated(true)} onSwitchRole={() => { window.location.href = '/internal'; }} />;
 };
 
 export const App: React.FC = () => {

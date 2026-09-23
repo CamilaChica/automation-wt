@@ -309,7 +309,14 @@ async def otp_request(request: OtpRequest):
     response = {"challenge_id": challenge_id, "message": "If eligible, an OTP has been sent."}
     auth_env = os.getenv("WT_AUTH_ENV", "development").strip().lower()
     if auth_env == "production":
-        send_otp_email(request.email, code)
+        try:
+            send_otp_email(request.email, code)
+        except Exception as exc:
+            logger.exception("otp_delivery_failed recipient_domain=%s error=%s", request.email.rsplit("@", 1)[-1], type(exc).__name__)
+            raise HTTPException(
+                status_code=503,
+                detail="The verification email service is temporarily unavailable. Please try again or contact support.",
+            ) from exc
     elif auth_env == "development":
         response["development_otp"] = code
     else:
