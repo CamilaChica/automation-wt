@@ -132,16 +132,24 @@ class CustomerCommunicationAgent(BaseAgent):
                 "usage": usage,
             }),
         )
-        transmission = communication_service.send_customer_quote(
-            recipient=email,
-            customer_name=name,
-            quote_id=quote_id,
-            quote_summary=summary,
-            reply_to=inputs.get("reply_to"),
-            quote_items=details.get("items") or None,
-            subject_override=draft.subject,
-            body_override=draft.body_text,
-        )
+        try:
+            transmission = communication_service.send_customer_quote(
+                recipient=email,
+                customer_name=name,
+                quote_id=quote_id,
+                quote_summary=summary,
+                reply_to=inputs.get("reply_to"),
+                quote_items=details.get("items") or None,
+                subject_override=draft.subject,
+                body_override=draft.body_text,
+            )
+        except Exception as exc:
+            logger.exception("customer_email_dispatch status=failure quote_id=%s error=%s", quote_id, type(exc).__name__)
+            return AgentResponse(
+                success=False,
+                error_message=f"Customer email delivery failed: {type(exc).__name__}: {exc}",
+                data={"formatted_body": draft.body_text, "subject": draft.subject, "llm_fallback_used": fallback_used},
+            )
         return AgentResponse(success=True, data={
             "communication_logged": True,
             "transmission_status": transmission["transmission_status"],

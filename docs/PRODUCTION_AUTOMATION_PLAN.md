@@ -44,6 +44,19 @@ Move Winged Tycoons from a credible demo workflow to a reliable procurement auto
 4. Run the live production smoke suite with `LIVE_API_URL` and `LIVE_API_TOKEN`.
 5. Migrate RFQ, quote, communication, PO, and audit persistence to PostgreSQL before claiming PostgreSQL-primary production readiness.
 
+### Exact Render migration procedure
+
+Run this from the Render Shell attached to the `backend` service, whose repository root is `/opt/render/project/src`:
+
+```bash
+cd /opt/render/project/src
+alembic upgrade head
+python scripts/verify_production_env.py
+curl --fail-with-body --silent --show-error http://127.0.0.1:${PORT:-10000}/ready
+```
+
+The `winged-inventory-ingestion` service is an existing separate Render worker declared in `render.yaml`. It is not a new database; it continuously polls `purchasing@wingedtycoons.com`, parses supplier messages and attachments, and mirrors normalized rows to PostgreSQL when its `DATABASE_URL` and `INVENTORY_INGESTION_POSTGRES_ENABLED=true` are configured.
+
 ## Incident Remediation Plan
 
 ### Phase 1: Restore customer access and outbound mail
