@@ -2,7 +2,7 @@
 
 **Last verified:** 2026-09-23
 
-**Execution checkpoint:** The latest loop passed the production-focused RFQ/mailbox suite (39 tests), agent regression tests (with expected skips), frontend unit tests (8/8), frontend lint, frontend production build, and changed-module compilation. The full backend suite currently reports four unrelated failures: agent schema-contract validation, a UX loading-text expectation, CORS preflight from `http://localhost:5173`, and normalized SQLite fixture persistence. Live API and frontend return HTTP `200`; `/ready` returns `ready`, but still reports `sqlite_compatibility_store`, `inventory_postgres_mirror_enabled=false`, and `postgres_primary_migration_required=true`. The protected mailbox health endpoint returns `401` without an internal session, so live mailbox connectivity and outbound delivery remain unverified.
+**Execution checkpoint:** The latest loop passed the production-focused RFQ/mailbox suite (39 tests), agent regression tests (with expected skips), frontend unit tests (8/8), frontend lint, frontend production build, changed-module compilation, and the complete backend suite. The four previously observed full-suite failures now pass in a clean full-suite invocation and in isolation. Live API and frontend return HTTP `200`; `/ready` returns `ready`, but still reports `sqlite_compatibility_store`, `inventory_postgres_mirror_enabled=false`, and `postgres_primary_migration_required=true`. The protected mailbox health endpoint returns `401` without an internal session, so live mailbox connectivity and outbound delivery remain unverified.
 
 ## Goal
 
@@ -144,7 +144,7 @@ Required automated cases:
 - `npm --prefix frontend run lint`: passed.
 - `npm --prefix frontend run build`: passed.
 - `python -m py_compile` for worker, mailbox, ingestion, orchestration, intake, and supplier modules: passed.
-- `python -m pytest -q`: four failures remain outside the production email path; they are listed in the execution checkpoint above and must be triaged before a global green build is claimed.
+- `python -m pytest -q`: passed in the latest clean full-suite invocation; expected skips/xfails remain.
 - `python -m pytest tests/agents/test_agent_harness.py tests/agents/test_agent_evaluation.py tests/system_and_agents/test_agent_behavior_and_drift.py -q`: passed with expected skips.
 - `npm --prefix frontend run test:unit`: 8/8 tests passed.
 - `npm --prefix frontend run build`: passed.
