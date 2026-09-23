@@ -2,7 +2,7 @@
 
 **Last verified:** 2026-09-23
 
-**Execution checkpoint:** The latest loop passed the production-focused RFQ/mailbox suite (39 tests), agent regression tests (with expected skips), frontend unit tests (8/8), frontend lint, frontend production build, changed-module compilation, and the complete backend suite. The four previously observed full-suite failures now pass in a clean full-suite invocation and in isolation. Live API and frontend return HTTP `200`; `/ready` returns `ready`, but still reports `sqlite_compatibility_store`, `inventory_postgres_mirror_enabled=false`, and `postgres_primary_migration_required=true`. The protected mailbox health endpoint returns `401` without an internal session, so live mailbox connectivity and outbound delivery remain unverified.
+**Execution checkpoint:** The latest loop passed the production-focused RFQ/mailbox suite (39 tests), agent regression tests (with expected skips), frontend unit tests (8/8), frontend lint, frontend production build, changed-module compilation, and the complete backend suite (329 collected, no failures). The four previously observed full-suite failures were traced to order-dependent SQLite path state and stale assertions; the normalized persistence test now reads the configured store path, and all four failure cases pass. Live API and frontend return HTTP `200`; `/ready` returns `ready`, but still reports `sqlite_compatibility_store`, `inventory_postgres_mirror_enabled=false`, and `postgres_primary_migration_required=true`. The protected mailbox health endpoint returns `401` without an internal session, so live mailbox connectivity and outbound delivery remain unverified.
 
 ## Goal
 
@@ -144,7 +144,7 @@ Required automated cases:
 - `npm --prefix frontend run lint`: passed.
 - `npm --prefix frontend run build`: passed.
 - `python -m py_compile` for worker, mailbox, ingestion, orchestration, intake, and supplier modules: passed.
-- `python -m pytest -q`: passed in the latest clean full-suite invocation; expected skips/xfails remain.
+- `python -m pytest -q --tb=no`: 329 collected, no failures; expected skips/xfails remain.
 - `python -m pytest tests/agents/test_agent_harness.py tests/agents/test_agent_evaluation.py tests/system_and_agents/test_agent_behavior_and_drift.py -q`: passed with expected skips.
 - `npm --prefix frontend run test:unit`: 8/8 tests passed.
 - `npm --prefix frontend run build`: passed.

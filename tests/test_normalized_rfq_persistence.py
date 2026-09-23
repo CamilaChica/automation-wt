@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from services.db_service import MockDatabaseService, db_service
-from services.operations_store import OperationsStore
+from services.operations_store import OperationsStore, operations_store
 
 
 class TestNormalizedRFQPersistence(unittest.TestCase):
@@ -30,7 +30,7 @@ class TestNormalizedRFQPersistence(unittest.TestCase):
         )
 
         import sqlite3
-        row = sqlite3.connect("data/operations.db").execute(
+        row = sqlite3.connect(operations_store.path).execute(
             "SELECT part_number, description, quantity, condition, certification, lead_time, attachments FROM customer_quote_items WHERE quote_id = ?",
             (quote.id,),
         ).fetchone()
