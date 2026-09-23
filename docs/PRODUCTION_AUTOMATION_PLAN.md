@@ -233,6 +233,20 @@ The `winged-inventory-ingestion` service is an existing separate Render worker d
 
 Rollback means disabling autonomous dispatch, pausing mailbox workers, preserving audit events, and returning to the last verified release while the failed gate is investigated.
 
+## Alembic Revision-Length Incident
+
+The Render migration failure was caused by `0002_supplier_quote_inventory_fields` exceeding PostgreSQL's default `alembic_version.version_num VARCHAR(32)` limit.
+
+Resolution applied:
+
+- Renamed the revision to `0002_supplier_quote_inv_fields` (30 characters).
+- Preserved `down_revision = "0001_aviation_parts_and_po"`.
+- Configured `version_table_column_length=255` in offline and online Alembic modes.
+- Added an online PostgreSQL bootstrap step that widens an existing `alembic_version.version_num` column to `VARCHAR(255)` before migrations run.
+- Verified Alembic discovers the chain with `alembic heads` and `alembic history`.
+
+Render must redeploy the backend from the commit containing this fix. The migration cannot be claimed successful until the Render build log shows `alembic upgrade head` completing against the production PostgreSQL database.
+
 ## Urgent Five-Block Execution Result
 
 The requested infrastructure, persistence, UI, observability, and controlled-test blocks were reviewed against the actual repository.
