@@ -367,6 +367,7 @@ export const SalesCommandView: React.FC = () => {
                 <button
                   onClick={handleIssueQuote}
                   disabled={issuing || !quoteReady}
+                  aria-busy={issuing || !quoteReady}
                   className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1.5 shadow-sm"
                 >
                   <Send className="w-3.5 h-3.5" />

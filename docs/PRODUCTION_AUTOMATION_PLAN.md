@@ -232,3 +232,70 @@ The `winged-inventory-ingestion` service is an existing separate Render worker d
 - PostgreSQL and operational-store records diverge during dual write.
 
 Rollback means disabling autonomous dispatch, pausing mailbox workers, preserving audit events, and returning to the last verified release while the failed gate is investigated.
+
+## Urgent Five-Block Execution Result
+
+The requested infrastructure, persistence, UI, observability, and controlled-test blocks were reviewed against the actual repository.
+
+### Completed in source and tests
+
+- Shared-state configuration is explicit in `render.yaml`: PostgreSQL mirror flag, shared environment keys, persistent worker paths, and separate mailbox identities are declared.
+- Email worker ownership is sales-only; purchasing remains owned by the dedicated ingestion worker.
+- Graph message bodies and attachments are requested before RFQ parsing.
+- Customer metadata is passed as structured intake context.
+- Supplier freshness is limited to 30 days, stale suppliers are re-engaged on original threads, and inbound message IDs remain idempotent.
+- SQLite persistence tests now use the configured `OperationsStore` path instead of a hardcoded database path.
+- `SwarmSimulationView` exposes keyboard selection, `aria-pressed`, and live `role="status"` progress/outcome states.
+- `SalesCommandView` exposes quote readiness as `aria-busy` state.
+- `AuditLogDrawer` already exposes `role="dialog"`, `aria-modal`, keyboard focus trapping, and the cached audit fallback notice.
+
+### Verification evidence
+
+- Full backend suite: **329 collected, no failures**; expected skips/xfails remain.
+- Production-focused RFQ/mailbox/persistence suite: **41 passed**.
+- Frontend unit suite: **8 passed**.
+- Frontend TypeScript lint: passed.
+- Frontend production build: passed.
+- Live API `/healthz`: HTTP `200`.
+- Live frontend: HTTP `200`.
+
+### Still blocked by production environment
+
+- `/ready` still reports `sqlite_compatibility_store`.
+- `/ready` still reports `inventory_postgres_mirror_enabled=false`.
+- `/ready` still reports `postgres_primary_migration_required=true`.
+- Shared PostgreSQL operational repositories are not yet implemented; separate worker SQLite disks remain a split-state risk.
+- Live mailbox health and end-to-end outbound delivery require an authenticated internal session and a real `Quote_Sent` / `transmission_status=SENT` trace.
+- The controlled RFQ test must be run only after the latest Render services are deployed and PostgreSQL connectivity is verified.
+
+## Production Failure Analysis & Remediation Plan
+
+### 1. Root Cause Summary (Post-Deployment Audit)
+
+- **Database state split:** Production business state still depends on SQLite-compatible files. Render service disks are service-scoped, so API, email-worker, and ingestion-worker state can diverge even when each service reports healthy.
+- **CORS configuration drift:** The source middleware includes local and production origins, but the deployed origin configuration must be redeployed and verified with an authenticated preflight check.
+- **Environment ingestion gap:** Graph credentials and provider secrets are required at runtime. Authentication can succeed while mailbox send/read permissions, mailbox identity, PostgreSQL connectivity, or LLM configuration remain incomplete.
+- **Gateway configuration risk:** The frontend API client uses a deployed Render API base for the hosted frontend, but `VITE_API_BASE_URL` and the deployed bundle must be checked after every frontend deployment to prevent a fallback to local development endpoints.
+
+### 2. Required Infrastructure Architecture Modifications
+
+- **Database engine:** Transition the production operational store from SQLite to Render Managed PostgreSQL, including RFQs, RFQ items, quotes, quote items, communications, audit events, workflow state, communication tasks, and agent handoffs. Keep persistent disks only for backups or temporary rollback snapshots.
+- **Supplier state:** Use the same PostgreSQL source of truth for `winged-tycoons-email-worker` and `winged-inventory-ingestion`; do not depend on cross-service SQLite files.
+- **CORS hardening:** Keep origins parsed from environment configuration and explicitly verify `https://winged-tycoons-frontend.onrender.com`, `https://wingedtycoons.com`, approved local development origins, credentials, methods, and request headers.
+- **Webhook protocol verification:** Verify Microsoft Graph and external webhook validation/authorization at the inbound boundary before accepting events or mutating state.
+- **Secret management:** Populate Graph tenant/client/secret values, mailbox identities, `DATABASE_URL`, auth secret, email-send configuration, and provider keys in Render service environments. Never place secrets in source, fixtures, crawler state, or logs.
+
+### 3. Production Deployment Checklist
+
+- [x] Render Blueprint defines `winged-tycoons-email-worker` and `winged-inventory-ingestion` separately.
+- [x] Render Blueprint assigns persistent disks and explicit `GRAPH_MAILBOX_USER_SALES` / `GRAPH_MAILBOX_USER_PURCHASING` identities.
+- [x] Frontend API client has a deployed-host API fallback and supports `VITE_API_BASE_URL`.
+- [ ] Deploy the latest `main` revision to backend, frontend, email worker, and ingestion worker.
+- [ ] Confirm `DATABASE_URL` is populated and reachable from backend and ingestion worker.
+- [ ] Run `alembic upgrade head` successfully against production PostgreSQL.
+- [ ] Confirm `/ready` reports `inventory_postgres_mirror_enabled=true` and no production business state relies on `/tmp` or service-local SQLite.
+- [ ] Confirm Render Dashboard secrets are populated without exposing values in logs.
+- [ ] Verify authenticated CORS preflight returns HTTP `200` with the expected origin and headers.
+- [ ] Verify `/healthz` returns HTTP `200` before routing traffic.
+- [ ] Run one controlled external RFQ from `camilachica1991@gmail.com` and capture the complete chain: message ID, RFQ ID, pipeline status, quote ID, communication ID, `transmission_status=SENT`, and recipient.
+- [ ] Verify the response arrives in `camilachica1991@gmail.com`, including spam/quarantine review.

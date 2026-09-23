@@ -122,6 +122,16 @@ export const SwarmSimulationView: React.FC = () => {
               key={item.id}
               type="button"
               onClick={() => setSelectedId(item.id)}
+              onKeyDown={event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  setSelectedId(item.id);
+                }
+              }}
+              role="button"
+              tabIndex={0}
+              aria-pressed={selectedId === item.id}
+              aria-label={`Select ${item.label} scenario`}
               className={`rounded-xl border p-4 text-left transition ${selectedId === item.id ? 'border-aero-blue bg-white shadow-md shadow-aero-blue/10 dark:bg-slate-900' : 'border-slate-200 bg-white/70 hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900/50'}`}
             >
               <div className="flex items-start justify-between gap-3">
@@ -155,7 +165,8 @@ export const SwarmSimulationView: React.FC = () => {
                   return <div key={event} className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 font-mono text-xs transition ${active ? 'border-aero-blue/30 bg-blue-50/70 text-slate-800 dark:bg-aero-blue/10 dark:text-slate-200' : 'border-slate-100 text-slate-400 dark:border-slate-800/80'}`}><span className={`h-2 w-2 rounded-full ${active ? current ? 'bg-aero-blue animate-pulse' : 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-700'}`} /><span className="flex-1">{event}</span>{active && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />}</div>;
                 })}
               </div>
-              {completed && <div className={`mt-4 flex items-center gap-2 rounded-lg px-3 py-2.5 text-xs font-bold ${scenario.id === 'sanctions' ? 'bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300' : scenario.id === 'margin' ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300' : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'}`}>{scenario.id === 'sanctions' ? <ShieldAlert className="h-4 w-4" /> : scenario.id === 'margin' ? <AlertTriangle className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}{scenario.outcome}</div>}
+              {running && <div role="status" aria-live="polite" aria-busy="true" className="mt-4 rounded-lg bg-blue-50 px-3 py-2.5 text-xs font-bold text-blue-700 dark:bg-blue-950/30 dark:text-blue-300">Running {scenario.label}...</div>}
+              {completed && <div role="status" aria-live="polite" aria-busy="false" className={`mt-4 flex items-center gap-2 rounded-lg px-3 py-2.5 text-xs font-bold ${scenario.id === 'sanctions' ? 'bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300' : scenario.id === 'margin' ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300' : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'}`}>{scenario.id === 'sanctions' ? <ShieldAlert className="h-4 w-4" /> : scenario.id === 'margin' ? <AlertTriangle className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}{scenario.outcome}</div>}
             </div>
           </div>
 
