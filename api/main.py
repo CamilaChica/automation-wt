@@ -383,7 +383,19 @@ async def ready():
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"database not ready: {exc}") from exc
     persistence = persistence_status(postgres_healthy=postgres_healthy)
-    return {"status": "ready", "database": {"healthy": True}, "persistence": persistence, **persistence}
+    postgresql_mirroring = bool(postgres_healthy and persistence["inventory_postgres_mirror_enabled"])
+    if production and not postgresql_mirroring:
+        raise HTTPException(
+            status_code=503,
+            detail="PostgreSQL is reachable only when the operational mirror is enabled.",
+        )
+    return {
+        "status": "ready",
+        "database": {"healthy": True},
+        "postgresql_mirroring": postgresql_mirroring,
+        "persistence": persistence,
+        **persistence,
+    }
 
 
 @app.get("/api/attachments/{attachment_id}")

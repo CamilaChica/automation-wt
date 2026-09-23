@@ -4,6 +4,10 @@
 
 **Execution checkpoint:** The latest loop passed the production-focused RFQ/mailbox suite (39 tests), agent regression tests (with expected skips), frontend unit tests (8/8), frontend lint, frontend production build, changed-module compilation, and the complete backend suite (329 collected, no failures). The four previously observed full-suite failures were traced to order-dependent SQLite path state and stale assertions; the normalized persistence test now reads the configured store path, and all four failure cases pass. Live API and frontend return HTTP `200`; `/ready` returns `ready`, but still reports `sqlite_compatibility_store`, `inventory_postgres_mirror_enabled=false`, and `postgres_primary_migration_required=true`. The protected mailbox health endpoint returns `401` without an internal session, so live mailbox connectivity and outbound delivery remain unverified.
 
+**Latest production-readiness audit:** **NOT READY FOR DELIVERY**. The live API and frontend are healthy, and the full backend suite passes (329 collected, no failures), but `/ready` still reports `storage_engine=sqlite`, `inventory_postgres_mirror_enabled=false`, and `postgres_primary_migration_required=true`. Unauthenticated mailbox health correctly returns `401`; authenticated sales/purchasing health has not yet been verified. A customer response has been received in a prior controlled test, but the final audit lacks a complete `Quote_Sent`, `quote_id`, `transmission_status=SENT`, and recipient trace.
+
+Production readiness is now fail-closed in source: `/ready` returns HTTP `503` in production when `DATABASE_URL` is missing, PostgreSQL is unreachable, or operational mirroring is disabled. A successful production response includes `postgresql_mirroring=true`; deployment must now provide the real PostgreSQL configuration before the service can advertise readiness.
+
 ## Goal
 
 Move Winged Tycoons from a credible demo workflow to a reliable procurement automation service for messy mail, supplier attachments, repeated follow-ups, PO alerts, and continuous inventory enrichment.
@@ -20,6 +24,9 @@ Move Winged Tycoons from a credible demo workflow to a reliable procurement auto
 - Expired bearer sessions now dispatch an auth-state change so the mounted customer portal returns to sign-in instead of remaining on a dead authenticated screen.
 - The readiness response reported `inventory_postgres_mirror_enabled=false`.
 - The readiness response reported `postgres_primary_migration_required=true`.
+- The live readiness response also reported `storage_engine=sqlite` and `operational_store_path=/opt/render/project/src/data/operations.db`.
+- Unauthenticated `GET /api/internal/mailboxes/health` returned `401 Unauthorized`, as required.
+- Local `alembic upgrade head` was not proven against production PostgreSQL because the required live database connection was unavailable in the audit environment.
 
 1. **Persistence boundary and release gate**: complete for visibility and safe operation. RFQ, quote, communication, and PO state currently use the SQLite-compatible operational store; supplier inventory and quote mirrors use PostgreSQL when explicitly enabled. Production sign-off must not call this PostgreSQL-only until the operational store is migrated.
 2. **Supplier ingestion reliability**: complete. Message-id idempotency, multi-line extraction, attachment context, retryable PostgreSQL mirroring, and missing-field follow-up are implemented.
