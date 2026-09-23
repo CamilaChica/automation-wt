@@ -11,6 +11,7 @@ export const CustomerPortal: React.FC = () => {
   const [customerName, setCustomerName] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
   const [partNumber, setPartNumber] = useState('');
+  const [condition, setCondition] = useState('');
   const [quantity, setQuantity] = useState(1);
   const [details, setDetails] = useState('');
   const [agreementSigned, setAgreementSigned] = useState(false);
@@ -18,6 +19,9 @@ export const CustomerPortal: React.FC = () => {
   const [trackingStatus, setTrackingStatus] = useState<string | null>(null);
   const [quoteId, setQuoteId] = useState('');
   const [poNumber, setPoNumber] = useState('');
+  const [exportCertificate, setExportCertificate] = useState<File | null>(null);
+  const [kycForm, setKycForm] = useState<File | null>(null);
+  const [poDocument, setPoDocument] = useState<File | null>(null);
   const [isSubmittingPo, setIsSubmittingPo] = useState(false);
   const [trackingToken, setTrackingToken] = useState('');
   const [shipment, setShipment] = useState<import('../../types').Shipment | null>(null);
@@ -33,7 +37,7 @@ export const CustomerPortal: React.FC = () => {
   const searchCatalog = async (value: string) => {
     setIsSearching(true);
     try {
-      setResults(await apiService.searchCatalog(value));
+      setResults(await apiService.searchCatalog(value, condition || undefined));
       setNotice(null);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Catalog search failed. Please retry.');
@@ -57,7 +61,7 @@ export const CustomerPortal: React.FC = () => {
     try {
       const attachmentIds = complianceFile ? [(await apiService.uploadAttachment(complianceFile)).attachment_id] : [];
       const response = await apiService.submitCustomerRFQ(
-        `Customer request for P/N ${partNumber}, quantity ${quantity}. ${details}`,
+        `Customer request for P/N ${partNumber}, quantity ${quantity}, condition ${condition}. ${details}`,
         customerName,
         customerEmail,
         attachmentIds,
@@ -73,12 +77,20 @@ export const CustomerPortal: React.FC = () => {
 
   const handlePurchaseOrder = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!exportCertificate || !kycForm || !poDocument) {
+      setNotice('Upload the signed export certification, signed KYC form, and purchase order document before submitting.');
+      return;
+    }
     setIsSubmittingPo(true);
     try {
-      await apiService.submitPurchaseOrder(quoteId, poNumber, customerEmail);
+      const uploaded = await Promise.all([exportCertificate, kycForm, poDocument].map(file => apiService.uploadAttachment(file)));
+      await apiService.submitPurchaseOrder(quoteId, poNumber, customerEmail, uploaded.map(item => item.attachment_id));
       setNotice(`Purchase order ${poNumber} received. Our purchasing team will confirm the order by email.`);
       setQuoteId('');
       setPoNumber('');
+      setExportCertificate(null);
+      setKycForm(null);
+      setPoDocument(null);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Purchase order submission failed. Please retry.');
     } finally {
@@ -176,10 +188,12 @@ export const CustomerPortal: React.FC = () => {
               <input id="customer-email" name="customer-email" autoComplete="email" required type="email" value={customerEmail} onChange={event => setCustomerEmail(event.target.value)} placeholder="e.g., buyer@airline.com" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
               <div className="flex gap-3">
                 <label htmlFor="rfq-part-number" className="sr-only">Part number</label>
-                <input id="rfq-part-number" name="part-number" autoComplete="off" required value={partNumber} onChange={event => setPartNumber(event.target.value)} placeholder="e.g., BACB30LU-4" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
+                  <input id="rfq-part-number" name="part-number" autoComplete="off" required value={partNumber} onChange={event => setPartNumber(event.target.value)} placeholder="e.g., BACB30LU-4" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
                 <label htmlFor="rfq-quantity" className="sr-only">Quantity</label>
                 <input id="rfq-quantity" name="quantity" required type="number" min="1" value={quantity} onChange={event => setQuantity(Number(event.target.value))} className="w-24 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
               </div>
+                <label htmlFor="rfq-condition" className="sr-only">Target condition</label>
+                <select id="rfq-condition" name="condition" required value={condition} onChange={event => setCondition(event.target.value)} className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm focus:ring-2 focus:ring-cyan-400 focus:outline-none"><option value="">Select target condition</option><option value="NE">NE - New</option><option value="OH">OH - Overhauled</option><option value="AR">AR - As Removed</option><option value="NS">NS - New Surplus</option></select>
               <label htmlFor="rfq-details" className="sr-only">RFQ details</label>
               <textarea id="rfq-details" name="details" autoComplete="off" value={details} onChange={event => setDetails(event.target.value)} placeholder="Condition, aircraft type, certification, and delivery location" rows={4} className="w-full resize-none rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
               <label className="block rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-300">
@@ -224,7 +238,11 @@ export const CustomerPortal: React.FC = () => {
               <input id="po-number" name="po-number" autoComplete="off" required value={poNumber} onChange={event => setPoNumber(event.target.value)} placeholder="e.g., PO-1001" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none" />
               <label htmlFor="po-email" className="sr-only">Purchase order work email</label>
               <input id="po-email" name="po-email" autoComplete="email" required type="email" value={customerEmail} onChange={event => setCustomerEmail(event.target.value)} placeholder="e.g., buyer@airline.com" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none" />
-              <button disabled={isSubmittingPo} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-400 px-4 py-3 font-bold text-slate-950 hover:bg-emerald-300 disabled:opacity-60">{isSubmittingPo ? 'Sending purchase order...' : 'Submit purchase order'} <ArrowRight className="h-4 w-4" /></button>
+              <div className="rounded-xl border border-slate-700 bg-slate-950 p-3 text-xs text-slate-300"><p className="font-semibold">Required compliance documents</p><div className="mt-2 flex flex-wrap gap-3"><a className="text-emerald-300 underline" href="/documents/WingedTycoons-Export-Compliance-Certification.pdf" download>Download export certification</a><a className="text-emerald-300 underline" href="/documents/WingedTycoons-KYC-Form.pdf" download>Download KYC form</a></div></div>
+              <label htmlFor="po-export" className="block text-xs text-slate-300">Signed export certification<input id="po-export" name="po-export" required type="file" accept=".pdf,application/pdf" onChange={event => setExportCertificate(event.target.files?.[0] ?? null)} className="mt-1 block w-full text-xs" /></label>
+              <label htmlFor="po-kyc" className="block text-xs text-slate-300">Signed KYC form<input id="po-kyc" name="po-kyc" required type="file" accept=".pdf,application/pdf" onChange={event => setKycForm(event.target.files?.[0] ?? null)} className="mt-1 block w-full text-xs" /></label>
+              <label htmlFor="po-document" className="block text-xs text-slate-300">Purchase order document<input id="po-document" name="po-document" required type="file" accept=".pdf,application/pdf" onChange={event => setPoDocument(event.target.files?.[0] ?? null)} className="mt-1 block w-full text-xs" /></label>
+              <button disabled={isSubmittingPo || !exportCertificate || !kycForm || !poDocument} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-400 px-4 py-3 font-bold text-slate-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">{isSubmittingPo ? 'Uploading documents and submitting...' : 'Submit purchase order'} <ArrowRight className="h-4 w-4" /></button>
             </div>
           </form>
 

@@ -283,11 +283,12 @@ export const apiService = {
       return this.submitRFQ(raw_text);
     }
   },
-  async submitPurchaseOrder(quote_id: string, po_number: string, customer_email: string): Promise<{ status: string; po_number: string }> {
+  async submitPurchaseOrder(quote_id: string, po_number: string, customer_email: string, attachment_ids: string[] = []): Promise<{ status: string; po_number: string }> {
     const res = await axios.post(`${API_BASE}/purchase-orders`, {
       quote_id,
       po_number,
       customer_email,
+      attachment_ids,
     });
     return res.data;
   },
@@ -308,9 +309,9 @@ export const apiService = {
     return res.data;
   },
 
-  async searchCatalog(query: string): Promise<Array<Pick<InventoryItem, 'part_number' | 'condition_code' | 'quantity_available' | 'certificate_type' | 'has_full_trace'>>> {
+  async searchCatalog(query: string, condition?: string): Promise<Array<Pick<InventoryItem, 'part_number' | 'condition_code' | 'quantity_available' | 'certificate_type' | 'has_full_trace'>>> {
     try {
-      const res = await axios.get(`${API_BASE}/catalog/search`, { params: { query } });
+      const res = await axios.get(`${API_BASE}/catalog/search`, { params: { query, condition } });
       return res.data;
     } catch (error) {
       if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);

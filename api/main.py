@@ -257,6 +257,7 @@ class PurchaseOrderRequest(BaseModel):
     quote_id: str
     po_number: str
     customer_email: Optional[str] = None
+    attachment_ids: List[str] = Field(default_factory=list)
 
 class PurchaseOrderApprovalRequest(BaseModel):
     operator_name: str = Field(..., min_length=1)
@@ -753,6 +754,8 @@ async def submit_purchase_order(request: PurchaseOrderRequest, user: dict = Depe
         raise HTTPException(status_code=409, detail="Purchase order already received for this RFQ.")
 
     customer_email = request.customer_email or rfq.customer_email
+    if len(request.attachment_ids) != 3 or any(not attachment_id.strip() for attachment_id in request.attachment_ids):
+        raise HTTPException(status_code=400, detail="Three signed documents are required: export certification, KYC form, and purchase order.")
     if user["role"] == "ROLE_CUSTOMER" and customer_email.lower() != user["email"].lower():
         raise HTTPException(status_code=403, detail="You can only submit a purchase order for your own quote.")
 
@@ -807,6 +810,7 @@ async def submit_purchase_order(request: PurchaseOrderRequest, user: dict = Depe
         "purchase_order_received",
         f"Purchase order {request.po_number} received; fulfillment and invoicing are blocked pending human review.",
         "SUCCESS",
+        json.dumps({"attachment_ids": request.attachment_ids}),
     )
     return {
         "status": "Pending_PO_Review",
@@ -998,15 +1002,20 @@ async def carrier_webhook(request: Request):
     return {"status": "accepted", "shipment_id": shipment.id, "event_id": event.id}
 
 @app.get("/api/catalog/search", response_model=List[CatalogItem])
-async def search_catalog(query: str = "", _user: dict = Depends(require_roles("ROLE_CUSTOMER", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"))):
+async def search_catalog(query: str = "", condition: Optional[str] = None, _user: dict = Depends(require_roles("ROLE_CUSTOMER", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"))):
     """Public, customer-safe catalog availability search.
 
     Deliberately omits internal costs, serial numbers, and warehouse locations.
     """
     normalized_query = query.strip().lower()
+    normalized_condition = (condition or "").strip().upper()
+    if normalized_condition and normalized_condition not in {"NE", "OH", "AR", "NS"}:
+        raise HTTPException(status_code=400, detail="Condition must be NE, OH, AR, or NS.")
     results = []
     for item in db_service.inventory.values():
         if normalized_query and normalized_query not in item.part_number.lower():
+            continue
+        if normalized_condition and item.condition_code.upper() != normalized_condition:
             continue
         results.append(CatalogItem(
             part_number=item.part_number,
