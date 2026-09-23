@@ -20,7 +20,7 @@ export const CustomerPortal: React.FC = () => {
   const [poNumber, setPoNumber] = useState('');
   const [isSubmittingPo, setIsSubmittingPo] = useState(false);
   const [trackingToken, setTrackingToken] = useState('');
-  const [shipment, setShipment] = useState<any>(null);
+  const [shipment, setShipment] = useState<import('../../types').Shipment | null>(null);
   const [isTracking, setIsTracking] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -249,7 +249,7 @@ export const CustomerPortal: React.FC = () => {
                   <div>Estimated delivery: <span className="text-slate-200">{shipment.estimated_delivery || 'To be confirmed'}</span></div>
                 </div>
                 <div className="mt-5 border-l border-slate-700 pl-4">
-                  {(shipment.events || []).slice().reverse().map((event: any, index: number) => (
+                  {(shipment.events || []).slice().reverse().map((event, index: number) => (
                     <div key={`${event.id}-${index}`} className="relative pb-4 last:pb-0">
                       <span className="absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full bg-cyan-400 ring-4 ring-slate-950" />
                       <div className="font-semibold text-slate-200">{event.status}</div>

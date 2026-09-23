@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { WorkflowStepper } from '../common/WorkflowStepper';
 import { apiService } from '../../services/api';
+import { SimulatedDataBanner } from '../common/SimulatedDataBanner';
 import { RFQ } from '../../types';
 import { 
   Send, 
@@ -33,6 +34,7 @@ import {
 } from 'lucide-react';
 
 type ClientTab = 'quotations' | 'new-rfq' | 'tracking' | 'trace-vault' | 'analytics';
+type ConditionKey = 'SV' | 'OH' | 'NEW' | 'AR';
 
 export const CustomerDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ClientTab>('quotations');
@@ -47,7 +49,7 @@ export const CustomerDashboard: React.FC = () => {
   const [deliveryIcao, setDeliveryIcao] = useState('MIA');
   const [dockLocation, setDockLocation] = useState('Dock A-12 (Line Maint)');
   const [requiredDate, setRequiredDate] = useState('2026-09-08');
-  const [conditions, setConditions] = useState({ SV: true, OH: true, NEW: false, AR: false });
+  const [conditions, setConditions] = useState<Record<ConditionKey, boolean>>({ SV: true, OH: true, NEW: false, AR: false });
   const [documents, setDocuments] = useState({ faa8130: true, easaForm1: false, trace121: true, nonIncident: true });
   
   // Active RFQs & Quotations
@@ -132,7 +134,7 @@ export const CustomerDashboard: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
-    const rawText = `RFQ P/N ${partNumber} (${partName}) Qty ${quantity} Condition: ${Object.keys(conditions).filter(k => (conditions as any)[k]).join(', ')} Urgency: ${urgency} Delivery: ${deliveryIcao} ${dockLocation}`;
+    const rawText = `RFQ P/N ${partNumber} (${partName}) Qty ${quantity} Condition: ${Object.keys(conditions).filter(key => conditions[key as ConditionKey]).join(', ')} Urgency: ${urgency} Delivery: ${deliveryIcao} ${dockLocation}`;
     try {
       const res = await apiService.submitCustomerRFQ(rawText, 'GLOBAL AIRLINES', 'mro.ops@globalairlines.com');
       await refreshRfqs();
@@ -173,6 +175,7 @@ export const CustomerDashboard: React.FC = () => {
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans">
+      <SimulatedDataBanner label="SIMULATED CUSTOMER METRICS AND SOURCING OPTIONS" />
       {/* 1. Client Header & Profile Card */}
       <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm transition-all">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -726,11 +729,11 @@ export const CustomerDashboard: React.FC = () => {
                       <label key={key} className="flex items-center space-x-1.5 cursor-pointer text-xs font-mono">
                         <input
                           type="checkbox"
-                          checked={(conditions as any)[key]}
+                          checked={conditions[key as ConditionKey]}
                           onChange={(e) => setConditions({ ...conditions, [key]: e.target.checked })}
                           className="rounded border-slate-300 text-aero-blue focus:ring-aero-blue"
                         />
-                        <span className={(conditions as any)[key] ? 'font-bold text-aero-blue' : 'text-slate-500'}>
+                        <span className={conditions[key as ConditionKey] ? 'font-bold text-aero-blue' : 'text-slate-500'}>
                           {label}
                         </span>
                       </label>
@@ -820,7 +823,7 @@ export const CustomerDashboard: React.FC = () => {
                   </label>
                   <select
                     value={urgency}
-                    onChange={(e) => setUrgency(e.target.value as any)}
+                    onChange={(e) => setUrgency(e.target.value as 'AOG' | 'Critical' | 'Routine')}
                     className="w-full bg-white dark:bg-slate-900 border border-red-300 dark:border-red-900/60 rounded-xl px-3 py-2 font-mono text-xs font-bold text-aog-red focus:ring-2 focus:ring-red-200 focus:outline-none"
                   >
                     <option value="AOG">🚨 AOG (4h Target SLA)</option>

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { apiService } from '../../services/api';
+import { SimulatedDataBanner } from '../common/SimulatedDataBanner';
 import { RFQ } from '../../types';
 import { 
   Send, 
@@ -161,6 +162,7 @@ export const SalesCommandView: React.FC = () => {
           <button onClick={() => setNotification(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-white">✕</button>
         </div>
       )}
+      <SimulatedDataBanner label="SIMULATED CUSTOMER AND TELEMETRY CARDS" />
 
       {detailError && (
         <div role="alert" className="bg-red-50 dark:bg-red-500/20 border border-red-300 dark:border-red-500 text-red-800 dark:text-red-300 p-4 rounded-2xl flex items-center justify-between text-xs font-semibold">

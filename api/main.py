@@ -290,6 +290,11 @@ class TraceDecisionRequest(BaseModel):
     decision: str = Field(..., pattern="^(certify|reject|rescan|freeze)$")
     reason: Optional[str] = None
 
+class InternalCommandRequest(BaseModel):
+    command: str = Field(..., pattern="^(add_to_quote|issue_po|document_audit|generate_quote|split_po|escalate_aog|print_tags|generate_stamps)$")
+    entity_id: str = Field(..., min_length=1)
+    details: Optional[str] = None
+
 # Endpoints
 
 @app.post("/api/auth/otp/request")
@@ -563,6 +568,21 @@ async def list_automation_events(
     _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
 ):
     return operations_store.list_automation_events(status=status, limit=limit)
+
+@app.post("/api/internal/commands")
+async def execute_internal_command(
+    request: InternalCommandRequest,
+    user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
+):
+    message = f"Command '{request.command}' recorded for {request.entity_id}."
+    db_service.add_audit_log(
+        request.entity_id,
+        "InternalCommand",
+        request.command,
+        f"{message} Operator: {user['email']}." + (f" Details: {request.details}" if request.details else ""),
+        "WARNING" if request.command in {"escalate_aog", "split_po"} else "SUCCESS",
+    )
+    return {"command": request.command, "entity_id": request.entity_id, "status": "RECORDED", "message": message}
 
 
 @app.get("/api/internal/llm/health")

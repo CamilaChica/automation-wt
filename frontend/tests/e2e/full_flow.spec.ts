@@ -39,6 +39,7 @@ test('zero-human-in-the-loop autonomous flow across all interfaces', async ({ pa
       ]),
     });
   });
+  await page.route('**/api/attachments', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ attachment_id: 'ATT-E2E-2', filename: 'signed-export-compliance.pdf', status: 'ACCEPTED' }) }));
   await page.route('**/api/rfqs/intake', async route => {
     intakeCalls += 1;
     await route.fulfill({
@@ -56,12 +57,12 @@ test('zero-human-in-the-loop autonomous flow across all interfaces', async ({ pa
   await expect(page.getByText('Customer parts portal')).toBeVisible();
   const quoteForm = page.getByRole('form', { name: 'Request a quote form' });
 
-  await page.getByPlaceholder('Company or contact name').fill('Global Airlines');
-  await quoteForm.getByPlaceholder('Work email').fill('mro.ops@globalairlines.com');
-  await quoteForm.getByPlaceholder('Part number', { exact: true }).fill('AOG-9981');
+  await page.getByPlaceholder('e.g., Global Airlines').fill('Global Airlines');
+  await quoteForm.getByPlaceholder('e.g., buyer@airline.com').fill('mro.ops@globalairlines.com');
+  await quoteForm.getByPlaceholder('e.g., BACB30LU-4').fill('AOG-9981');
   await quoteForm.getByLabel('Quantity').fill('1');
   await page
-    .getByPlaceholder('Condition, aircraft type, certification, delivery location...')
+    .getByPlaceholder('Condition, aircraft type, certification, and delivery location')
     .fill('AOG critical component. Need immediate dispatch with full ITAR docs.');
   await page.setInputFiles('input[type="file"]', {
     name: 'signed-export-compliance.pdf',
@@ -76,6 +77,7 @@ test('zero-human-in-the-loop autonomous flow across all interfaces', async ({ pa
   await expect.poll(() => intakeCalls).toBeGreaterThan(0);
 
   await seedSession(page, 'internal');
+  await page.route('**/api/internal/rfqs/*/trace-decision', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ decision: 'certify', automation_paused: false }) }));
   await page.goto('/');
 
   await page.locator('aside button').filter({ hasText: 'Sales Command' }).first().click();

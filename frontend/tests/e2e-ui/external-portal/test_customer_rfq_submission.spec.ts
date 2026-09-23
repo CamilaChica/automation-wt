@@ -23,14 +23,14 @@ test('blocks malformed customer input before submission', async ({ page }) => {
   const portal = new ExternalRFQPage(page);
   await portal.open();
   const form = portal.quoteForm();
-  await form.getByPlaceholder('Company or contact name').fill('Global Airlines');
-  await form.getByPlaceholder('Work email').fill('not-an-email');
-  await form.getByPlaceholder('Part number', { exact: true }).fill('XYZ123');
+  await form.getByPlaceholder('e.g., Global Airlines').fill('Global Airlines');
+  await form.getByPlaceholder('e.g., buyer@airline.com').fill('not-an-email');
+  await form.getByPlaceholder('e.g., BACB30LU-4').fill('XYZ123');
   await form.getByLabel('Quantity').fill('0');
   await form.getByLabel(/I confirm this order/).check();
   await form.getByRole('button', { name: 'Send request' }).click();
 
-  await expect(form.getByPlaceholder('Work email')).toHaveAttribute('type', 'email');
+  await expect(form.getByPlaceholder('e.g., buyer@airline.com')).toHaveAttribute('type', 'email');
   await expect(form.getByLabel('Quantity')).toHaveAttribute('min', '1');
   expect(intakeCalled).toBe(false);
 });

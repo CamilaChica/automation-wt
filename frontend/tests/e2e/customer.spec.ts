@@ -18,6 +18,7 @@ test('customer uploads compliance PDF and submits urgent request', async ({ page
       ]),
     });
   });
+  await page.route('**/api/attachments', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ attachment_id: 'ATT-E2E-1', filename: 'euc.pdf', status: 'ACCEPTED' }) }));
   await page.route('**/api/rfqs/intake', async route => {
     intakeCalls += 1;
     await route.fulfill({
@@ -34,12 +35,12 @@ test('customer uploads compliance PDF and submits urgent request', async ({ page
   await page.goto('/customer-portal');
   await expect(page.getByText('Customer parts portal')).toBeVisible();
   const quoteForm = page.getByRole('form', { name: 'Request a quote form' });
-  await page.getByPlaceholder('Company or contact name').fill('Delta MRO Services');
-  await quoteForm.getByPlaceholder('Work email').fill('procurement@delta-mro.com');
-  await quoteForm.getByPlaceholder('Part number', { exact: true }).fill('AOG-9981');
+  await page.getByPlaceholder('e.g., Global Airlines').fill('Delta MRO Services');
+  await quoteForm.getByPlaceholder('e.g., buyer@airline.com').fill('procurement@delta-mro.com');
+  await quoteForm.getByPlaceholder('e.g., BACB30LU-4').fill('AOG-9981');
   await quoteForm.getByLabel('Quantity').fill('1');
   await page
-    .getByPlaceholder('Condition, aircraft type, certification, delivery location...')
+    .getByPlaceholder('Condition, aircraft type, certification, and delivery location')
     .fill('Urgent AOG request. Need factory-new with full export docs.');
 
   await page.setInputFiles('input[type="file"]', {

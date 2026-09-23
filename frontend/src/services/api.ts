@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { RFQ, RFQDetailResponse, InventoryItem, Supplier, Quote, QuoteItem, AgentAuditLog, AutomationEvent, Shipment } from '../types';
+import { RFQ, RFQDetailResponse, InventoryItem, Supplier, SupplierQuote, Quote, QuoteItem, AgentAuditLog, AutomationEvent, Shipment, CommandResponse, InternalCommand } from '../types';
 
 const hostedApiBase = window.location.hostname === 'winged-tycoons-frontend.onrender.com'
   ? 'https://winged-tycoons-api.onrender.com/api'
@@ -284,16 +284,20 @@ export const apiService = {
     });
     return res.data;
   },
-  async trackShipment(public_token: string): Promise<any> {
+  async trackShipment(public_token: string): Promise<Shipment> {
     const res = await axios.get(`${API_BASE}/shipments/track/${encodeURIComponent(public_token)}`);
     return res.data;
   },
-  async getSupplierOffers(part_number: string): Promise<any[]> {
+  async getSupplierOffers(part_number: string): Promise<SupplierQuote[]> {
     const res = await axios.get(`${API_BASE}/supplier-offers`, { params: { part_number } });
     return res.data;
   },
   async getShipments(): Promise<Shipment[]> {
     const res = await axios.get(`${API_BASE}/internal/shipments`);
+    return res.data;
+  },
+  async executeInternalCommand(command: InternalCommand, entityId: string, details?: string): Promise<CommandResponse> {
+    const res = await axios.post(`${API_BASE}/internal/commands`, { command, entity_id: entityId, details });
     return res.data;
   },
 
@@ -430,7 +434,7 @@ export const apiService = {
     }
   },
 
-  async approveQuote(quote_id: string, operator_name: string, overrides?: any[]): Promise<any> {
+  async approveQuote(quote_id: string, operator_name: string, overrides?: Array<{ quote_item_id: string; unit_price: number }>): Promise<{ status: string; quote_id: string; message: string }> {
     try {
       const res = await axios.post(`${API_BASE}/quotes/${quote_id}/approve`, {
         operator_name,
@@ -454,7 +458,7 @@ export const apiService = {
     return res.data;
   },
 
-  async rejectQuote(quote_id: string, operator_name: string, comments: string): Promise<any> {
+  async rejectQuote(quote_id: string, operator_name: string, comments: string): Promise<{ status: string; quote_id: string; message: string }> {
     try {
       const res = await axios.post(`${API_BASE}/quotes/${quote_id}/reject`, {
         operator_name,

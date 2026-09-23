@@ -1,5 +1,6 @@
 import React from 'react';
 import { Plane, MapPin, CheckCircle, Clock } from 'lucide-react';
+import { SimulatedDataBanner } from './SimulatedDataBanner';
 
 interface WorldMapTelemetryProps {
   title?: string;
@@ -25,9 +26,7 @@ export const WorldMapTelemetry: React.FC<WorldMapTelemetryProps> = ({
             {subtitle}
           </p>
         </div>
-        <div className="px-2.5 py-1 rounded-full bg-blue-50 dark:bg-aero-blue/10 border border-blue-200 dark:border-aero-blue/30 text-aero-blue font-mono text-[10px] font-bold">
-          ORDER: {orderId}
-        </div>
+        <div className="flex items-center gap-2"><SimulatedDataBanner /><span className="px-2.5 py-1 rounded-full bg-blue-50 dark:bg-aero-blue/10 border border-blue-200 dark:border-aero-blue/30 text-aero-blue font-mono text-[10px] font-bold">ORDER: {orderId}</span></div>
       </div>
 
       {/* SVG Map Canvas */}

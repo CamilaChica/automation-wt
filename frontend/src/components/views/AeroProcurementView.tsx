@@ -12,6 +12,7 @@ import {
   CheckCircle,
   FileText
 } from 'lucide-react';
+import { SimulatedDataBanner } from '../common/SimulatedDataBanner';
 
 export const AeroProcurementView: React.FC = () => {
   const [selectedSupplier, setSelectedSupplier] = useState<'A' | 'B' | 'C'>('A');
@@ -34,6 +35,7 @@ export const AeroProcurementView: React.FC = () => {
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
       {notice && <div role="status" className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
+      <SimulatedDataBanner label="SIMULATED PROCUREMENT METRICS" />
       {/* Top Section: Active RFQ Queue & Sourcing Detail */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Active RFQ Queue (6 cols) */}
@@ -196,15 +198,15 @@ export const AeroProcurementView: React.FC = () => {
 
           {/* Action Buttons */}
           <div className="grid grid-cols-3 gap-2 pt-1 font-display">
-            <button type="button" onClick={() => setNotice(`Smart quote draft prepared for supplier ${selectedSupplier}.`)} className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow-sm">
+            <button type="button" onClick={() => void apiService.executeInternalCommand('generate_quote', selectedSupplier).then(result => setNotice(result.message)).catch(error => setNotice(error instanceof Error ? error.message : 'Unable to generate quote.'))} className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow-sm">
               <FileText className="w-3.5 h-3.5" />
               <span>GENERATE SMART QUOTE</span>
             </button>
-            <button type="button" onClick={() => setNotice(`Split PO workflow opened for supplier ${selectedSupplier}.`)} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1">
+            <button type="button" onClick={() => void apiService.executeInternalCommand('split_po', selectedSupplier).then(result => setNotice(result.message)).catch(error => setNotice(error instanceof Error ? error.message : 'Unable to split PO.'))} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1">
               <Split className="w-3.5 h-3.5" />
               <span>SPLIT PO</span>
             </button>
-            <button type="button" onClick={() => setNotice('AOG escalation queued for internal review.')} className="bg-red-500 hover:bg-red-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow aog-pulse-badge">
+            <button type="button" onClick={() => void apiService.executeInternalCommand('escalate_aog', selectedSupplier).then(result => setNotice(result.message)).catch(error => setNotice(error instanceof Error ? error.message : 'Unable to escalate AOG.'))} className="bg-red-500 hover:bg-red-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow aog-pulse-badge">
               <Flame className="w-3.5 h-3.5" />
               <span>ESCALATE AOG</span>
             </button>

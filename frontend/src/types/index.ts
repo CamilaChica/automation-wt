@@ -87,6 +87,8 @@ export interface SupplierQuote {
   location?: string;
   historical_reliability?: string;
   return_rate?: string;
+  confidence?: number;
+  supplier_email?: string;
 }
 
 export interface QuoteItem {
@@ -121,6 +123,23 @@ export interface Shipment {
   tracking_number?: string;
   estimated_delivery?: string;
   events?: ShipmentEvent[];
+}
+
+export type InternalCommand =
+  | 'add_to_quote'
+  | 'issue_po'
+  | 'document_audit'
+  | 'generate_quote'
+  | 'split_po'
+  | 'escalate_aog'
+  | 'print_tags'
+  | 'generate_stamps';
+
+export interface CommandResponse {
+  command: InternalCommand;
+  entity_id: string;
+  status: string;
+  message: string;
 }
 
 export interface Quote {

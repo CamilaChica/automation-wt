@@ -13,9 +13,9 @@ test('submits a customer purchase order through the supported portal workflow', 
   const portal = new ExternalRFQPage(page);
   await portal.open();
   const form = portal.purchaseOrderForm();
-  await form.getByPlaceholder(/Quote reference/).fill('QTE-1001');
-  await form.getByPlaceholder(/purchase order number/).fill('PO-1001');
-  await form.getByPlaceholder('Work email').fill('buyer@example.com');
+  await form.getByPlaceholder('e.g., QTE-123456').fill('QTE-1001');
+  await form.getByPlaceholder('e.g., PO-1001').fill('PO-1001');
+  await form.getByPlaceholder('e.g., buyer@airline.com').fill('buyer@example.com');
   await form.getByRole('button', { name: 'Submit purchase order' }).click();
   await expect(page.getByText(/purchase order PO-1001 received/i)).toBeVisible();
   expect(payload).toEqual({ quote_id: 'QTE-1001', po_number: 'PO-1001', customer_email: 'buyer@example.com' });

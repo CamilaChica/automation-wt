@@ -13,9 +13,9 @@ test('customer submission is visible to staff through shared API state', async (
   await customerPage.route('**/api/catalog/search**', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
   await customerPage.route('**/api/rfqs/intake', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ rfq_id: internalRfq.id, status: internalRfq.status, message: 'RFQ received' }) }));
   await customerPage.goto('/customer-portal');
-  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByPlaceholder('Company or contact name').fill('Global Airlines');
-  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByPlaceholder('Work email').fill('buyer@example.com');
-  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByPlaceholder('Part number', { exact: true }).fill('XYZ123');
+  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByPlaceholder('e.g., Global Airlines').fill('Global Airlines');
+  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByPlaceholder('e.g., buyer@airline.com').fill('buyer@example.com');
+  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByPlaceholder('e.g., BACB30LU-4').fill('XYZ123');
   await customerPage.getByRole('form', { name: 'Request a quote form' }).getByLabel('Quantity').fill('2');
   await customerPage.getByRole('form', { name: 'Request a quote form' }).getByLabel(/I confirm this order/).check();
   await customerPage.getByRole('form', { name: 'Request a quote form' }).getByRole('button', { name: 'Send request' }).click();

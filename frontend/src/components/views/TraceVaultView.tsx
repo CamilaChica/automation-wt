@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { apiService } from '../../services/api';
+import { SimulatedDataBanner } from '../common/SimulatedDataBanner';
 import { RFQ } from '../../types';
 import { 
   ShieldCheck, 
@@ -60,6 +61,7 @@ export const TraceVaultView: React.FC = () => {
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
       {notice && <div role="alert" className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700"><span>{notice}</span><button type="button" onClick={() => void loadRfqs()} className="font-bold underline">Retry</button></div>}
+      <SimulatedDataBanner label="SIMULATED OCR AND DOCUMENT PREVIEW DATA" />
       {/* Top Grid: Pipeline & Active Vault & Document Viewer */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Top (4 cols): DOCUMENTATION STATUS PIPELINE & ACTIVE DOCUMENT VAULT */}

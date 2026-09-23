@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { apiService } from '../../services/api';
+import { RFQ, SupplierQuote } from '../../types';
+import { SimulatedDataBanner } from '../common/SimulatedDataBanner';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip } from 'recharts';
 import { 
   CheckCircle, 
@@ -15,8 +17,8 @@ import {
 export const SupplierSourcingView: React.FC = () => {
   const [selectedPn, setSelectedPn] = useState('32-11-45-01');
   const [selectedRfqId, setSelectedRfqId] = useState<string | null>(null);
-  const [liveOffers, setLiveOffers] = useState<any[]>([]);
-  const [activeRfqs, setActiveRfqs] = useState<any[]>([]);
+  const [liveOffers, setLiveOffers] = useState<SupplierQuote[]>([]);
+  const [activeRfqs, setActiveRfqs] = useState<RFQ[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
@@ -46,6 +48,7 @@ export const SupplierSourcingView: React.FC = () => {
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
       {notice && <div role="status" className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
+      <SimulatedDataBanner label="SIMULATED SUPPLIER PERFORMANCE METRICS" />
       {/* Top Row: Global Sourcing Matrix & Part Sourcing Terminal & Performance */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column (5 cols): GLOBAL SOURCING MATRIX */}
@@ -86,7 +89,7 @@ export const SupplierSourcingView: React.FC = () => {
                           {rfq.urgency || 'Routine'}
                         </span>
                         <span className="text-[9px] text-aog-red font-mono font-semibold mt-0.5">
-                          T-Minus {rfq.timer}
+                          T-Minus {rfq.created_at ? new Date(rfq.created_at).toLocaleDateString() : 'Recent'}
                         </span>
                       </div>
                     </td>
@@ -238,7 +241,7 @@ export const SupplierSourcingView: React.FC = () => {
                     {item.cond}
                   </span>
                   <span className="font-bold text-slate-900 dark:text-slate-100">{item.price}</span>
-                  <button type="button" onClick={() => setNotice(`Added ${item.pn} from ${item.supplier} to the working quote.`)} className="bg-aero-blue hover:bg-blue-600 text-white px-3 py-1 rounded-xl text-[10px] font-bold shadow-sm transition-colors">
+                      <button type="button" onClick={() => void apiService.executeInternalCommand('add_to_quote', item.pn).then(result => setNotice(result.message)).catch(error => setNotice(error instanceof Error ? error.message : 'Unable to add to quote.'))} className="bg-aero-blue hover:bg-blue-600 text-white px-3 py-1 rounded-xl text-[10px] font-bold shadow-sm transition-colors">
                     Quick-Add
                   </button>
                 </div>
