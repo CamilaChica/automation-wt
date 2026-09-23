@@ -14,6 +14,18 @@ logger = logging.getLogger("winged-tycoons.supplier-database")
 
 
 def _writable_database_path(configured_path: Path) -> Path:
+    env_path = os.getenv("SUPPLIER_DB_PATH")
+    if env_path:
+        target_path = Path(env_path)
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            probe = target_path.parent / ".write-probe"
+            probe.touch(exist_ok=True)
+            probe.unlink(missing_ok=True)
+            return target_path
+        except (PermissionError, OSError) as exc:
+            logger.warning("Failed to use SUPPLIER_DB_PATH=%s error=%s", env_path, type(exc).__name__)
+
     try:
         configured_path.parent.mkdir(parents=True, exist_ok=True)
         probe = configured_path.parent / ".write-probe"
@@ -21,10 +33,13 @@ def _writable_database_path(configured_path: Path) -> Path:
         probe.unlink(missing_ok=True)
         return configured_path
     except (OSError, PermissionError) as exc:
-        fallback = DEFAULT_DATA_ROOT / configured_path.name
-        fallback.parent.mkdir(parents=True, exist_ok=True)
-        logger.warning("Configured supplier database path is not writable; using Render data path=%s error=%s", fallback, type(exc).__name__)
-        return fallback
+        logger.warning("Cannot write to %s error=%s; falling back to /tmp/data", configured_path.parent, type(exc).__name__)
+
+    fallback_dir = Path("/tmp/data")
+    fallback_dir.mkdir(parents=True, exist_ok=True)
+    fallback = fallback_dir / configured_path.name
+    logger.info("Using fallback supplier database path=%s", fallback)
+    return fallback
 
 
 def _now_iso() -> str:
@@ -32,8 +47,11 @@ def _now_iso() -> str:
 
 
 class SupplierDatabase:
-    def __init__(self, db_path: str | Path = DB_PATH):
-        self.db_path = _writable_database_path(Path(db_path))
+    def __init__(self, db_path: str | Path | None = None):
+        configured_path = Path(db_path) if db_path is not None else Path(
+            os.getenv("SUPPLIER_DATABASE_PATH", str(DEFAULT_DATA_ROOT / "supplier_email_store.db"))
+        )
+        self.db_path = _writable_database_path(configured_path)
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -390,4 +408,19 @@ class SupplierDatabase:
             conn.execute("DELETE FROM inbound_emails")
 
 
-supplier_db = SupplierDatabase()
+class _LazySupplierDatabase:
+    """Defer SQLite initialization until a service actually uses supplier state."""
+
+    def __init__(self) -> None:
+        self._instance: SupplierDatabase | None = None
+
+    def _get(self) -> SupplierDatabase:
+        if self._instance is None:
+            self._instance = SupplierDatabase()
+        return self._instance
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._get(), name)
+
+
+supplier_db = _LazySupplierDatabase()

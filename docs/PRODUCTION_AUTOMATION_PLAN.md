@@ -247,6 +247,18 @@ Resolution applied:
 
 Render must redeploy the backend from the commit containing this fix. The migration cannot be claimed successful until the Render build log shows `alembic upgrade head` completing against the production PostgreSQL database.
 
+## Supplier Database Startup Permission Fix
+
+The supplier database initializer no longer assumes `/var/data` is writable during module import.
+
+- `SUPPLIER_DB_PATH` is honored as the highest-priority explicit override.
+- Configured paths are tested with a temporary write probe.
+- Permission and OS errors fall back to `/tmp/data/<database-name>`.
+- Supplier database initialization is lazy; importing the module no longer opens SQLite before environment validation completes.
+- The fallback behavior is covered by `tests/test_supplier_database_paths.py`.
+
+This prevents a missing Render persistent disk or non-root `/var/data` permission from crashing Uvicorn import. It does not replace the required PostgreSQL operational-store migration; `/tmp` is only a resilient local/container fallback and must not be used for production business state.
+
 ## Urgent Five-Block Execution Result
 
 The requested infrastructure, persistence, UI, observability, and controlled-test blocks were reviewed against the actual repository.
