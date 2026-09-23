@@ -134,7 +134,7 @@ def _fetch_graph_inbox_messages(mailbox: str, limit: int = 25) -> list[dict[str,
     cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat().replace("+00:00", "Z")
     url = (
         f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/messages"
-        f"?$top={limit}&$select=id,from,subject,receivedDateTime,hasAttachments&$filter=receivedDateTime ge {cutoff}&$orderby=receivedDateTime desc"
+        f"?$top={limit}&$select=id,from,subject,body,receivedDateTime,hasAttachments&$filter=receivedDateTime ge {cutoff}&$orderby=receivedDateTime desc"
     )
     response = requests.get(url, headers=headers, timeout=30)
     response.raise_for_status()

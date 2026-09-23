@@ -166,6 +166,7 @@ class TestSupplierEmailIngestion(unittest.TestCase):
         self.assertEqual(messages[0]["from"], "quotes@apexaero.com")
         self.assertIn("060-1234-00", messages[0]["body"])
         mock_get.assert_called()
+        self.assertIn("$select=id,from,subject,body,receivedDateTime,hasAttachments", mock_get.call_args.args[0])
         self.assertIn("receivedDateTime ge", mock_get.call_args.args[0])
 
     def test_loader_extracts_part_data_from_html_supplier_email(self):
