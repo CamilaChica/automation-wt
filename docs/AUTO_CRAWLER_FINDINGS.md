@@ -145,6 +145,26 @@ Fresh backend validation:
 
 These are local regression findings; the deployed authenticated UI crawl still reported zero page errors, console errors, and failed HTTP responses.
 
+## Latest Validation Loop
+
+Current branch commit at validation: `6480fb7 Confirm full suite regression pass`.
+
+Fresh deployed crawler:
+
+```text
+1 passed (10.9s)
+```
+
+Frontend validation:
+
+- Unit tests: `8 passed`
+- Production build: passed
+
+Focused backend validation after the current fixes:
+
+- Agent harness, agent evaluation, prompt-safety, UX accessibility, API security headers, catalog search, and normalized persistence group: passed (`55 passed, 3 skipped`).
+- The full 329-test backend collection progressed past the previously failing UX, CORS, agent, catalog, and persistence tests; the verbose run exceeded the local command timeout during the long tail, so the complete suite duration remains an operational follow-up.
+
 ## Follow-up Regression Loop
 
 Targeted rerun after fixes:
