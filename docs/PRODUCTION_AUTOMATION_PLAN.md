@@ -2,7 +2,7 @@
 
 **Last verified:** 2026-09-23
 
-**Execution checkpoint:** Local regression gates pass (39 focused tests and Python compilation). Live API and frontend return HTTP `200`; `/ready` returns `ready`, but still reports `sqlite_compatibility_store`, `inventory_postgres_mirror_enabled=false`, and `postgres_primary_migration_required=true`. The protected mailbox health endpoint returns `401` without an internal session, so live mailbox connectivity and outbound delivery remain unverified.
+**Execution checkpoint:** Focused production gates pass (39 tests previously, plus the current mailbox/supplier checks); frontend lint and production build pass; changed Python modules compile. The full backend suite currently reports four unrelated failures: agent schema-contract validation, a UX loading-text expectation, CORS preflight from `http://localhost:5173`, and normalized SQLite fixture persistence. Live API and frontend return HTTP `200`; `/ready` returns `ready`, but still reports `sqlite_compatibility_store`, `inventory_postgres_mirror_enabled=false`, and `postgres_primary_migration_required=true`. The protected mailbox health endpoint returns `401` without an internal session, so live mailbox connectivity and outbound delivery remain unverified.
 
 ## Goal
 
@@ -137,6 +137,16 @@ Required automated cases:
 - Supplier quote older than 30 days triggers threaded confirmation to multiple suppliers.
 - Quote dispatch failure is recorded and retried without creating duplicate customer quotes.
 - Two RFQs from the same customer create two independent RFQs and two independent outbound outcomes.
+
+### Latest test loop result
+
+- `python -m pytest tests/test_worker_mailbox_ownership.py tests/test_supplier_freshness.py tests/test_supplier_email_ingestion.py tests/test_rfq_intake_agent.py tests/test_auth_production_env.py tests/test_customer_reply_pipeline.py -q`: passed.
+- `npm --prefix frontend run lint`: passed.
+- `npm --prefix frontend run build`: passed.
+- `python -m py_compile` for worker, mailbox, ingestion, orchestration, intake, and supplier modules: passed.
+- `python -m pytest -q`: four failures remain outside the production email path; they are listed in the execution checkpoint above and must be triaged before a global green build is claimed.
+- Live `/healthz` and frontend: HTTP `200`.
+- Live `/ready`: healthy HTTP response, but PostgreSQL-primary readiness is not met.
 
 ## Next production actions
 
