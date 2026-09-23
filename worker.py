@@ -51,7 +51,10 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
     sender = (message.get("from") or "").strip()
     if "@" not in sender:
         logger.warning("Sales message %s has no valid sender; skipped", message.get("message_id", "unknown"))
-        return
+        return False
+    if sender.lower() == "sales@wingedtycoons.com":
+        logger.warning("Ignoring self-sent sales mailbox message %s subject=%s", message.get("message_id", "unknown"), message.get("subject", ""))
+        return True
     body = (message.get("body") or "").strip()
     attachments = message.get("attachments") or []
     if not body and not attachments:
