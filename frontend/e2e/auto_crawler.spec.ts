@@ -12,7 +12,6 @@ const navigationLabels = [
   /Swarm Runner/i,
 ];
 
-const safeButtonPattern = /^(close|cancel|back|reset|refresh|open|view|details|show|hide|search|filter|next|previous|menu|theme|light|dark|toggle|logout|exit command center|sourcing matrix|proc command|trace vault|fulfillment(?: \(fch\))?|sales command|swarm runner|dashboard)/i;
 const destructivePattern = /submit|send|approve|reject|issue|dispatch|purchase order|hard freeze|freeze|delete|remove|logout|exit|certify|escalate|split po|quick-add|add to quote|generate smart quote|request re-scan|seriali[sz]ed tamper/i;
 
 function describeTarget(element: { textContent(): Promise<string | null> }) {
@@ -41,9 +40,10 @@ async function installErrorCapture(page: import('@playwright/test').Page) {
 async function clickSafeInteractiveControls(
   page: import('@playwright/test').Page,
   visited: Set<string>,
+  clickFailures: string[],
 ) {
-  const controls = page.locator('button:visible, [role="button"]:visible, article:visible, [data-testid*="card"]:visible');
-  const count = Math.min(await controls.count(), 80);
+  const controls = page.locator('button:visible, [role="button"]:visible, article:visible, [data-testid*="card"]:visible, [class*="card"]:visible');
+  const count = Math.min(await controls.count(), 160);
 
   for (let index = 0; index < count; index += 1) {
     const control = controls.nth(index);
@@ -52,14 +52,37 @@ async function clickSafeInteractiveControls(
     const text = ((await control.textContent().catch(() => '')) || '').replace(/\s+/g, ' ').trim();
     const ariaLabel = await control.getAttribute('aria-label').catch(() => null);
     const label = `${ariaLabel || ''} ${text}`.trim();
-    if (!label || destructivePattern.test(label) || !safeButtonPattern.test(label)) continue;
+    if (!label || destructivePattern.test(label)) continue;
 
     const key = `${label}:${index}`;
     if (visited.has(key)) continue;
     visited.add(key);
 
     await control.scrollIntoViewIfNeeded().catch(() => undefined);
-    await control.click({ timeout: 2_000 }).catch(() => undefined);
+    try {
+      await control.click({ timeout: 2_000 });
+    } catch (error) {
+      clickFailures.push(`${label.slice(0, 120)}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    await page.waitForTimeout(100);
+  }
+}
+
+async function closeVisibleDrawers(page: import('@playwright/test').Page, drawerFailures: string[]) {
+  const drawers = page.locator('[role="dialog"]:visible, [class*="drawer"]:visible, [data-testid*="drawer"]:visible');
+  const count = await drawers.count();
+  for (let index = 0; index < count; index += 1) {
+    const drawer = drawers.nth(index);
+    const close = drawer.getByRole('button', { name: /close|dismiss|cancel/i }).first();
+    if (!(await close.count())) {
+      drawerFailures.push(`Visible drawer ${index} has no close control.`);
+      continue;
+    }
+    try {
+      await close.click({ timeout: 2_000 });
+    } catch (error) {
+      drawerFailures.push(`Drawer ${index}: ${error instanceof Error ? error.message : String(error)}`);
+    }
     await page.waitForTimeout(100);
   }
 }
@@ -69,6 +92,8 @@ test.describe('deployed application automatic UI crawler', () => {
     test.setTimeout(120_000);
     const capture = await installErrorCapture(page);
     const visited = new Set<string>();
+    const clickFailures: string[] = [];
+    const drawerFailures: string[] = [];
 
     await page.goto(DEPLOYED_INTERNAL_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     await expect(page).toHaveURL(/winged-tycoons-frontend\.onrender\.com/);
@@ -85,24 +110,18 @@ test.describe('deployed application automatic UI crawler', () => {
         if (!(await navigation.isVisible().catch(() => false))) continue;
         await navigation.click().catch(() => undefined);
         await page.waitForTimeout(200);
-        await clickSafeInteractiveControls(page, visited);
+        await clickSafeInteractiveControls(page, visited, clickFailures);
+        await closeVisibleDrawers(page, drawerFailures);
       }
 
-      await clickSafeInteractiveControls(page, visited);
-
-      const drawers = page.locator('[role="dialog"]:visible, [class*="drawer"]:visible, [data-testid*="drawer"]:visible');
-      const drawerCount = await drawers.count();
-      for (let index = 0; index < drawerCount; index += 1) {
-        const drawer = drawers.nth(index);
-        if (await drawer.isVisible().catch(() => false)) {
-          await describeTarget(drawer);
-          await drawer.getByRole('button', { name: /close|dismiss/i }).first().click().catch(() => undefined);
-        }
-      }
+      await clickSafeInteractiveControls(page, visited, clickFailures);
+      await closeVisibleDrawers(page, drawerFailures);
     }
 
     expect(capture.pageErrors, 'Unhandled page errors').toEqual([]);
     expect(capture.consoleErrors, 'Browser console errors').toEqual([]);
     expect(capture.failedResponses, 'Unexpected 404/500 responses').toEqual([]);
+    expect(clickFailures, 'Safe controls that could not be clicked').toEqual([]);
+    expect(drawerFailures, 'Drawers that could not be closed').toEqual([]);
   });
 });

@@ -165,6 +165,61 @@ Focused backend validation after the current fixes:
 - Agent harness, agent evaluation, prompt-safety, UX accessibility, API security headers, catalog search, and normalized persistence group: passed (`55 passed, 3 skipped`).
 - The full 329-test backend collection progressed past the previously failing UX, CORS, agent, catalog, and persistence tests; the verbose run exceeded the local command timeout during the long tail, so the complete suite duration remains an operational follow-up.
 
+## Latest Automatic Click Pass
+
+Date: 2026-09-23
+
+Command:
+
+```powershell
+frontend/node_modules/.bin/playwright test frontend/e2e/auto_crawler.spec.ts --config=frontend/playwright.config.ts --project=ui-gadgets --reporter=line
+```
+
+Result:
+
+```text
+Running 1 test using 1 worker
+1 passed (10.6s)
+```
+
+The expanded crawler now discovers and attempts all visible safe buttons, role buttons, articles, cards, drawers, navigation tabs, and simulation controls. It records click failures and drawer-close failures instead of silently ignoring them.
+
+Observed result:
+
+- Page errors: `0`
+- Console errors: `0`
+- Failed `404` or `5xx` responses: `0`
+- Safe-control click failures: `0`
+- Drawer-close failures: `0`
+- Destructive production actions: intentionally skipped
+
+## Exhaustive Authenticated Click Pass
+
+Date: 2026-09-23
+
+The authenticated browser session was used for an additional exhaustive pass over the deployed internal route.
+
+Coverage:
+
+- All seven navigation tabs visited successfully.
+- Visible safe buttons, role buttons, cards, and card-like controls were discovered.
+- Global Search field was exercised.
+- Agent Logs drawers were opened and closed three times.
+- Visible non-password form fields were exercised where safe.
+- Destructive controls were identified and skipped.
+
+Result:
+
+- Safe controls clicked: `14`
+- Drawers closed: `3`
+- Controls skipped or blocked by overlays: `51`
+- Page errors: `0`
+- Console errors: `0`
+- Failed `401`, `403`, `404`, or `5xx` responses: `0`
+- Production mutations: `0`
+
+The skipped controls include production-sensitive actions such as logout, exit, scenario execution controls when covered by the destructive-action policy, and controls obscured by active overlays. No application failure was observed during this pass.
+
 ## Follow-up Regression Loop
 
 Targeted rerun after fixes:
