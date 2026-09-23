@@ -260,3 +260,124 @@ The full backend suite has previously shown order-sensitive persistence failures
 ## Interpretation
 
 This run proves that the deployed public frontend route is reachable and that the unauthenticated/safe crawl and authenticated internal session both completed without detected runtime or protected-route failures. This does not prove real mailbox behavior, database connectivity, destructive business actions, or production API authorization for every role.
+
+---
+
+## Internal UI Remediation Plan
+
+### 1. Overview & Remediation Goals
+
+- Eliminate all unhandled client-side JavaScript console errors during route traversal.
+- Ensure 100% of interactive UI controls (buttons, modals, tabs, drawers, cards, and forms) respond with correct state transitions.
+- Standardize accessible loading, empty, error, and offline-state representations across all views.
+- Resolve the confirmed data-quality mismatch where Sourcing Matrix, Proc Command, Trace Vault, and Sales Command display `Intake_Failed` / `Pending extraction` records.
+- Preserve the crawler safety boundary: production mutation controls remain excluded from the read-only crawler.
+
+### 2. High-Priority Component Fixes
+
+#### Confirmed workflow/data-state issue
+
+- **Affected views:** Sourcing Matrix, Proc Command, Trace Vault, and Sales Command.
+- **Finding:** The authenticated UI receives successful responses but displays an RFQ with `Intake_Failed` / `Pending extraction`.
+- **Likely ownership:** RFQ intake persistence, orchestration status transitions, or the API response mapping consumed by these views.
+- **Required modification:** Trace one RFQ from `event.rfq.received` through intake persistence and verify that the frontend receives the canonical RFQ status, extracted part number, quantity, and customer fields. Add a fixture-backed regression test for the expected extracted state.
+
+#### Customer portal loading states
+
+- **File:** `frontend/src/components/views/CustomerPortal.tsx`
+- **Finding:** Loading-state text contracts require explicit request and purchase-order progress labels.
+- **Required modification:** Keep `Sending request...` and `Sending purchase order...` tied to `isSubmitting` and `isSubmittingPo`, with `disabled` state and `aria-live` status messaging.
+
+#### Event-driven dashboard controls
+
+- **Files:** `frontend/src/components/views/SalesCommandView.tsx`, `frontend/src/components/views/FulfillmentHubView.tsx`, `frontend/src/components/common/AuditLogDrawer.tsx`
+- **Finding:** No runtime click failure was observed. These controls remain high-risk because they can approve, dispatch, freeze, or mutate operational state.
+- **Required modification:** Add explicit accessible names, stable `data-testid` values, confirmation states, and negative-path error rendering. Cover mutations only in staging with disposable records.
+
+#### Swarm Runner
+
+- **File:** `frontend/src/components/views/SwarmSimulationView.tsx`
+- **Finding:** Urgent AOG, low-margin counter-offer, and sanctions-blocking simulations completed successfully.
+- **Required modification:** Keep the runner simulation-only, expose scenario completion status with `role="status"`, and add a mobile viewport test.
+
+### 3. Step-by-Step Execution Checklist
+
+- [ ] Trace the displayed `Intake_Failed` RFQ through API response, persistence, and orchestration state transitions.
+- [ ] Add a regression fixture proving extracted RFQ data reaches Sourcing Matrix, Proc Command, Trace Vault, and Sales Command.
+- [ ] Fix any status or payload mapping that converts successful intake into `Pending extraction`.
+- [ ] Preserve `Sending request...` and `Sending purchase order...` loading text in `CustomerPortal.tsx`.
+- [ ] Add explicit `data-testid` and accessible `role` attributes to key interactive elements for deterministic test matching.
+- [ ] Ensure drawers have stable close controls and focus restoration.
+- [ ] Wrap asynchronous data fetching hooks in error boundaries and loading/empty guard conditions.
+- [ ] Add `aria-busy="true"` to loading regions and `role="status"` to progress messages.
+- [ ] Add screenshots and Playwright traces when crawler assertions fail.
+- [ ] Add per-route findings output to the crawler report.
+- [ ] Run the crawler with a controlled staging authentication state.
+- [ ] Add the authenticated crawler to the staging release gate.
+- [ ] Run mobile viewport coverage.
+- [ ] Keep destructive production actions excluded from the default crawler.
+- [ ] Add separate staging-only tests for approval, dispatch, PO, and freeze actions.
+- [ ] Re-run the Playwright auto-crawler to verify zero remaining UI errors.
+- [ ] Run the focused backend regression group.
+- [ ] Run the complete backend suite with a documented timeout budget.
+- [ ] Commit and push the updated report and validated remediation changes.
+
+### 4. Findings by Technical Bucket
+
+#### Interactive Component & Handler Failures
+
+- No confirmed unresponsive safe control was observed.
+- Three Agent Logs drawer cycles opened and closed successfully.
+- Destructive controls were skipped by policy, so their real mutation behavior remains unverified in production.
+
+#### State & Loading Display Discrepancies
+
+- Confirmed: several operational views display `Intake_Failed` / `Pending extraction` data despite successful page/API transport.
+- Loading text and accessible progress-state contracts require continued regression coverage.
+
+#### Routing & Navigation Errors
+
+- No navigation `404` was observed.
+- All seven internal navigation tabs were visited successfully.
+- Staging should still validate authenticated route transitions separately from production read-only crawling.
+
+#### Console & Unhandled Exception Logs
+
+- No page errors or console errors were observed during the authenticated crawl.
+- No failed `401`, `403`, `404`, or `5xx` responses were observed after authentication.
+- The remaining risk is untested destructive paths and real API/database/provider behavior, not observed client-side exceptions.
+
+### 5. Execution Disposition
+
+#### Confirmed resolved by crawler evidence
+
+- Internal route navigation completed successfully across all seven tabs.
+- Safe buttons, cards, drawers, search, theme controls, and simulation controls completed without click or close failures.
+- Authenticated traversal produced zero page errors, console errors, and failed HTTP responses.
+- Frontend unit tests and production build passed during the latest validation loop.
+
+#### Requires implementation or staging verification
+
+- **Interactive component and handler failures:** No safe-control failure is currently confirmed. Approval, dispatch, PO, freeze, logout, and other mutation handlers remain unverified because the crawler correctly skips destructive actions. Exercise them only against disposable staging data with explicit confirmation and rollback assertions.
+- **State and loading discrepancies:** The confirmed `Intake_Failed` / `Pending extraction` dashboard data must be traced through RFQ persistence, orchestration transitions, and API-to-view mapping. Loading regions should expose `role="status"` and `aria-busy="true"` without rendering empty-state copy at the same time.
+- **Routing and navigation errors:** None were observed. Keep the authenticated seven-tab traversal and mobile viewport pass in CI so route regressions are detected before deployment.
+- **Console and exception logs:** None were observed after authentication. Preserve page-error, console-error, and failed-response capture, and attach screenshots/traces whenever a future run fails.
+
+#### Release gate
+
+The UI crawler is green for read-only authenticated coverage, but this is not a complete production sign-off. Close the workflow/data-quality finding, run mutation coverage in staging, and retain crawler artifacts before treating the internal command center as fully verified.
+
+## Latest Execution Loop
+
+Date: 2026-09-23
+
+Recent commit baseline: `3160b11 Expand authenticated UI crawler findings`.
+
+Fresh checks:
+
+- Deployed crawler: **passed**, `1 passed (8.8s)`.
+- Focused backend regression group: **passed**, `55 passed, 3 skipped`.
+- Frontend unit tests: **8 passed**.
+- Frontend production build: **passed**.
+
+The focused backend group now passes the previously tracked agent, accessibility, CORS, catalog, and normalized persistence checks. Remaining work is staging/provider validation and the workflow/data-quality investigation described above.
