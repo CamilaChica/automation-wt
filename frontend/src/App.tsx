@@ -224,6 +224,11 @@ const InternalApp: React.FC = () => {
 
 const CustomerPortalRoute: React.FC = () => {
   const [authenticated, setAuthenticated] = useState(apiService.getRole() === 'customer');
+  useEffect(() => {
+    const handleAuthChange = () => setAuthenticated(apiService.getRole() === 'customer');
+    window.addEventListener('wt-auth-changed', handleAuthChange);
+    return () => window.removeEventListener('wt-auth-changed', handleAuthChange);
+  }, []);
   return authenticated ? <CustomerPortal /> : <AuthScreen role="customer" onAuthenticated={() => setAuthenticated(true)} onSwitchRole={() => { window.location.href = '/internal'; }} />;
 };
 

@@ -61,6 +61,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated, o
     setLoading(true);
     setError(null);
     setDeliveryFailed(false);
+    setDevelopmentOtp(undefined);
     try {
       const response = await apiService.requestOtp(email, role === 'customer' ? 'ROLE_CUSTOMER' : 'ROLE_INTERNAL');
       setChallengeId(response.challenge_id);

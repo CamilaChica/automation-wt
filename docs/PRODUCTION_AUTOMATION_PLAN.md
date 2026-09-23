@@ -15,6 +15,7 @@ Move Winged Tycoons from a credible demo workflow to a reliable procurement auto
 - The application is live and serving traffic.
 - The public frontend and API health endpoints respond, but end-user OTP delivery requires a successful Graph `sendMail` operation; a service can be HTTP-healthy while authentication remains unusable.
 - The auth UI now exposes Customer Portal and Team Sign In choices before OTP, and failed OTP delivery returns a recoverable error with resend/change-email actions.
+- Expired bearer sessions now dispatch an auth-state change so the mounted customer portal returns to sign-in instead of remaining on a dead authenticated screen.
 - The readiness response reported `inventory_postgres_mirror_enabled=false`.
 - The readiness response reported `postgres_primary_migration_required=true`.
 
@@ -29,6 +30,7 @@ Move Winged Tycoons from a credible demo workflow to a reliable procurement auto
 
 - `INVENTORY_INGESTION_POSTGRES_ENABLED=true` is required for the dedicated ingestion worker to mirror normalized inventory into PostgreSQL.
 - The deployed `/ready` response currently reports `inventory_postgres_mirror_enabled=false`; update the Render worker environment and redeploy it.
+- A customer RFQ request that receives HTTP `401` is rejected before the intake handler runs and is not persisted; verify the session before treating the RFQ as received.
 - The operational RFQ/quote/communication store remains SQLite-compatible until its PostgreSQL repository migration is completed.
 - Render service disks are service-scoped; `winged-worker` and `winged-inventory-ingestion` do not share the same SQLite supplier database. PostgreSQL must become the shared source of truth before relying on cross-worker supplier state.
 - Autonomous outbound email remains subject to existing fail-closed and human-review policies.

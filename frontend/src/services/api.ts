@@ -221,6 +221,7 @@ export const apiService = {
     localStorage.removeItem('wt_access_token');
     localStorage.removeItem('wt_role');
     localStorage.removeItem('wt_email');
+    window.dispatchEvent(new Event('wt-auth-changed'));
   },
 
   getRole(): 'customer' | 'internal' | null {
