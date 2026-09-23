@@ -110,6 +110,7 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
 
 def run() -> None:
     interval = int(os.getenv("MAILBOX_POLL_INTERVAL_SECONDS", "60"))
+    fetch_limit = int(os.getenv("MAILBOX_FETCH_LIMIT", "100"))
     backup_interval = int(os.getenv("SQLITE_BACKUP_INTERVAL_SECONDS", "86400"))
     last_backup_at = 0.0
     loader = SupplierEmailLoader()
@@ -137,12 +138,18 @@ def run() -> None:
 
         for mailbox in _mailboxes_to_poll():
             try:
-                messages = fetch_inbox_messages(mailbox)
+                messages = fetch_inbox_messages(mailbox, limit=fetch_limit)
                 logger.info("Mailbox %s: read %d message bodies", mailbox, len(messages))
                 for message in messages:
                     message_id = str(message.get("message_id") or "").strip()
                     if message_id and supplier_db.is_email_processed(mailbox, message_id):
-                        logger.info("Mailbox %s skipped already processed message %s", mailbox, message_id)
+                        logger.info(
+                            "Mailbox %s skipped already processed message %s from=%s subject=%s",
+                            mailbox,
+                            message_id,
+                            message.get("from", ""),
+                            message.get("subject", ""),
+                        )
                         continue
                     body = (message.get("body") or "").strip()
                     if not body and not message.get("attachments"):
