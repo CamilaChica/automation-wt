@@ -36,6 +36,106 @@ Move Winged Tycoons from a credible demo workflow to a reliable procurement auto
 - Render service disks are service-scoped; `winged-tycoons-email-worker` and `winged-inventory-ingestion` do not share the same SQLite supplier database. PostgreSQL must become the shared source of truth before relying on cross-worker supplier state.
 - Autonomous outbound email remains subject to existing fail-closed and human-review policies.
 
+## End-to-end customer email incident: current understanding
+
+The required customer outcome is:
+
+```text
+external customer -> sales@wingedtycoons.com -> RFQ intake -> supplier sourcing -> quote -> customer email
+```
+
+For `camilachica1991@gmail.com`, the log below proves only that the sales mailbox message was read and an RFQ record was created:
+
+```text
+Sales mailbox message ... ingested as RFQ RFQ-720302
+```
+
+It does **not** prove that a supplier quote existed, that a customer quote was generated, or that outbound mail succeeded. The worker now logs `pipeline_status`, `quote_id`, and `error`; those fields are required evidence for the final outcome.
+
+### What is working
+
+- Microsoft Graph client-credential authentication succeeds.
+- The corrected email worker is `winged-tycoons-email-worker` and polls only `sales`.
+- Graph message retrieval explicitly requests `body`; previously it fetched headers without the body and silently skipped RFQs.
+- Sales messages are deduplicated by Graph message ID.
+- Supplier PDF text extraction, quote-reference filtering, 30-day freshness checks, and threaded clarification requests are implemented.
+- The source branch contains the fixes through commits `34a4c35`, `fda9713`, and `e67a33f`.
+
+### Why a customer can still receive no response
+
+1. **Supplier wait is not customer dispatch.** Unknown or unavailable parts return `Supplier_Request_Sent`; the system asks suppliers for pricing and does not email the customer until a usable supplier offer exists.
+2. **The two workers have separate disks.** `winged-tycoons-email-worker` writes RFQs and operational state to its `/var/data`; `winged-inventory-ingestion` writes supplier offers and attempts to resume RFQs from its own different `/var/data`. These are not shared filesystems. The ingestion worker therefore cannot reliably see the RFQ created by the email worker or resume its pipeline.
+3. **SQLite is still in the critical path.** `/ready` previously reported `/opt/render/project/src/data/operations.db`, `inventory_postgres_mirror_enabled=false`, and `postgres_primary_migration_required=true`. A healthy HTTP endpoint does not prove shared RFQ, supplier, or communication state.
+4. **Outbound dispatch has separate prerequisites.** `EMAIL_SEND_ENABLED=true` is necessary but not sufficient. Graph application permissions, mailbox identity, and `sendMail` authorization must succeed; the pipeline must reach `Quote_Sent`.
+5. **Old processed messages are not new tests.** A `skipped already processed message` line means the exact Graph message ID has already been handled. It is not evidence that the latest client email was read or replied to.
+
+## Required fixes before claiming customer-ready automation
+
+### P0: Establish one shared production state
+
+Choose one of these designs and implement it completely:
+
+- **Preferred:** migrate RFQs, RFQ items, quotes, quote items, communications, audit events, workflow state, tasks, supplier offers, and message idempotency to PostgreSQL; both workers use the same `DATABASE_URL` and repository.
+- **Temporary diagnostic option:** run all RFQ processing and supplier ingestion in one worker using one persistent disk. This is not the preferred scalable architecture, but it removes the split-brain failure while PostgreSQL migration is completed.
+
+Do not rely on separate SQLite disks for cross-worker workflows.
+
+### P0: Make the customer delivery contract observable
+
+For every sales message, persist and log:
+
+- source message ID
+- sender and subject
+- RFQ ID
+- pipeline status
+- supplier request count and supplier thread IDs
+- quote ID, when created
+- outbound communication ID
+- transmission status (`SENT`, `DRY_RUN`, or failure)
+- failure reason and retry/dead-letter state
+
+The customer-facing success condition is only:
+
+```text
+pipeline_status=Quote_Sent quote_id=QTE-* transmission_status=SENT recipient=camilachica1991@gmail.com
+```
+
+### P0: Add a durable resume mechanism
+
+When a supplier reply is ingested, resume the matching RFQ through shared state using the part number, RFQ association, and supplier thread. Do not depend on the supplier worker importing the email worker's in-memory `db_service` or reading a different local SQLite file.
+
+### P1: Harden mailbox configuration
+
+- Keep `winged-tycoons-email-worker` as the only owner of `sales`.
+- Keep `winged-inventory-ingestion` as the only owner of `purchasing`.
+- Configure explicit `GRAPH_MAILBOX_USER_SALES=sales@wingedtycoons.com` and `GRAPH_MAILBOX_USER_PURCHASING=purchasing@wingedtycoons.com`; do not rely on the generic variable.
+- Set `MAILBOX_FETCH_LIMIT=100` and retain sender/subject in deduplication logs.
+- Set Azure SDK loggers to warning level after diagnostics are complete to avoid noisy credential traces.
+
+### P1: Verify outbound mail independently
+
+Run a controlled test that does not depend on OTP:
+
+1. Send a new email from `camilachica1991@gmail.com` to `sales@wingedtycoons.com` with a known catalog part.
+2. Confirm the sales worker creates one RFQ with the original sender.
+3. Confirm the pipeline reaches `Quote_Sent` or clearly reports `Supplier_Request_Sent`.
+4. If `Quote_Sent`, confirm a communication record has `recipient=camilachica1991@gmail.com` and `transmission_status=SENT`.
+5. Confirm delivery in the customer mailbox, including spam/quarantine.
+
+No test is successful if it ends at `ingested as RFQ` or `Mailbox sales: read ...`.
+
+### P1: Add failure-state tests
+
+Required automated cases:
+
+- Graph returns a message body and attachment; sales RFQ is parsed.
+- Graph returns a message with no body; the worker logs and retains a retryable failure.
+- Unknown part creates supplier outreach but does not falsely claim a customer quote was sent.
+- Supplier reply in a different worker resumes the original RFQ through shared persistence.
+- Supplier quote older than 30 days triggers threaded confirmation to multiple suppliers.
+- Quote dispatch failure is recorded and retried without creating duplicate customer quotes.
+- Two RFQs from the same customer create two independent RFQs and two independent outbound outcomes.
+
 ## Next production actions
 
 1. Set `INVENTORY_INGESTION_POSTGRES_ENABLED=true` in the deployed `winged-inventory-ingestion` Render worker environment.
