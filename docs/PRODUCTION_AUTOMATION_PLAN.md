@@ -1,368 +1,133 @@
 # Production Automation Plan
 
-**Last verified:** 2026-09-23
+## 1. Shared PostgreSQL Operational State
 
-**Execution checkpoint:** The latest loop passed the production-focused RFQ/mailbox suite (39 tests), agent regression tests (with expected skips), frontend unit tests (8/8), frontend lint, frontend production build, changed-module compilation, and the complete backend suite (329 collected, no failures). The four previously observed full-suite failures were traced to order-dependent SQLite path state and stale assertions; the normalized persistence test now reads the configured store path, and all four failure cases pass. Live API and frontend return HTTP `200`; `/ready` returns `ready`, but still reports `sqlite_compatibility_store`, `inventory_postgres_mirror_enabled=false`, and `postgres_primary_migration_required=true`. The protected mailbox health endpoint returns `401` without an internal session, so live mailbox connectivity and outbound delivery remain unverified.
+- Route these entities through shared async PostgreSQL repositories:
+  - RFQs and RFQ items
+  - Supplier offers
+  - Quotes and quote items
+  - Communications
+  - Audit events
+  - Workflow state
+  - Communication tasks
+  - Inbound-message idempotency
+  - Agent handoffs
+- Use the same `DATABASE_URL` for:
+  - `backend`
+  - `winged-tycoons-email-worker`
+  - `winged-inventory-ingestion`
+- Complete Alembic migrations through `0003_shared_operational_state`.
+- Keep `0002_supplier_quote_inv_fields` at 32 characters or fewer.
+- Keep `version_table_column_length=255` in both Alembic modes.
+- Production must fail if PostgreSQL is missing or unreachable.
+- SQLite is allowed only for isolated local tests; never for production business state.
 
-**Latest production-readiness audit:** **NOT READY FOR DELIVERY**. The live API and frontend are healthy, and the full backend suite passes (329 collected, no failures), but `/ready` still reports `storage_engine=sqlite`, `inventory_postgres_mirror_enabled=false`, and `postgres_primary_migration_required=true`. Unauthenticated mailbox health correctly returns `401`; authenticated sales/purchasing health has not yet been verified. A customer response has been received in a prior controlled test, but the final audit lacks a complete `Quote_Sent`, `quote_id`, `transmission_status=SENT`, and recipient trace.
+## 2. Render Configuration
 
-Production readiness is now fail-closed in source: `/ready` returns HTTP `503` in production when `DATABASE_URL` is missing, PostgreSQL is unreachable, or operational mirroring is disabled. A successful production response includes `postgresql_mirroring=true`; deployment must now provide the real PostgreSQL configuration before the service can advertise readiness.
-
-## Goal
-
-Move Winged Tycoons from a credible demo workflow to a reliable procurement automation service for messy mail, supplier attachments, repeated follow-ups, PO alerts, and continuous inventory enrichment.
-
-## Execution status
-
-### Live verification
-
-- Render API: `https://winged-tycoons-api.onrender.com/ready` returned HTTP `200`.
-- Render frontend: `https://winged-tycoons-frontend.onrender.com/` returned HTTP `200`.
-- The application is live and serving traffic.
-- The public frontend and API health endpoints respond, but end-user OTP delivery requires a successful Graph `sendMail` operation; a service can be HTTP-healthy while authentication remains unusable.
-- The auth UI now exposes Customer Portal and Team Sign In choices before OTP, and failed OTP delivery returns a recoverable error with resend/change-email actions.
-- Expired bearer sessions now dispatch an auth-state change so the mounted customer portal returns to sign-in instead of remaining on a dead authenticated screen.
-- The readiness response reported `inventory_postgres_mirror_enabled=false`.
-- The readiness response reported `postgres_primary_migration_required=true`.
-- The live readiness response also reported `storage_engine=sqlite` and `operational_store_path=/opt/render/project/src/data/operations.db`.
-- Unauthenticated `GET /api/internal/mailboxes/health` returned `401 Unauthorized`, as required.
-- Local `alembic upgrade head` was not proven against production PostgreSQL because the required live database connection was unavailable in the audit environment.
-
-1. **Persistence boundary and release gate**: complete for visibility and safe operation. RFQ, quote, communication, and PO state currently use the SQLite-compatible operational store; supplier inventory and quote mirrors use PostgreSQL when explicitly enabled. Production sign-off must not call this PostgreSQL-only until the operational store is migrated.
-2. **Supplier ingestion reliability**: complete. Message-id idempotency, multi-line extraction, attachment context, retryable PostgreSQL mirroring, and missing-field follow-up are implemented.
-	The PostgreSQL mirror now preserves searchable quantity, condition, certificate, lead time, location, warranty, and trace-document fields; the customer catalog searches that mirror when enabled.
-3. **Extraction and retrieval contracts**: complete. Subject/body/attachment provenance, validated structured output, multi-line preservation, and shared Pydantic state are implemented.
-4. **Communication and PO workflow**: complete. Threaded customer responses, supplier discount requests, customer chasing, PO notification, and communication audit records are implemented.
-5. **Reliability coverage**: complete for the current runtime boundary. Tests cover attachment-only mail, duplicate handling, multi-line supplier quotes, provider fallback, handoff persistence, customer replies, and failed mirror isolation.
-6. **Production cutover**: partially complete. The Render API and frontend are live and healthy, but the deployed ingestion worker is not currently mirroring to PostgreSQL and the operational store has not been migrated from SQLite compatibility storage.
-
-## Current release gate
-
-- `INVENTORY_INGESTION_POSTGRES_ENABLED=true` is required for the dedicated ingestion worker to mirror normalized inventory into PostgreSQL.
-- The deployed `/ready` response currently reports `inventory_postgres_mirror_enabled=false`; update the Render worker environment and redeploy it.
-- A customer RFQ request that receives HTTP `401` is rejected before the intake handler runs and is not persisted; verify the session before treating the RFQ as received.
-- The operational RFQ/quote/communication store remains SQLite-compatible until its PostgreSQL repository migration is completed.
-- Render service disks are service-scoped; `winged-tycoons-email-worker` and `winged-inventory-ingestion` do not share the same SQLite supplier database. PostgreSQL must become the shared source of truth before relying on cross-worker supplier state.
-- Autonomous outbound email remains subject to existing fail-closed and human-review policies.
-
-## End-to-end customer email incident: current understanding
-
-The required customer outcome is:
+Set these variables on all applicable services:
 
 ```text
-external customer -> sales@wingedtycoons.com -> RFQ intake -> supplier sourcing -> quote -> customer email
+DATABASE_URL=<Render managed PostgreSQL URL>
+ALLOWED_ORIGINS=https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com,http://localhost:5173,http://localhost:3000
 ```
 
-For `camilachica1991@gmail.com`, the log below proves only that the sales mailbox message was read and an RFQ record was created:
+Set these worker variables:
 
 ```text
-Sales mailbox message ... ingested as RFQ RFQ-720302
+INVENTORY_INGESTION_POSTGRES_ENABLED=true
+GRAPH_MAILBOX_USER_SALES=sales@wingedtycoons.com
+GRAPH_MAILBOX_USER_PURCHASING=purchasing@wingedtycoons.com
+OPERATIONS_DB_PATH=/var/data/operations.db
+SUPPLIER_DATABASE_PATH=/var/data/supplier_email_store.db
 ```
 
-It does **not** prove that a supplier quote existed, that a customer quote was generated, or that outbound mail succeeded. The worker now logs `pipeline_status`, `quote_id`, and `error`; those fields are required evidence for the final outcome.
+Worker ownership:
 
-### What is working
+- `winged-tycoons-email-worker` polls only `sales`.
+- `winged-inventory-ingestion` polls only `purchasing`.
 
-- Microsoft Graph client-credential authentication succeeds.
-- The corrected email worker is `winged-tycoons-email-worker` and polls only `sales`.
-- Graph message retrieval explicitly requests `body`; previously it fetched headers without the body and silently skipped RFQs.
-- Sales messages are deduplicated by Graph message ID.
-- Supplier PDF text extraction, quote-reference filtering, 30-day freshness checks, and threaded clarification requests are implemented.
-- The source branch contains the fixes through commits `34a4c35`, `fda9713`, and `e67a33f`.
+## 3. Readiness and CORS
 
-### Why a customer can still receive no response
+- `/ready` must perform a live PostgreSQL check.
+- In production, return HTTP `503` if PostgreSQL is missing, unreachable, or mirroring is disabled.
+- A successful production response must include:
 
-1. **Supplier wait is not customer dispatch.** Unknown or unavailable parts return `Supplier_Request_Sent`; the system asks suppliers for pricing and does not email the customer until a usable supplier offer exists.
-2. **The two workers have separate disks.** `winged-tycoons-email-worker` writes RFQs and operational state to its `/var/data`; `winged-inventory-ingestion` writes supplier offers and attempts to resume RFQs from its own different `/var/data`. These are not shared filesystems. The ingestion worker therefore cannot reliably see the RFQ created by the email worker or resume its pipeline.
-3. **SQLite is still in the critical path.** `/ready` previously reported `/opt/render/project/src/data/operations.db`, `inventory_postgres_mirror_enabled=false`, and `postgres_primary_migration_required=true`. A healthy HTTP endpoint does not prove shared RFQ, supplier, or communication state.
-4. **Outbound dispatch has separate prerequisites.** `EMAIL_SEND_ENABLED=true` is necessary but not sufficient. Graph application permissions, mailbox identity, and `sendMail` authorization must succeed; the pipeline must reach `Quote_Sent`.
-5. **Old processed messages are not new tests.** A `skipped already processed message` line means the exact Graph message ID has already been handled. It is not evidence that the latest client email was read or replied to.
+```json
+{
+  "status": "ready",
+  "postgresql_mirroring": true,
+  "storage_engine": "postgresql",
+  "postgres_primary_migration_required": false
+}
+```
 
-## Required fixes before claiming customer-ready automation
+- Parse `ALLOWED_ORIGINS` dynamically.
+- Allow credentials, all required methods, all required headers, and `OPTIONS` preflight.
+- Verify local and production CORS preflight behavior.
 
-### P0: Establish one shared production state
+## 4. Supplier and Mailbox Safety
 
-Choose one of these designs and implement it completely:
+- Initialize supplier storage lazily.
+- If an explicitly configured local/container path is unwritable, fall back to `/tmp/data` only outside production business-state paths.
+- Never use `/tmp` as production operational storage.
+- Ignore messages sent by `sales@wingedtycoons.com` to prevent self-reply loops.
+- Read only Inbox messages for RFQ ingestion.
+- Process each Graph message ID once.
+- Reject supplier quote references as part numbers.
+- If a supplier PDF is unreadable, request quote details in the same email body thread.
+- Exclude supplier offers older than 30 days from automatic pricing and request threaded confirmation.
 
-- **Preferred:** migrate RFQs, RFQ items, quotes, quote items, communications, audit events, workflow state, tasks, supplier offers, and message idempotency to PostgreSQL; both workers use the same `DATABASE_URL` and repository.
-- **Temporary diagnostic option:** run all RFQ processing and supplier ingestion in one worker using one persistent disk. This is not the preferred scalable architecture, but it removes the split-brain failure while PostgreSQL migration is completed.
+## 5. UI and Workflow State
 
-Do not rely on separate SQLite disks for cross-worker workflows.
+- Keep loading and empty states mutually exclusive.
+- Add accessible labels, `role="status"`, `aria-busy`, keyboard interaction, and stable selectors.
+- Ensure RFQ metadata reaches intake as structured `customer_name` and `customer_email`.
+- Trace any `Intake_Failed` or `Pending extraction` RFQ through persistence, orchestration, API mapping, and dashboard views.
+- Keep destructive crawler actions disabled by default; test them only with disposable staging data.
 
-### P0: Make the customer delivery contract observable
+## 6. Verification
 
-For every sales message, persist and log:
-
-- source message ID
-- sender and subject
-- RFQ ID
-- pipeline status
-- supplier request count and supplier thread IDs
-- quote ID, when created
-- outbound communication ID
-- transmission status (`SENT`, `DRY_RUN`, or failure)
-- failure reason and retry/dead-letter state
-
-The customer-facing success condition is only:
+Run locally:
 
 ```text
-pipeline_status=Quote_Sent quote_id=QTE-* transmission_status=SENT recipient=camilachica1991@gmail.com
+alembic heads
+alembic history
+alembic upgrade head
+python -m pytest -q
+npm --prefix frontend run test:unit
+npm --prefix frontend run lint
+npm --prefix frontend run build
 ```
 
-### P0: Add a durable resume mechanism
-
-When a supplier reply is ingested, resume the matching RFQ through shared state using the part number, RFQ association, and supplier thread. Do not depend on the supplier worker importing the email worker's in-memory `db_service` or reading a different local SQLite file.
-
-### P1: Harden mailbox configuration
-
-- Keep `winged-tycoons-email-worker` as the only owner of `sales`.
-- Keep `winged-inventory-ingestion` as the only owner of `purchasing`.
-- Configure explicit `GRAPH_MAILBOX_USER_SALES=sales@wingedtycoons.com` and `GRAPH_MAILBOX_USER_PURCHASING=purchasing@wingedtycoons.com`; do not rely on the generic variable.
-- Set `MAILBOX_FETCH_LIMIT=100` and retain sender/subject in deduplication logs.
-- Set Azure SDK loggers to warning level after diagnostics are complete to avoid noisy credential traces.
-
-### P1: Verify outbound mail independently
-
-Run a controlled test that does not depend on OTP:
-
-1. Send a new email from `camilachica1991@gmail.com` to `sales@wingedtycoons.com` with a known catalog part.
-2. Confirm the sales worker creates one RFQ with the original sender.
-3. Confirm the pipeline reaches `Quote_Sent` or clearly reports `Supplier_Request_Sent`.
-4. If `Quote_Sent`, confirm a communication record has `recipient=camilachica1991@gmail.com` and `transmission_status=SENT`.
-5. Confirm delivery in the customer mailbox, including spam/quarantine.
-
-No test is successful if it ends at `ingested as RFQ` or `Mailbox sales: read ...`.
-
-### P1: Add failure-state tests
-
-Required automated cases:
-
-- Graph returns a message body and attachment; sales RFQ is parsed.
-- Graph returns a message with no body; the worker logs and retains a retryable failure.
-- Unknown part creates supplier outreach but does not falsely claim a customer quote was sent.
-- Supplier reply in a different worker resumes the original RFQ through shared persistence.
-- Supplier quote older than 30 days triggers threaded confirmation to multiple suppliers.
-- Quote dispatch failure is recorded and retried without creating duplicate customer quotes.
-- Two RFQs from the same customer create two independent RFQs and two independent outbound outcomes.
-
-### Latest test loop result
-
-- `python -m pytest tests/test_worker_mailbox_ownership.py tests/test_supplier_freshness.py tests/test_supplier_email_ingestion.py tests/test_rfq_intake_agent.py tests/test_auth_production_env.py tests/test_customer_reply_pipeline.py -q`: passed.
-- `npm --prefix frontend run lint`: passed.
-- `npm --prefix frontend run build`: passed.
-- `python -m py_compile` for worker, mailbox, ingestion, orchestration, intake, and supplier modules: passed.
-- `python -m pytest -q --tb=no`: 329 collected, no failures; expected skips/xfails remain.
-- `python -m pytest tests/agents/test_agent_harness.py tests/agents/test_agent_evaluation.py tests/system_and_agents/test_agent_behavior_and_drift.py -q`: passed with expected skips.
-- `npm --prefix frontend run test:unit`: 8/8 tests passed.
-- `npm --prefix frontend run build`: passed.
-- Live `/healthz` and frontend: HTTP `200`.
-- Live `/ready`: healthy HTTP response, but PostgreSQL-primary readiness is not met.
-
-## Next production actions
-
-1. Set `INVENTORY_INGESTION_POSTGRES_ENABLED=true` in the deployed `winged-inventory-ingestion` Render worker environment.
-2. Confirm `DATABASE_URL` points to the reachable production PostgreSQL instance from that worker.
-3. Redeploy the worker and verify `/ready` reports `inventory_postgres_mirror_enabled=true`.
-4. Run the live production smoke suite with `LIVE_API_URL` and `LIVE_API_TOKEN`.
-5. Migrate RFQ, quote, communication, PO, and audit persistence to PostgreSQL before claiming PostgreSQL-primary production readiness.
-
-### No-shell Render migration procedure
-
-Do not use Render Shell for the normal deployment path. The `backend` service already runs the migration automatically during every deployment:
+Verify Render:
 
 ```text
-pip install -r requirements.txt && alembic upgrade head
+GET /healthz -> 200
+GET /ready -> 200 with PostgreSQL-primary fields above
+GET /api/internal/mailboxes/health without auth -> 401
+GET /api/internal/mailboxes/health with an approved internal session -> sales and purchasing status=ok
 ```
 
-Use the Render Dashboard instead:
+Run one new RFQ from `camilachica1991@gmail.com` to `sales@wingedtycoons.com` and capture:
 
-1. Open the `backend` service for this repository.
-2. Confirm `DATABASE_URL` is configured in Environment.
-3. Select **Manual Deploy** -> **Deploy latest commit**.
-4. Wait for the build log to show `alembic upgrade head` completed successfully.
-5. Confirm the health check is green at `/ready`.
-6. Deploy `winged-inventory-ingestion` from the same commit after the backend migration succeeds.
+```text
+message_id
+sender
+rfq_id
+pipeline_status=Quote_Sent
+quote_id=QTE-*
+communication_id
+transmission_status=SENT
+recipient=camilachica1991@gmail.com
+```
 
-This migration runs against PostgreSQL during the Render build and does not call the LLM or consume model tokens. Render Shell is only a troubleshooting fallback, not a required step.
+## Release Gate
 
-The `winged-inventory-ingestion` service is an existing separate Render worker declared in `render.yaml`. It is not a new database; it continuously polls `purchasing@wingedtycoons.com`, parses supplier messages and attachments, and mirrors normalized rows to PostgreSQL when its `DATABASE_URL` and `INVENTORY_INGESTION_POSTGRES_ENABLED=true` are configured.
+Do not mark the application ready until:
 
-## Incident Remediation Plan
-
-### Phase 1: Restore customer access and outbound mail
-
-1. In Render, verify `WT_AUTH_ENV=production` and `WT_AUTH_SECRET` is at least 32 characters.
-2. Verify Microsoft Graph credentials and mailbox identity for `sales@wingedtycoons.com`.
-3. Confirm Graph application permissions include delegated/application access required to send mail and read the sales and purchasing mailboxes.
-4. Request one customer OTP and inspect API/worker logs for Graph `sendMail` success or a concrete `401`/`403` error.
-5. Keep autonomous quote dispatch disabled until one controlled customer quote reaches the intended mailbox.
-6. The API now returns a recoverable HTTP `503` with an explicit verification-email error when Graph/SMTP delivery fails, instead of trapping users in a generic sign-in failure loop.
-
-### Phase 2: Restore supplier ingestion and shared lookup
-
-1. In the `winged-inventory-ingestion` Render worker, set `INVENTORY_INGESTION_POSTGRES_ENABLED=true`.
-2. Set a valid production `DATABASE_URL` in that worker and verify it can resolve the private PostgreSQL host from the worker network.
-3. Redeploy the ingestion worker.
-4. Submit one controlled supplier email with one CSV or PDF attachment.
-5. Confirm the worker log shows successful extraction, PostgreSQL upsert, and no fallback to an ephemeral `/tmp` database.
-6. Confirm `/ready` reports `inventory_postgres_mirror_enabled=true`.
-7. Confirm the API sourcing lookup can see the ingested supplier offer.
-8. Run the Alembic `0002_supplier_quote_inventory_fields` migration before enabling the mirror in production.
-
-### Phase 3: Remove split-brain operational state
-
-1. Add PostgreSQL tables/repositories for RFQs, RFQ items, quotes, quote items, communications, audit events, workflow state, communication tasks, and agent handoffs.
-2. Add idempotency keys for inbound message IDs, RFQ creation, quote creation, PO numbers, communication tasks, and supplier quote rows.
-3. Run a dual-write period in staging and compare SQLite-compatible state with PostgreSQL state.
-4. Switch API and workers to PostgreSQL reads after parity checks pass.
-5. Preserve SQLite as a read-only rollback snapshot, then remove it from the production critical path.
-
-### Phase 4: Production sign-off
-
-- Customer OTP request and verification succeeds.
-- Customer RFQ email becomes an RFQ record.
-- Inventory and supplier lookup return the expected part.
-- Missing supplier fields generate a threaded supplier request.
-- Customer quote email is delivered and recorded.
-- Customer detail request receives an immediate threaded response.
-- Supplier discount request and customer chase tasks are scheduled and dispatched.
-- Customer PO creates a durable PO record and alerts `camila@wingedtycoons.com`.
-- `/ready` is healthy and reports PostgreSQL mirroring enabled.
-- No production service uses an ephemeral `/tmp` database for business state.
-
-### Rollback triggers
-
-- OTP emails fail or Graph returns unauthorized responses.
-- Supplier ingestion loses message IDs or produces duplicate offers.
-- PostgreSQL mirror errors exceed the retry/dead-letter policy.
-- Customer or supplier outbound messages are sent to an incorrect recipient.
-- PostgreSQL and operational-store records diverge during dual write.
-
-Rollback means disabling autonomous dispatch, pausing mailbox workers, preserving audit events, and returning to the last verified release while the failed gate is investigated.
-
-## Alembic Revision-Length Incident
-
-The Render migration failure was caused by `0002_supplier_quote_inventory_fields` exceeding PostgreSQL's default `alembic_version.version_num VARCHAR(32)` limit.
-
-Resolution applied:
-
-- Renamed the revision to `0002_supplier_quote_inv_fields` (30 characters).
-- Preserved `down_revision = "0001_aviation_parts_and_po"`.
-- Configured `version_table_column_length=255` in offline and online Alembic modes.
-- Added an online PostgreSQL bootstrap step that widens an existing `alembic_version.version_num` column to `VARCHAR(255)` before migrations run.
-- Verified Alembic discovers the chain with `alembic heads` and `alembic history`.
-
-Render must redeploy the backend from the commit containing this fix. The migration cannot be claimed successful until the Render build log shows `alembic upgrade head` completing against the production PostgreSQL database.
-
-## Supplier Database Startup Permission Fix
-
-The supplier database initializer no longer assumes `/var/data` is writable during module import.
-
-- `SUPPLIER_DB_PATH` is honored as the highest-priority explicit override.
-- Configured paths are tested with a temporary write probe.
-- Permission and OS errors fall back to `/tmp/data/<database-name>`.
-- Supplier database initialization is lazy; importing the module no longer opens SQLite before environment validation completes.
-- The fallback behavior is covered by `tests/test_supplier_database_paths.py`.
-
-This prevents a missing Render persistent disk or non-root `/var/data` permission from crashing Uvicorn import. It does not replace the required PostgreSQL operational-store migration; `/tmp` is only a resilient local/container fallback and must not be used for production business state.
-
-## Urgent Five-Block Execution Result
-
-The requested infrastructure, persistence, UI, observability, and controlled-test blocks were reviewed against the actual repository.
-
-### Completed in source and tests
-
-- Shared-state configuration is explicit in `render.yaml`: PostgreSQL mirror flag, shared environment keys, persistent worker paths, and separate mailbox identities are declared.
-- Email worker ownership is sales-only; purchasing remains owned by the dedicated ingestion worker.
-- Graph message bodies and attachments are requested before RFQ parsing.
-- Customer metadata is passed as structured intake context.
-- Supplier freshness is limited to 30 days, stale suppliers are re-engaged on original threads, and inbound message IDs remain idempotent.
-- SQLite persistence tests now use the configured `OperationsStore` path instead of a hardcoded database path.
-- `SwarmSimulationView` exposes keyboard selection, `aria-pressed`, and live `role="status"` progress/outcome states.
-- `SalesCommandView` exposes quote readiness as `aria-busy` state.
-- `AuditLogDrawer` already exposes `role="dialog"`, `aria-modal`, keyboard focus trapping, and the cached audit fallback notice.
-
-### Verification evidence
-
-- Full backend suite: **329 collected, no failures**; expected skips/xfails remain.
-- Production-focused RFQ/mailbox/persistence suite: **41 passed**.
-- Frontend unit suite: **8 passed**.
-- Frontend TypeScript lint: passed.
-- Frontend production build: passed.
-- Live API `/healthz`: HTTP `200`.
-- Live frontend: HTTP `200`.
-
-### Still blocked by production environment
-
-- `/ready` still reports `sqlite_compatibility_store`.
-- `/ready` still reports `inventory_postgres_mirror_enabled=false`.
-- `/ready` still reports `postgres_primary_migration_required=true`.
-- Shared PostgreSQL operational repositories are not yet implemented; separate worker SQLite disks remain a split-state risk.
-- Live mailbox health and end-to-end outbound delivery require an authenticated internal session and a real `Quote_Sent` / `transmission_status=SENT` trace.
-- The controlled RFQ test must be run only after the latest Render services are deployed and PostgreSQL connectivity is verified.
-
-## Emergency PostgreSQL Cutover Execution Result
-
-The emergency cutover changes are now fail-closed in source:
-
-- Production `/ready` requires `DATABASE_URL`.
-- Production `/ready` opens a PostgreSQL connection and executes `SELECT 1`.
-- Missing PostgreSQL configuration returns HTTP `503`.
-- Unreachable PostgreSQL returns HTTP `503`.
-- Readiness exposes `storage_engine`, `inventory_postgres_mirror_enabled`, and `postgres_primary_migration_required` at the response root and under `persistence`.
-- CORS now parses `ALLOWED_ORIGINS` while retaining the repository's local and production origin defaults.
-- Render declares explicit `ALLOWED_ORIGINS`, Graph credential aliases, mailbox identities, and PostgreSQL mirror configuration.
-
-Verification evidence:
-
-- Missing `DATABASE_URL` in production mode: HTTP `503`.
-- Unreachable PostgreSQL in production mode: HTTP `503`.
-- Backend focused gates: passed.
-- Frontend lint and build: passed.
-
-This does **not** claim that the operational repositories have been migrated to PostgreSQL. `services/operations_store.py` remains the SQLite-compatible operational repository for local/test compatibility. The remaining production migration is to implement and deploy PostgreSQL repositories for RFQs, quotes, communications, audit/workflow state, tasks, handoffs, and idempotency, then verify live `/ready` reports `storage_engine=postgresql` and `postgres_primary_migration_required=false`.
-
-## Shared Operational Repository Implementation
-
-The shared PostgreSQL foundation is now present in source:
-
-- `models/operational_models.py` defines the 11 operational domains: RFQs, RFQ items, supplier offers, quotes, quote items, communications, audit events, workflow state, communication tasks, inbound message idempotency, and agent handoffs.
-- `migrations/versions/0003_shared_operational_state.py` creates those PostgreSQL tables and indexes.
-- `repositories/` contains async-session repositories for RFQs, quotes, communications, workflow state, and idempotency claims.
-- `IdempotencyRepository.claim()` performs the existence check and insert in the caller's transaction.
-- Alembic imports the operational models so metadata registration includes the shared tables.
-- Production `OperationsStore` initialization now fails if `DATABASE_URL` is missing instead of silently using SQLite.
-
-This is the schema/repository foundation, not a completed runtime cutover. Existing API and worker orchestration still use compatibility services in places; the next migration step is to route those call sites through the repositories and verify a live PostgreSQL deployment before enabling customer traffic.
-
-## Production Failure Analysis & Remediation Plan
-
-### 1. Root Cause Summary (Post-Deployment Audit)
-
-- **Database state split:** Production business state still depends on SQLite-compatible files. Render service disks are service-scoped, so API, email-worker, and ingestion-worker state can diverge even when each service reports healthy.
-- **CORS configuration drift:** The source middleware includes local and production origins, but the deployed origin configuration must be redeployed and verified with an authenticated preflight check.
-- **Environment ingestion gap:** Graph credentials and provider secrets are required at runtime. Authentication can succeed while mailbox send/read permissions, mailbox identity, PostgreSQL connectivity, or LLM configuration remain incomplete.
-- **Gateway configuration risk:** The frontend API client uses a deployed Render API base for the hosted frontend, but `VITE_API_BASE_URL` and the deployed bundle must be checked after every frontend deployment to prevent a fallback to local development endpoints.
-
-### 2. Required Infrastructure Architecture Modifications
-
-- **Database engine:** Transition the production operational store from SQLite to Render Managed PostgreSQL, including RFQs, RFQ items, quotes, quote items, communications, audit events, workflow state, communication tasks, and agent handoffs. Keep persistent disks only for backups or temporary rollback snapshots.
-- **Supplier state:** Use the same PostgreSQL source of truth for `winged-tycoons-email-worker` and `winged-inventory-ingestion`; do not depend on cross-service SQLite files.
-- **CORS hardening:** Keep origins parsed from environment configuration and explicitly verify `https://winged-tycoons-frontend.onrender.com`, `https://wingedtycoons.com`, approved local development origins, credentials, methods, and request headers.
-- **Webhook protocol verification:** Verify Microsoft Graph and external webhook validation/authorization at the inbound boundary before accepting events or mutating state.
-- **Secret management:** Populate Graph tenant/client/secret values, mailbox identities, `DATABASE_URL`, auth secret, email-send configuration, and provider keys in Render service environments. Never place secrets in source, fixtures, crawler state, or logs.
-
-### 3. Production Deployment Checklist
-
-- [x] Render Blueprint defines `winged-tycoons-email-worker` and `winged-inventory-ingestion` separately.
-- [x] Render Blueprint assigns persistent disks and explicit `GRAPH_MAILBOX_USER_SALES` / `GRAPH_MAILBOX_USER_PURCHASING` identities.
-- [x] Frontend API client has a deployed-host API fallback and supports `VITE_API_BASE_URL`.
-- [ ] Deploy the latest `main` revision to backend, frontend, email worker, and ingestion worker.
-- [ ] Confirm `DATABASE_URL` is populated and reachable from backend and ingestion worker.
-- [ ] Run `alembic upgrade head` successfully against production PostgreSQL.
-- [ ] Confirm `/ready` reports `inventory_postgres_mirror_enabled=true` and no production business state relies on `/tmp` or service-local SQLite.
-- [ ] Confirm Render Dashboard secrets are populated without exposing values in logs.
-- [ ] Verify authenticated CORS preflight returns HTTP `200` with the expected origin and headers.
-- [ ] Verify `/healthz` returns HTTP `200` before routing traffic.
-- [ ] Run one controlled external RFQ from `camilachica1991@gmail.com` and capture the complete chain: message ID, RFQ ID, pipeline status, quote ID, communication ID, `transmission_status=SENT`, and recipient.
-- [ ] Verify the response arrives in `camilachica1991@gmail.com`, including spam/quarantine review.
+- All operational domains use shared PostgreSQL repositories.
+- `/ready` reports PostgreSQL as primary.
+- Both mailbox health checks pass with an authenticated internal session.
+- A new RFQ reaches `Quote_Sent`.
+- The communication record reports `transmission_status=SENT`.
+- The customer receives the response.
