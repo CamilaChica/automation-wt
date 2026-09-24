@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ViewMode, ThemeMode } from '../../types';
-import { Search, Sun, Moon, Bell, ShieldCheck, UserCheck, AlertTriangle, Bot } from 'lucide-react';
+import { Search, Sun, Moon, Bell, ShieldCheck, UserCheck, AlertTriangle, Bot, Menu } from 'lucide-react';
 import { BrandMark } from './BrandMark';
 
 interface TopBarProps {
@@ -69,7 +69,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       {/* Brand & Page Title */}
       <div className="flex min-w-0 items-center space-x-2 md:space-x-3">
         <button type="button" aria-label="Open navigation menu" onClick={onOpenSidebar} className="min-h-11 min-w-11 rounded-xl border border-slate-200 bg-slate-100 p-2 dark:border-slate-700 dark:bg-slate-800 lg:hidden">
-          <span aria-hidden="true">☰</span>
+          <Menu className="mx-auto h-5 w-5" aria-hidden="true" />
         </button>
         <a
           href="/"
@@ -77,7 +77,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           className="flex items-center space-x-2 bg-slate-100 dark:bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700/80 hover:border-aero-blue transition-colors"
         >
           <BrandMark compact />
-          <span className="font-display font-bold text-sm tracking-wider text-slate-900 dark:text-slate-100">
+          <span className="hidden font-display font-bold text-sm tracking-wider text-slate-900 dark:text-slate-100 sm:inline">
             WINGED TYCOONS
           </span>
         </a>

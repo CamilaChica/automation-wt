@@ -95,7 +95,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView, isM
                   <Icon className={`w-4 h-4 transition-transform group-hover:scale-110 ${
                     isActive ? 'text-white' : 'text-slate-500 dark:text-slate-400'
                   }`} />
-                  <span className="hidden truncate md:inline">{item.label}</span>
+                  <span className="truncate">{item.label}</span>
                 </div>
 
                 {item.badge && (
@@ -123,11 +123,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView, isM
             className="w-full flex items-center space-x-3 px-3 py-2 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors"
           >
             <Truck className="w-4 h-4 text-slate-400" />
-            <span className="hidden md:inline">Logistics API</span>
+            <span>Logistics API</span>
           </button>
           <a href="/customer-portal" className="w-full flex items-center space-x-3 px-3 py-2 text-xs text-aero-blue hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors">
             <Search className="w-4 h-4" />
-            <span className="hidden md:inline">Open Customer Portal</span>
+            <span>Open Customer Portal</span>
           </a>
         </div>
       </div>
