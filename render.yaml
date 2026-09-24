@@ -191,6 +191,8 @@ services:
         value: "sales@wingedtycoons.com"
       - key: GRAPH_MAILBOX_USER_PURCHASING
         value: "purchasing@wingedtycoons.com"
+      - key: DATABASE_URL
+        sync: false
       - key: ALLOWED_ORIGINS
         value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com,http://localhost:5173,http://localhost:3000"
       - key: EMAIL_SEND_ENABLED
