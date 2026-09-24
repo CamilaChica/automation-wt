@@ -18,13 +18,18 @@ export const AuditLogDrawer: React.FC<AuditLogDrawerProps> = ({
   isLiveAuditUnavailable = false
 }) => {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (!isOpen) return undefined;
+    previouslyFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
+    return () => {
+      window.removeEventListener('keydown', closeOnEscape);
+      previouslyFocusedRef.current?.focus();
+    };
   }, [isOpen, onClose]);
 
   useEffect(() => {

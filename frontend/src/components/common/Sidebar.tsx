@@ -16,9 +16,11 @@ import {
 interface SidebarProps {
   currentView: ViewMode;
   onSelectView: (view: ViewMode) => void;
+  isMobileOpen?: boolean;
+  onCloseMobile?: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView, isMobileOpen = false, onCloseMobile }) => {
   const navItems = [
     {
       id: 'customer' as ViewMode,
@@ -65,9 +67,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) =
   ];
 
   return (
-    <aside className="w-56 bg-white dark:bg-card-dark border-r border-slate-200 dark:border-slate-800 flex flex-col justify-between select-none transition-colors">
+    <>
+      {isMobileOpen && <button type="button" aria-label="Close navigation menu" className="fixed inset-0 z-40 bg-black/40 lg:hidden" onClick={onCloseMobile} />}
+      <aside className={`${isMobileOpen ? 'translate-x-0' : '-translate-x-full'} fixed inset-y-0 left-0 z-50 w-64 bg-white dark:bg-card-dark border-r border-slate-200 dark:border-slate-800 flex flex-col justify-between select-none transition-transform lg:static lg:z-auto lg:w-56 lg:translate-x-0`}>
       <div className="py-4 px-3">
-        <div className="px-2 mb-3 text-[10px] font-mono font-bold tracking-widest text-slate-400 dark:text-slate-500 uppercase">
+          <div className="hidden px-2 mb-3 text-[10px] font-mono font-bold tracking-widest text-slate-400 dark:text-slate-500 uppercase md:block">
           Command Hub
         </div>
 
@@ -79,7 +83,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) =
             return (
               <button
                 key={item.id}
-                onClick={() => onSelectView(item.id)}
+                onClick={() => { onSelectView(item.id); onCloseMobile?.(); }}
+                aria-label={item.label}
                 className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all group ${
                   isActive
                     ? 'bg-aero-blue text-white shadow-md shadow-aero-blue/20 font-bold'
@@ -90,11 +95,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) =
                   <Icon className={`w-4 h-4 transition-transform group-hover:scale-110 ${
                     isActive ? 'text-white' : 'text-slate-500 dark:text-slate-400'
                   }`} />
-                  <span className="truncate">{item.label}</span>
+                  <span className="hidden truncate md:inline">{item.label}</span>
                 </div>
 
                 {item.badge && (
-                  <span className={`px-2 py-0.5 text-[10px] font-mono font-bold rounded-full ${
+                  <span className={`hidden px-2 py-0.5 text-[10px] font-mono font-bold rounded-full md:inline ${
                     isActive
                       ? 'bg-white/20 text-white'
                       : 'bg-blue-50 text-aero-blue dark:bg-aero-blue/20 dark:text-aero-blue'
@@ -108,27 +113,27 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) =
         </nav>
 
         {/* Secondary section */}
-        <div className="mt-8 px-2 mb-2 text-[10px] font-mono font-bold tracking-widest text-slate-400 dark:text-slate-500 uppercase">
+        <div className="hidden mt-8 px-2 mb-2 text-[10px] font-mono font-bold tracking-widest text-slate-400 dark:text-slate-500 uppercase md:block">
           System Utility
         </div>
         <div className="space-y-1">
           <button
-            onClick={() => onSelectView('fulfillment')}
+            onClick={() => { onSelectView('fulfillment'); onCloseMobile?.(); }}
             aria-label="Open Logistics API"
             className="w-full flex items-center space-x-3 px-3 py-2 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors"
           >
             <Truck className="w-4 h-4 text-slate-400" />
-            <span>Logistics API</span>
+            <span className="hidden md:inline">Logistics API</span>
           </button>
           <a href="/customer-portal" className="w-full flex items-center space-x-3 px-3 py-2 text-xs text-aero-blue hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors">
             <Search className="w-4 h-4" />
-            <span>Open Customer Portal</span>
+            <span className="hidden md:inline">Open Customer Portal</span>
           </a>
         </div>
       </div>
 
       {/* Footer System Integrity Status */}
-      <div className="p-3 border-t border-slate-200 dark:border-slate-800">
+      <div className="hidden p-3 border-t border-slate-200 dark:border-slate-800 md:block">
         <div className="bg-slate-50 dark:bg-slate-900/90 rounded-xl p-2.5 border border-slate-200 dark:border-slate-800">
           <div className="flex items-center justify-between text-[11px] font-mono font-semibold mb-1">
             <span className="text-slate-600 dark:text-slate-400">SYSTEM HEALTH</span>
@@ -154,6 +159,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView }) =
           <span>Exit Command Center</span>
         </button>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 };

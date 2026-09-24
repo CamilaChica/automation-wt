@@ -10,6 +10,7 @@ interface TopBarProps {
   onSelectView: (view: ViewMode) => void;
   onSearch?: (query: string) => void;
   onOpenAuditLog?: () => void;
+  onOpenSidebar?: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -18,7 +19,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   onToggleTheme,
   onSelectView,
   onSearch,
-  onOpenAuditLog
+  onOpenAuditLog,
+  onOpenSidebar,
 }) => {
   const [timeString, setTimeString] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -63,9 +65,12 @@ export const TopBar: React.FC<TopBarProps> = ({
   };
 
   return (
-    <header className="h-14 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-card-dark px-4 flex items-center justify-between text-xs font-sans select-none transition-colors">
+    <header className="min-h-14 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-card-dark px-2 md:px-4 py-2 flex items-center justify-between gap-2 text-xs font-sans select-none transition-colors overflow-hidden">
       {/* Brand & Page Title */}
-      <div className="flex items-center space-x-3">
+      <div className="flex min-w-0 items-center space-x-2 md:space-x-3">
+        <button type="button" aria-label="Open navigation menu" onClick={onOpenSidebar} className="min-h-11 min-w-11 rounded-xl border border-slate-200 bg-slate-100 p-2 dark:border-slate-700 dark:bg-slate-800 lg:hidden">
+          <span aria-hidden="true">☰</span>
+        </button>
         <a
           href="/"
           aria-label="Winged Tycoons Executive Dashboard"
@@ -77,13 +82,13 @@ export const TopBar: React.FC<TopBarProps> = ({
           </span>
         </a>
         <div className="h-4 w-px bg-slate-300 dark:bg-slate-700" />
-        <span className="font-display font-semibold text-slate-700 dark:text-slate-300 tracking-wide uppercase truncate max-w-xl">
+        <span className="hidden sm:inline font-display font-semibold text-slate-700 dark:text-slate-300 tracking-wide uppercase truncate max-w-xl">
           {getViewTitle()}
         </span>
       </div>
 
       {/* Center Search & AOG Badge */}
-      <div className="flex items-center space-x-4">
+      <div className="hidden lg:flex items-center space-x-4">
         {/* AOG Priority Badge */}
         <div className="flex items-center space-x-2 bg-red-50 dark:bg-aog-red/10 border border-red-200 dark:border-aog-red/40 text-aog-red px-3 py-1 rounded-full font-mono text-[11px] font-semibold aog-pulse-badge">
           <AlertTriangle className="w-3.5 h-3.5 animate-bounce" />
@@ -109,7 +114,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       </div>
 
       {/* Right Controls: Telemetry, Theme, Notifications & User */}
-      <div className="flex items-center space-x-4">
+      <div className="ml-auto flex shrink-0 items-center space-x-1.5 md:space-x-4">
         {/* Sub-header status tags */}
         <div className="hidden lg:flex items-center space-x-3 text-[11px] font-mono text-slate-600 dark:text-slate-400">
           <span className="flex items-center space-x-1 text-emerald-600 dark:text-emerald-400 font-semibold">
@@ -123,10 +128,11 @@ export const TopBar: React.FC<TopBarProps> = ({
         {/* Agent Audit Log Drawer Trigger */}
         <button
           onClick={onOpenAuditLog}
-          className="px-3 py-1.5 rounded-xl border border-blue-200 dark:border-aero-blue/40 bg-blue-50 dark:bg-aero-blue/10 text-aero-blue hover:bg-aero-blue hover:text-white font-mono text-[10px] font-bold flex items-center space-x-1.5 transition-all shadow-sm"
+          aria-label="Open agent logs"
+          className="p-2 md:px-3 md:py-1.5 rounded-xl border border-blue-200 dark:border-aero-blue/40 bg-blue-50 dark:bg-aero-blue/10 text-aero-blue hover:bg-aero-blue hover:text-white font-mono text-[10px] font-bold flex items-center space-x-1.5 transition-all shadow-sm"
         >
           <Bot className="w-3.5 h-3.5" />
-          <span>AGENT LOGS</span>
+          <span className="hidden md:inline">AGENT LOGS</span>
         </button>
 
         {/* Theme Toggle Switch */}
@@ -158,7 +164,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
 
         {/* Operator Profile Context */}
-        <div className="flex items-center space-x-2 bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-xl">
+        <div className="hidden sm:flex items-center space-x-2 bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-xl">
           <div className="w-6 h-6 rounded-full bg-blue-100 dark:bg-slate-700 flex items-center justify-center text-aero-blue font-bold font-mono">
             <UserCheck className="w-3.5 h-3.5" />
           </div>

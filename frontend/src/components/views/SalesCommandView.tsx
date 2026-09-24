@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { apiService } from '../../services/api';
-import { SimulatedDataBanner } from '../common/SimulatedDataBanner';
+import { FallbackDataBanner } from '../common/FallbackDataBanner';
+import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
 import { RFQ } from '../../types';
 import { 
   Send, 
@@ -154,15 +155,15 @@ export const SalesCommandView: React.FC = () => {
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
       {/* Toast Notification */}
       {notification && (
-        <div className="bg-emerald-50 dark:bg-emerald-500/20 border border-emerald-300 dark:border-emerald-500 text-emerald-800 dark:text-emerald-300 p-4 rounded-2xl flex items-center justify-between text-xs font-semibold animate-fade-in shadow-sm">
+        <div role="status" aria-live="polite" aria-atomic="true" className="bg-emerald-50 dark:bg-emerald-500/20 border border-emerald-300 dark:border-emerald-500 text-emerald-800 dark:text-emerald-300 p-4 rounded-2xl flex items-center justify-between text-xs font-semibold animate-fade-in shadow-sm">
           <div className="flex items-center space-x-2">
             <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
             <span>{notification}</span>
           </div>
-          <button onClick={() => setNotification(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-white">✕</button>
+          <button type="button" aria-label="Dismiss notification" onClick={() => setNotification(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">✕</button>
         </div>
       )}
-      <SimulatedDataBanner label="SIMULATED CUSTOMER AND TELEMETRY CARDS" />
+      <FallbackDataBanner />
 
       {detailError && (
         <div role="alert" className="bg-red-50 dark:bg-red-500/20 border border-red-300 dark:border-red-500 text-red-800 dark:text-red-300 p-4 rounded-2xl flex items-center justify-between text-xs font-semibold">
@@ -180,9 +181,7 @@ export const SalesCommandView: React.FC = () => {
               <span className="w-2 h-2 rounded-full bg-aero-blue animate-pulse" />
               <span>GLOBAL RFQ INBOX</span>
             </h2>
-            <span className="px-2.5 py-0.5 rounded-full bg-blue-50 dark:bg-emerald-500/10 text-aero-blue dark:text-emerald-400 font-mono text-[10px] font-bold border border-blue-200 dark:border-emerald-500/30">
-              REAL TIME DATA
-            </span>
+            <FallbackDataBanner />
           </div>
 
           <div className="overflow-x-auto">
@@ -220,7 +219,7 @@ export const SalesCommandView: React.FC = () => {
                   >
                     <td className="py-2.5 font-bold text-aero-blue">{rfq.id}</td>
                     <td className="py-2.5 text-slate-800 dark:text-slate-200 text-[10px]">{rfq.customer_name}</td>
-                    <td className="py-2.5 font-mono text-[10px]">{rfq.part_number || 'Pending extraction'}</td>
+                    <td className="py-2.5 font-mono text-[10px]">{rfq.part_number || (isFailedRfq(rfq) ? 'Extraction failed' : 'Pending extraction')}</td>
                     <td className="py-2.5">
                       <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
                         rfq.urgency === 'AOG' ? 'bg-red-50 dark:bg-aog-red/20 text-aog-red border border-red-200 dark:border-aog-red/40 aog-pulse-badge' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
@@ -228,7 +227,7 @@ export const SalesCommandView: React.FC = () => {
                         {rfq.urgency || 'Routine'}
                       </span>
                     </td>
-                    <td className="py-2.5 text-right text-emerald-600 dark:text-emerald-400 font-bold">{rfq.status}</td>
+                    <td className={`py-2.5 text-right font-bold ${isFailedRfq(rfq) ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'}`}>{rfqStatusLabel(rfq)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -364,9 +363,10 @@ export const SalesCommandView: React.FC = () => {
 
               {/* Action Buttons */}
               <div className="grid grid-cols-2 gap-2 pt-1 font-display">
+                {rfqInbox.some(isFailedRfq) && <div role="alert" className="mb-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">Intake Failed - Extraction Error. Retry intake or escalate before issuing a quote.</div>}
                 <button
                   onClick={handleIssueQuote}
-                  disabled={issuing || !quoteReady}
+                  disabled={issuing || !quoteReady || rfqInbox.some(isFailedRfq)}
                   aria-busy={issuing || !quoteReady}
                   className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1.5 shadow-sm"
                 >

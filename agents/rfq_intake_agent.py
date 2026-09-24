@@ -480,7 +480,13 @@ class RFQIntakeAgent(BaseAgent):
                     for item in llm_data.items
                 ]
                 part_number = _normalize_part_number(extracted_items[0]["requested_part_number"])
-                quantity = extracted_items[0]["quantity"]
+                # Preserve an explicitly labelled quantity from the raw RFQ when
+                # merging provider extraction results.
+                if extracted_quantity is None:
+                    quantity = extracted_items[0]["quantity"]
+                else:
+                    extracted_items[0]["quantity"] = extracted_quantity
+                    quantity = extracted_quantity
                 condition = extracted_items[0]["condition_preference"]
                 customer_name = llm_data.customer_name or customer_name
                 company = llm_data.customer_company or company

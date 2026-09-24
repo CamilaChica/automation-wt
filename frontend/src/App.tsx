@@ -20,6 +20,7 @@ const InternalApp: React.FC = () => {
   const [currentView, setCurrentViewState] = useState<ViewMode>(getViewPreference());
   const [theme, setThemeState] = useState<ThemeMode>(getThemePreference('dark'));
   const [isAuditLogOpen, setIsAuditLogOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AgentAuditLog[]>([]);
   const [auditRfqId, setAuditRfqId] = useState('');
   const [isLiveAuditUnavailable, setIsLiveAuditUnavailable] = useState(false);
@@ -196,6 +197,7 @@ const InternalApp: React.FC = () => {
           else if (normalized.includes('shipment') || normalized.includes('fulfillment')) setCurrentView('fulfillment');
         }}
         onOpenAuditLog={() => setIsAuditLogOpen(true)}
+        onOpenSidebar={() => setIsSidebarOpen(true)}
       />
 
       {/* Main Content Layout (Sidebar + Active View) */}
@@ -203,9 +205,11 @@ const InternalApp: React.FC = () => {
         <Sidebar
           currentView={currentView}
           onSelectView={setCurrentView}
+          isMobileOpen={isSidebarOpen}
+          onCloseMobile={() => setIsSidebarOpen(false)}
         />
 
-        <main className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950/60">
+        <main className="min-w-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950/60">
           {renderActiveView()}
         </main>
       </div>

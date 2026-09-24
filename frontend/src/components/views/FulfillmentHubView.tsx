@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { apiService } from '../../services/api';
 import { Shipment } from '../../types';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
-import { SimulatedDataBanner } from '../common/SimulatedDataBanner';
+import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { 
   QrCode, 
   Camera, 
@@ -36,8 +36,8 @@ export const FulfillmentHubView: React.FC = () => {
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
-      {notice && <div role="status" className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
-      <SimulatedDataBanner label="SIMULATED QA AND PACKAGING DATA" />
+      {notice && <div role="status" aria-live="polite" className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
+      <FallbackDataBanner />
       {/* Stage Progress Breadcrumb Tracker */}
       <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between font-mono text-[11px] gap-2">
@@ -79,7 +79,7 @@ export const FulfillmentHubView: React.FC = () => {
         </div>
         {error && <div role="alert" className="mt-4 flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700"><span>{error}</span><button type="button" onClick={() => void loadShipments()} className="font-bold underline">Retry</button></div>}
         <div className="mt-4 grid gap-3 md:grid-cols-3">
-          {loading ? <p className="text-sm text-slate-400" role="status" aria-live="polite">Loading shipments...</p> : shipments.length === 0 ? <p className="text-sm text-slate-400">No shipments are currently registered.</p> : shipments.slice(0, 6).map(shipment => (
+          {loading ? <p className="text-sm text-slate-400" role="status" aria-live="polite" aria-busy="true">Loading shipments...</p> : shipments.length === 0 ? <p className="text-sm text-slate-400" role="status" aria-live="polite">No shipments are currently registered.</p> : shipments.slice(0, 6).map(shipment => (
             <div key={shipment.id} className="rounded-xl border border-slate-200 dark:border-slate-800 p-3 text-xs">
               <div className="font-mono font-bold text-aero-blue">{shipment.id}</div>
               <div className="mt-1 font-semibold">{shipment.status}</div>

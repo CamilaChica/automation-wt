@@ -28,6 +28,22 @@
 .customer-portal-light .text-slate-500 { color: rgb(100 116 139) !important; }
 
 @layer base {
+  @media (max-width: 1024px) {
+    button,
+    a,
+    [role='button'],
+    input,
+    select,
+    textarea {
+      min-height: 44px;
+      min-width: 44px;
+    }
+
+    tr[role='button'] {
+      height: 44px;
+    }
+  }
+
   body {
     font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, sans-serif;
   }

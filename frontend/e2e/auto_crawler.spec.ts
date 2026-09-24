@@ -1,127 +1,105 @@
-import { expect, test } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 
-const DEPLOYED_INTERNAL_URL = 'https://winged-tycoons-frontend.onrender.com/internal';
+const ORIGIN = 'https://winged-tycoons-frontend.onrender.com';
 
-const navigationLabels = [
-  /Dashboard/i,
-  /Sourcing Matrix/i,
-  /Proc Command/i,
-  /Trace Vault/i,
-  /Fulfillment/i,
-  /Sales Command/i,
-  /Swarm Runner/i,
+const VIEWPORTS = [
+  { name: 'iPhone SE', width: 375, height: 667 },
+  { name: 'iPhone 14 Pro', width: 393, height: 852 },
+  { name: 'Pixel 7', width: 412, height: 915 },
+  { name: 'iPad Mini', width: 768, height: 1024 },
 ];
 
-const destructivePattern = /submit|send|approve|reject|issue|dispatch|purchase order|hard freeze|freeze|delete|remove|logout|exit|certify|escalate|split po|quick-add|add to quote|generate smart quote|request re-scan|seriali[sz]ed tamper/i;
+const ROUTES = [
+  '/internal',
+  '/internal/sales',
+  '/internal/sourcing',
+  '/internal/trace',
+  '/internal/procurement',
+  '/internal/fulfillment',
+];
 
-function describeTarget(element: { textContent(): Promise<string | null> }) {
-  return element.textContent().then(text => (text || '').replace(/\s+/g, ' ').trim().slice(0, 120));
-}
+test('Strict Mobile Responsive Layout Audit', async ({ page }) => {
+  for (const vp of VIEWPORTS) {
+    await page.setViewportSize({ width: vp.width, height: vp.height });
 
-async function installErrorCapture(page: import('@playwright/test').Page) {
-  const pageErrors: string[] = [];
-  const consoleErrors: string[] = [];
-  const failedResponses: string[] = [];
+    for (const route of ROUTES) {
+      await page.goto(`${ORIGIN}${route}`, { waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(600); // Allow responsive CSS recalculation
 
-  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
-  page.on('console', message => {
-    if (message.type() === 'error') consoleErrors.push(message.text());
-  });
-  page.on('response', response => {
-    const status = response.status();
-    if (status === 404 || status >= 500) {
-      failedResponses.push(`${status} ${response.request().method()} ${response.url()}`);
-    }
-  });
-
-  return { pageErrors, consoleErrors, failedResponses };
-}
-
-async function clickSafeInteractiveControls(
-  page: import('@playwright/test').Page,
-  visited: Set<string>,
-  clickFailures: string[],
-) {
-  const controls = page.locator('button:visible, [role="button"]:visible, article:visible, [data-testid*="card"]:visible, [class*="card"]:visible');
-  const count = Math.min(await controls.count(), 160);
-
-  for (let index = 0; index < count; index += 1) {
-    const control = controls.nth(index);
-    if (!(await control.isVisible().catch(() => false))) continue;
-
-    const text = ((await control.textContent().catch(() => '')) || '').replace(/\s+/g, ' ').trim();
-    const ariaLabel = await control.getAttribute('aria-label').catch(() => null);
-    const label = `${ariaLabel || ''} ${text}`.trim();
-    if (!label || destructivePattern.test(label)) continue;
-
-    const key = `${label}:${index}`;
-    if (visited.has(key)) continue;
-    visited.add(key);
-
-    await control.scrollIntoViewIfNeeded().catch(() => undefined);
-    try {
-      await control.click({ timeout: 2_000 });
-    } catch (error) {
-      clickFailures.push(`${label.slice(0, 120)}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    await page.waitForTimeout(100);
-  }
-}
-
-async function closeVisibleDrawers(page: import('@playwright/test').Page, drawerFailures: string[]) {
-  const drawers = page.locator('[role="dialog"]:visible, [class*="drawer"]:visible, [data-testid*="drawer"]:visible');
-  const count = await drawers.count();
-  for (let index = 0; index < count; index += 1) {
-    const drawer = drawers.nth(index);
-    const close = drawer.getByRole('button', { name: /close|dismiss|cancel/i }).first();
-    if (!(await close.count())) {
-      drawerFailures.push(`Visible drawer ${index} has no close control.`);
-      continue;
-    }
-    try {
-      await close.click({ timeout: 2_000 });
-    } catch (error) {
-      drawerFailures.push(`Drawer ${index}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    await page.waitForTimeout(100);
-  }
-}
-
-test.describe('deployed application automatic UI crawler', () => {
-  test('crawls navigation, safe buttons, cards, and drawers without runtime or 404/500 errors', async ({ page }) => {
-    test.setTimeout(120_000);
-    const capture = await installErrorCapture(page);
-    const visited = new Set<string>();
-    const clickFailures: string[] = [];
-    const drawerFailures: string[] = [];
-
-    await page.goto(DEPLOYED_INTERNAL_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-    await expect(page).toHaveURL(/winged-tycoons-frontend\.onrender\.com/);
-
-    const authenticationWall = page.getByText(/sign in|verification code|one-time password|authenticate/i).first();
-    if (await authenticationWall.isVisible().catch(() => false)) {
-      test.info().annotations.push({
-        type: 'blocked-by-authentication',
-        description: 'The deployed internal route requires a real OTP/session; no credentials are embedded in this crawler.',
+      // 1. ASSERT SIDEBAR IS COLLAPSED ON MOBILE/TABLET (Width < 1024px)
+      const sidebarVisible = await page.evaluate(() => {
+        const sidebar = document.querySelector('aside, nav, [class*="sidebar"]');
+        if (!sidebar) return false;
+        const rect = sidebar.getBoundingClientRect();
+        // Check if desktop sidebar takes up >200px width on screen simultaneously with main content
+        return rect.width > 200 && rect.left >= 0 && window.innerWidth < 1024;
       });
-    } else {
-      for (const label of navigationLabels) {
-        const navigation = page.getByRole('button', { name: label }).first();
-        if (!(await navigation.isVisible().catch(() => false))) continue;
-        await navigation.click().catch(() => undefined);
-        await page.waitForTimeout(200);
-        await clickSafeInteractiveControls(page, visited, clickFailures);
-        await closeVisibleDrawers(page, drawerFailures);
-      }
 
-      await clickSafeInteractiveControls(page, visited, clickFailures);
-      await closeVisibleDrawers(page, drawerFailures);
+      expect(sidebarVisible, `[LAYOUT ERROR] Desktop sidebar is expanded on ${vp.name} (${vp.width}px) on ${route}. It must collapse into a mobile drawer.`).toBe(false);
+
+      // 2. ASSERT MAIN CONTENT IS NOT OCCLUDED OR OVERLAPPING
+      const isContentClipping = await page.evaluate(() => {
+        const main = document.querySelector('main, [role="main"], .main-content');
+        if (!main) return false;
+        const rect = main.getBoundingClientRect();
+        return rect.left < 0 || rect.width < 280; // Content squished under 280px
+      });
+
+      expect(isContentClipping, `[LAYOUT ERROR] Main content is squished or clipped on ${vp.name} on ${route}.`).toBe(false);
+
+      const visualDefects = await page.evaluate(() => {
+        const visibleElements = Array.from(document.querySelectorAll<HTMLElement>(
+          'main *, aside *, header *, [role="dialog"] *, button, a[href], input, select, textarea, table, article, [role="button"], [role="tab"]',
+        )).filter(element => {
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        });
+
+        const minimumDimensionViolations = visibleElements
+          .filter(element => {
+            const isInteractive = element.matches('button, a[href], input, select, textarea, [role="button"], [role="tab"]');
+            const rect = element.getBoundingClientRect();
+            return isInteractive && (rect.width < 44 || rect.height < 44);
+          })
+          .slice(0, 30)
+          .map(element => `${element.tagName.toLowerCase()}[aria-label="${element.getAttribute('aria-label') || ''}"] ${element.textContent?.trim().replace(/\s+/g, ' ').slice(0, 80) || ''} ${Math.round(element.getBoundingClientRect().width)}x${Math.round(element.getBoundingClientRect().height)}`);
+
+        const overlapViolations: string[] = [];
+        for (let firstIndex = 0; firstIndex < visibleElements.length; firstIndex += 1) {
+          const first = visibleElements[firstIndex];
+          const firstRect = first.getBoundingClientRect();
+          for (let secondIndex = firstIndex + 1; secondIndex < visibleElements.length; secondIndex += 1) {
+            const second = visibleElements[secondIndex];
+            if (first.contains(second) || second.contains(first)) continue;
+            const secondRect = second.getBoundingClientRect();
+            const intersects = firstRect.left < secondRect.right && firstRect.right > secondRect.left
+              && firstRect.top < secondRect.bottom && firstRect.bottom > secondRect.top;
+            if (!intersects) continue;
+
+            const firstStyle = window.getComputedStyle(first);
+            const secondStyle = window.getComputedStyle(second);
+            const isKnownLayering = firstStyle.position === 'absolute' || firstStyle.position === 'fixed'
+              || secondStyle.position === 'absolute' || secondStyle.position === 'fixed';
+            if (!isKnownLayering) {
+              overlapViolations.push(`${first.tagName.toLowerCase()} overlaps ${second.tagName.toLowerCase()}`);
+            }
+            if (overlapViolations.length >= 30) break;
+          }
+          if (overlapViolations.length >= 30) break;
+        }
+
+        return { minimumDimensionViolations, overlapViolations };
+      });
+
+      expect(
+        visualDefects.minimumDimensionViolations,
+        `[READABILITY ERROR] Interactive elements below 44px on ${vp.name} at ${route}`,
+      ).toEqual([]);
+      expect(
+        visualDefects.overlapViolations,
+        `[OVERLAP ERROR] Visible layout elements overlap on ${vp.name} at ${route}`,
+      ).toEqual([]);
     }
-
-    expect(capture.pageErrors, 'Unhandled page errors').toEqual([]);
-    expect(capture.consoleErrors, 'Browser console errors').toEqual([]);
-    expect(capture.failedResponses, 'Unexpected 404/500 responses').toEqual([]);
-    expect(clickFailures, 'Safe controls that could not be clicked').toEqual([]);
-    expect(drawerFailures, 'Drawers that could not be closed').toEqual([]);
-  });
+  }
 });

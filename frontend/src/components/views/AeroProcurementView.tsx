@@ -12,7 +12,8 @@ import {
   CheckCircle,
   FileText
 } from 'lucide-react';
-import { SimulatedDataBanner } from '../common/SimulatedDataBanner';
+import { FallbackDataBanner } from '../common/FallbackDataBanner';
+import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
 
 export const AeroProcurementView: React.FC = () => {
   const [selectedSupplier, setSelectedSupplier] = useState<'A' | 'B' | 'C'>('A');
@@ -35,7 +36,7 @@ export const AeroProcurementView: React.FC = () => {
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
       {notice && <div role="status" className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
-      <SimulatedDataBanner label="SIMULATED PROCUREMENT METRICS" />
+      <FallbackDataBanner />
       {/* Top Section: Active RFQ Queue & Sourcing Detail */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Active RFQ Queue (6 cols) */}
@@ -45,9 +46,7 @@ export const AeroProcurementView: React.FC = () => {
               <span className="w-2 h-2 rounded-full bg-aog-red animate-pulse" />
               <span>ACTIVE RFQ QUEUE (SLA FOCUSED)</span>
             </h2>
-            <span className="px-2.5 py-0.5 rounded-full bg-blue-50 dark:bg-aero-blue/10 text-aero-blue font-mono text-[10px] font-bold border border-blue-200 dark:border-aero-blue/30">
-              REAL TIME DATA
-            </span>
+            <FallbackDataBanner />
           </div>
 
           <div className="overflow-x-auto">
@@ -70,7 +69,7 @@ export const AeroProcurementView: React.FC = () => {
                     <td className="py-2.5 text-aero-blue font-bold">{rfq.id}</td>
                     <td className="py-2.5">
                       <div className="font-bold text-slate-900 dark:text-slate-200">{rfq.part_number || 'Pending extraction'}</div>
-                      <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate w-24">{rfq.status}</div>
+                      <div className={`text-[10px] truncate w-24 ${isFailedRfq(rfq) ? 'text-red-600 dark:text-red-400' : 'text-slate-500 dark:text-slate-400'}`}>{rfqStatusLabel(rfq)}</div>
                     </td>
                     <td className="py-2.5 text-slate-600 dark:text-slate-300 text-[10px]">{rfq.customer_name}</td>
                     <td className="py-2.5">
@@ -83,7 +82,7 @@ export const AeroProcurementView: React.FC = () => {
                     <td className="py-2.5 text-aog-red font-mono text-[10px] font-bold">
                       {rfq.created_at ? new Date(rfq.created_at).toLocaleDateString() : 'Recent'}
                     </td>
-                    <td className="py-2.5 text-right font-bold text-emerald-600 dark:text-emerald-400">{rfq.status}</td>
+                    <td className="py-2.5 text-right font-bold text-emerald-600 dark:text-emerald-400">{rfqStatusLabel(rfq)}</td>
                   </tr>;
                 })}
               </tbody>
@@ -100,12 +99,13 @@ export const AeroProcurementView: React.FC = () => {
             <span className="font-mono text-[10px] text-slate-500 dark:text-slate-400">P/N: 32-11-45-01 | SV</span>
           </div>
 
+          {rfqs.some(isFailedRfq) && <div role="alert" className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">Intake Failed - Extraction Error. Retry intake or escalate this RFQ before sourcing.</div>}
           <div className="font-mono text-[11px] text-slate-800 dark:text-slate-300 bg-slate-50 dark:bg-slate-900/80 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
             <span className="text-aero-blue font-bold">PART:</span> Main Landing Gear Actuator | 32-11-45-01 | Condition: SV (Serviceable)
           </div>
 
           {/* Source Matrix Cards */}
-          <div className="grid grid-cols-3 gap-2.5 font-mono text-[11px]">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 font-mono text-[11px]">
             {/* Supplier A */}
             <button type="button"
               onClick={() => setSelectedSupplier('A')}
@@ -198,7 +198,7 @@ export const AeroProcurementView: React.FC = () => {
 
           {/* Action Buttons */}
           <div className="grid grid-cols-3 gap-2 pt-1 font-display">
-            <button type="button" onClick={() => void apiService.executeInternalCommand('generate_quote', selectedSupplier).then(result => setNotice(result.message)).catch(error => setNotice(error instanceof Error ? error.message : 'Unable to generate quote.'))} className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow-sm">
+            <button type="button" disabled={rfqs.some(isFailedRfq)} onClick={() => void apiService.executeInternalCommand('generate_quote', selectedSupplier).then(result => setNotice(result.message)).catch(error => setNotice(error instanceof Error ? error.message : 'Unable to generate quote.'))} className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow-sm disabled:cursor-not-allowed disabled:opacity-50">
               <FileText className="w-3.5 h-3.5" />
               <span>GENERATE SMART QUOTE</span>
             </button>

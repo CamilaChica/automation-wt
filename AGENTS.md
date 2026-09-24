@@ -7,6 +7,14 @@
 - Run E2E tests: `npm --prefix frontend run test:e2e`
 - List available E2E specs: `npm --prefix frontend run test:e2e:list`
 - Run targeted browser flow: `npm --prefix frontend run test:e2e -- --project=chromium --grep "<scenario text>"`
+- Run mobile responsiveness diagnostics: `npm --prefix frontend run test:e2e -- e2e/mobile_responsiveness_diagnosis.spec.ts --project=ui-gadgets`
+- Run deployed internal auto-crawler: `npm --prefix frontend run test:e2e -- e2e/auto_crawler.spec.ts --project=ui-gadgets`
+
+## Mobile Responsiveness Audit
+
+- The mobile diagnostic covers `375x667`, `390x844`, and `768x1024` across the internal dashboard, sales, sourcing, trace, procurement, and fulfillment views.
+- It fails on document overflow, unhandled text clipping, interactive controls below 44px, or browser runtime errors.
+- Keep destructive controls disabled or mocked; the diagnostic uses disposable API fixtures and does not mutate production data.
 
 ## Autonomous Testing Rules
 

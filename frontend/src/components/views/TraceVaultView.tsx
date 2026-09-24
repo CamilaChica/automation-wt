@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { apiService } from '../../services/api';
-import { SimulatedDataBanner } from '../common/SimulatedDataBanner';
+import { FallbackDataBanner } from '../common/FallbackDataBanner';
+import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
 import { RFQ } from '../../types';
 import { 
   ShieldCheck, 
@@ -60,8 +61,8 @@ export const TraceVaultView: React.FC = () => {
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
-      {notice && <div role="alert" className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700"><span>{notice}</span><button type="button" onClick={() => void loadRfqs()} className="font-bold underline">Retry</button></div>}
-      <SimulatedDataBanner label="SIMULATED OCR AND DOCUMENT PREVIEW DATA" />
+      {notice && <div role="alert" aria-live="assertive" className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700"><span>{notice}</span><button type="button" aria-label="Retry loading trace records" onClick={() => void loadRfqs()} className="font-bold underline focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">Retry</button></div>}
+      <FallbackDataBanner />
       {/* Top Grid: Pipeline & Active Vault & Document Viewer */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Top (4 cols): DOCUMENTATION STATUS PIPELINE & ACTIVE DOCUMENT VAULT */}
@@ -73,7 +74,7 @@ export const TraceVaultView: React.FC = () => {
                 <span className="w-2 h-2 rounded-full bg-aero-blue animate-ping" />
                 <span>DOCUMENTATION STATUS PIPELINE</span>
               </h2>
-              <span className="text-[10px] font-mono text-aero-blue font-bold">LIVE RFQ DATA</span>
+              <span className="text-[10px] font-mono text-amber-600 dark:text-amber-300 font-bold">CACHED SAMPLE DATA</span>
             </div>
 
             <div className="overflow-x-auto font-mono text-[10px]">
@@ -97,9 +98,9 @@ export const TraceVaultView: React.FC = () => {
                       }
                     }} tabIndex={0} role="button" className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40 text-slate-700 dark:text-slate-200">
                       <td className="py-2.5 text-aero-blue font-bold">{rfq.id}</td>
-                      <td className="py-2.5">{rfq.part_number || 'Pending extraction'}</td>
+                      <td className="py-2.5">{rfq.part_number || (isFailedRfq(rfq) ? 'Extraction failed' : 'Pending extraction')}</td>
                       <td className="py-2.5 text-slate-500">Awaiting document data</td>
-                      <td className="py-2.5 text-right"><span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700 font-bold">{rfq.status}</span></td>
+                      <td className="py-2.5 text-right"><span className={`px-2 py-0.5 rounded-full border font-bold ${isFailedRfq(rfq) ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-500/10 dark:text-red-300 dark:border-red-500/40' : 'bg-slate-100 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700'}`}>{rfqStatusLabel(rfq)}</span></td>
                     </tr>
                   ))}
                 </tbody>
@@ -163,14 +164,15 @@ export const TraceVaultView: React.FC = () => {
         {/* Right Top (8 cols): DOCUMENT REVIEW & VERIFICATION TERMINAL */}
         <div className="lg:col-span-8 bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between">
           <div>
+            {rfqs.some(isFailedRfq) && <div role="alert" className="mb-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">Intake Failed - Extraction Error. Retry intake or escalate before certifying documents.</div>}
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
               <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase flex items-center space-x-2">
                 <FileSearch className="w-4 h-4 text-aero-blue" />
                 <span>DOCUMENT REVIEW & VERIFICATION TERMINAL</span>
               </h2>
               <div className="flex items-center space-x-3">
-                <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-mono text-[10px] font-bold border border-emerald-200 dark:border-emerald-500/30">
-                  REAL TIME OCR
+                <span className="px-2.5 py-0.5 rounded-full bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-300 font-mono text-[10px] font-bold border border-amber-200 dark:border-amber-500/30">
+                  CACHED OCR REVIEW
                 </span>
               </div>
             </div>

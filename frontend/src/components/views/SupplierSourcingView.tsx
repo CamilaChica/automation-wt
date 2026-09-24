@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { apiService } from '../../services/api';
 import { RFQ, SupplierQuote } from '../../types';
-import { SimulatedDataBanner } from '../common/SimulatedDataBanner';
+import { FallbackDataBanner } from '../common/FallbackDataBanner';
+import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip } from 'recharts';
 import { 
   CheckCircle, 
@@ -47,8 +48,8 @@ export const SupplierSourcingView: React.FC = () => {
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
-      {notice && <div role="status" className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
-      <SimulatedDataBanner label="SIMULATED SUPPLIER PERFORMANCE METRICS" />
+      {notice && <div role="status" aria-live="polite" className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
+      <FallbackDataBanner />
       {/* Top Row: Global Sourcing Matrix & Part Sourcing Terminal & Performance */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column (5 cols): GLOBAL SOURCING MATRIX */}
@@ -58,9 +59,7 @@ export const SupplierSourcingView: React.FC = () => {
               <span className="w-2 h-2 rounded-full bg-aero-blue animate-pulse" />
               <span>GLOBAL SOURCING MATRIX (ACTIVE RFQS)</span>
             </h2>
-            <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-mono text-[10px] font-bold border border-emerald-200 dark:border-emerald-500/30">
-              REAL TIME DATA
-            </span>
+            <FallbackDataBanner />
           </div>
 
           <div className="overflow-x-auto">
@@ -80,7 +79,7 @@ export const SupplierSourcingView: React.FC = () => {
                     <td className="py-2.5 text-aero-blue font-bold">{rfq.id}</td>
                     <td className="py-2.5">
                       <div className="font-bold text-slate-900 dark:text-slate-200">{rfq.part_number || 'Pending extraction'}</div>
-                      <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate w-28">{rfq.status}</div>
+                      <div className={`text-[10px] truncate w-28 ${isFailedRfq(rfq) ? 'text-red-600 dark:text-red-400' : 'text-slate-500 dark:text-slate-400'}`}>{rfqStatusLabel(rfq)}</div>
                     </td>
                     <td className="py-2.5 text-slate-600 dark:text-slate-300 text-[10px]">{rfq.customer_name}</td>
                     <td className="py-2.5">
@@ -152,7 +151,7 @@ export const SupplierSourcingView: React.FC = () => {
 
           {/* Sourcing Action Triggers */}
           <div className="grid grid-cols-3 gap-2 pt-2">
-            <button type="button" onClick={() => setNotice(`Added ${selectedPn} to the active quote.`)} className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2 px-2 rounded-xl text-[10px] flex items-center justify-center space-x-1 shadow-sm">
+            <button type="button" disabled={activeRfqs.some(isFailedRfq)} onClick={() => setNotice(`Added ${selectedPn} to the active quote.`)} className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2 px-2 rounded-xl text-[10px] flex items-center justify-center space-x-1 shadow-sm disabled:cursor-not-allowed disabled:opacity-50">
               <PlusCircle className="w-3 h-3" />
               <span>ADD TO QUOTE</span>
             </button>
