@@ -156,6 +156,14 @@ Do not mark the application ready until:
 - Remaining P0 work: migrate `db_service`, communication/audit persistence, workflow state, operator-review/tasks, API routes, and both workers to shared PostgreSQL repositories and transactions.
 - Local tests for schema coverage, fail-closed SQLite behavior, readiness, and idempotency pass. Live PostgreSQL integration and concurrent-worker tests require a test PostgreSQL instance and are not yet verified.
 
+### Latest continuation audit — 2026-09-26
+
+- Full-suite run reached 360 collected tests but failed the opt-in live LLM verification with OpenAI HTTP `401 Unauthorized`; this is a provider credential failure, not evidence of a PostgreSQL repository regression.
+- Focused PostgreSQL model/readiness/idempotency tests pass.
+- A read-only PostgreSQL `SELECT 1` attempt using the configured local `DATABASE_URL` failed during DNS resolution (`getaddrinfo failed`). No migration or database write was attempted.
+- Live `/ready` still claims `storage_engine=postgresql`, while also returning `/opt/render/project/src/data/operations.db`. Treat this as inconsistent readiness evidence until the deployed build’s actual operational repository and Render commit are confirmed.
+- The current working tree contains in-progress PostgreSQL changes in `services/operations_store.py`, `api/main.py`, `models/operational_models.py`, and `repositories/review_telemetry_repository.py`. These edits have not yet completed runtime wiring for RFQ/quote/communication/workflow/task/idempotency domains and must be reviewed/tested before deployment.
+
 ## Render Readiness Mismatch Audit — 2026-09-26
 
 The live `/ready` response currently returns HTTP `200` and claims `storage_engine=postgresql`, `operational_store=postgresql`, mirroring enabled, and migration not required. However, the same response reports `operational_store_path=/opt/render/project/src/data/operations.db`.
