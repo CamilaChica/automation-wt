@@ -11,9 +11,10 @@ from agents.base_agent import AgentResponse, EscalationRule
 from agents.rfq_intake_agent import RFQIntakeAgent
 from agents.supplier_discovery_agent import SupplierDiscoveryAgent
 from services.communication_service import CommunicationService
-from services.email_intelligence import extract_email_intelligence, is_valid_extracted_part_number
+from services.email_intelligence import EmailIntelligenceExtraction, extract_email_intelligence, is_valid_extracted_part_number
 from services.llm_provider import LLMProvider, LLMRequest, LLMResponse, LLMRouter
 from services.orchestration_service import OrchestrationService
+from services.supplier_ingestion_service import SupplierEmailIngestionService
 from services.workflow_states import InvalidWorkflowTransition, validate_transition
 
 
@@ -272,6 +273,38 @@ def test_explicit_escalation_is_review_gated_and_blocks_rfq_pipeline():
     assert outcome["status"] == "Pending_Internal_Review"
     assert outcome["review_required"] is True
     update_status.assert_called_once_with("RFQ-EVAL", "Pending_Internal_Review")
+
+
+def test_supplier_escalation_is_persisted_for_review_without_saving_an_offer():
+    extraction = EmailIntelligenceExtraction.model_validate(_payload(confidence=0.4))
+    extraction._telemetry = {
+        "model_calls": ["gpt-4o-mini", "gpt-4o"],
+        "pending_human_review": True,
+        "escalation_reason": "low_extraction_confidence",
+        "latency_ms": 12.0,
+        "estimated_cost_usd": 0.0006,
+    }
+    email_text = (
+        "From: quotes@example.com\n"
+        "Subject: Supplier quotation\n\n"
+        "Example Aero Supply\nPart Number: 060-1234-00\nQty: 2\n"
+        "Unit Price: $125\nFAA 8130-3 certificate included."
+    )
+    service = SupplierEmailIngestionService()
+    with (
+        patch("services.supplier_ingestion_service.extract_email_intelligence", return_value=extraction),
+        patch("services.supplier_ingestion_service.supplier_db.save_email") as save_email,
+        patch("services.supplier_ingestion_service.supplier_db.save_supplier_offer") as save_offer,
+        patch("services.supplier_ingestion_service.operations_store.record_automation_event", return_value="AUT-REVIEW") as record_event,
+    ):
+        result = service.ingest_email(email_text, message_id="supplier-review-message")
+
+    assert result["status"] == "Pending_Human_Review"
+    assert result["pending_human_review"] is True
+    assert save_email.called
+    save_offer.assert_not_called()
+    record_event.assert_called_once()
+    assert record_event.call_args.kwargs["status"] == "PENDING_HUMAN_REVIEW"
 
 
 def test_email_extraction_provider_override_cannot_be_changed_by_task_configuration():

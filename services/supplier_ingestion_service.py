@@ -1,3 +1,4 @@
+import json
 import re
 import uuid
 from datetime import datetime, timezone
@@ -8,6 +9,7 @@ from services.supplier_email_extractor import SupplierEmailExtractor
 from services.email_intelligence import extract_email_intelligence
 from services.document_parser import build_email_context
 from services.llm_provider import LLMRouter
+from services.operations_store import operations_store
 
 
 class SupplierEmailIngestionService:
@@ -28,29 +30,66 @@ class SupplierEmailIngestionService:
                     router=self.llm_router,
                     attachments=attachments,
                 )
-                if llm_data.items:
-                    structured_items = [item.model_dump() for item in llm_data.items]
-                    item = llm_data.items[0]
-                    extracted.update({
-                        "supplier_name": llm_data.supplier_name or extracted.get("supplier_name"),
-                        "supplier_email": llm_data.supplier_email or extracted.get("supplier_email"),
-                        "part_number": (
-                            deterministic_part_number
-                            or re.sub(r"\s*[-]\s*", "-", item.part_number).replace(" ", "").upper()
-                        ),
-                        "quantity_available": item.quantity,
-                        "unit_cost": item.unit_price,
-                        "certificate_type": (item.trace_documents[0] if item.trace_documents else None) or extracted.get("certificate_type"),
-                        "lead_time_days": item.lead_time_days,
-                        "condition_code": item.condition_code,
-                        "warranty_terms": item.warranty_terms,
-                        "trace_documents": item.trace_documents,
-                        "missing_fields": llm_data.missing_fields,
-                        "confidence": llm_data.confidence_score,
-                    })
             except Exception:
                 # Deterministic extraction remains the bounded outage fallback.
-                pass
+                llm_data = None
+            if llm_data and llm_data.pending_human_review:
+                sender = ""
+                subject = ""
+                for line in email_text.splitlines():
+                    if line.lower().startswith("from:"):
+                        sender = line.split(":", 1)[1].strip()
+                    elif line.lower().startswith("subject:"):
+                        subject = line.split(":", 1)[1].strip()
+                source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
+                supplier_db.save_email(
+                    mailbox=mailbox,
+                    message_id=source_email_id,
+                    sender=sender,
+                    subject=subject or "Supplier quote requires human review",
+                    body=email_text,
+                )
+                review_event_id = operations_store.record_automation_event(
+                    event_type="supplier_email_extraction_review",
+                    entity_type="email",
+                    entity_id=source_email_id,
+                    status="PENDING_HUMAN_REVIEW",
+                    result=json.dumps({
+                        "pending_human_review": True,
+                        "missing_fields": llm_data.missing_fields,
+                        "telemetry": llm_data.telemetry,
+                    }),
+                    idempotency_key=f"supplier-email-review:{source_email_id}",
+                )
+                return {
+                    "success": False,
+                    "status": "Pending_Human_Review",
+                    "pending_human_review": True,
+                    "source_email_id": source_email_id,
+                    "review_event_id": review_event_id,
+                    "missing_fields": llm_data.missing_fields,
+                    "telemetry": llm_data.telemetry,
+                }
+            if llm_data and llm_data.items:
+                structured_items = [item.model_dump() for item in llm_data.items]
+                item = llm_data.items[0]
+                extracted.update({
+                    "supplier_name": llm_data.supplier_name or extracted.get("supplier_name"),
+                    "supplier_email": llm_data.supplier_email or extracted.get("supplier_email"),
+                    "part_number": (
+                        deterministic_part_number
+                        or re.sub(r"\s*[-]\s*", "-", item.part_number).replace(" ", "").upper()
+                    ),
+                    "quantity_available": item.quantity,
+                    "unit_cost": item.unit_price,
+                    "certificate_type": (item.trace_documents[0] if item.trace_documents else None) or extracted.get("certificate_type"),
+                    "lead_time_days": item.lead_time_days,
+                    "condition_code": item.condition_code,
+                    "warranty_terms": item.warranty_terms,
+                    "trace_documents": item.trace_documents,
+                    "missing_fields": llm_data.missing_fields,
+                    "confidence": llm_data.confidence_score,
+                })
             if not extracted.get("part_number"):
                 return {"success": False, "error": "No part number detected in email."}
 
