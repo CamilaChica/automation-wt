@@ -10,18 +10,13 @@ from typing import Any, List, Optional
 
 from pydantic import BaseModel, Field, PrivateAttr
 
+from schemas.extraction import ExtractedField, RFQExtractionResult
 from services.llm_provider import LLMRequest, LLMRouter, StructuredOutputError
 from services.document_parser import build_email_context
 
 
-class ExtractedEmailItem(BaseModel):
-    part_number: str = Field(..., min_length=1, max_length=40)
+class ExtractedEmailItem(RFQExtractionResult):
     description: str = ""
-    quantity: int = Field(1, ge=1)
-    condition_code: Optional[str] = None
-    unit_price: Optional[float] = Field(None, ge=0)
-    currency: Optional[str] = None
-    lead_time_days: Optional[int] = Field(None, ge=0)
     availability_location: Optional[str] = None
     warranty_terms: Optional[str] = None
     trace_documents: List[str] = Field(default_factory=list)
@@ -73,8 +68,77 @@ def is_valid_extracted_part_number(value: str) -> bool:
 def _has_ambiguous_text(email_text: str) -> bool:
     if re.search(r"\b(conflicting|contradictory|unclear|ambiguous|either|or alternatively)\b", email_text, re.I):
         return True
-    quantities = re.findall(r"\b(?:qty|quantity)\s*[:=#]?\s*(\d+)\b", email_text, re.I)
-    return len(set(quantities)) > 1 and len(quantities) > 1
+    part_quantities = re.findall(
+        r"(?:part\s*(?:number|no\.?|#)|p/?n|pn)\s*[:=#]?\s*([A-Z0-9-]+).*?"
+        r"(?:qty|quantity)\s*[:=#]?\s*(\d+)",
+        email_text,
+        re.I,
+    )
+    quantities_by_part: dict[str, set[str]] = {}
+    for part_number, quantity in part_quantities:
+        quantities_by_part.setdefault(part_number.upper(), set()).add(quantity)
+    return any(len(quantities) > 1 for quantities in quantities_by_part.values())
+
+
+def _normalize_source_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value or "").strip().casefold()
+
+
+def _snippet_proves_value(field: ExtractedField, source_text: str) -> bool:
+    if not field.value or not field.source_snippet:
+        return False
+    normalized_source = _normalize_source_text(source_text)
+    normalized_snippet = _normalize_source_text(field.source_snippet)
+    if not normalized_snippet or normalized_snippet not in normalized_source:
+        return False
+    value_pattern = rf"(?<![A-Z0-9]){re.escape(field.value.strip())}(?![A-Z0-9])"
+    return re.search(value_pattern, field.source_snippet, re.IGNORECASE) is not None
+
+
+def _validate_source_grounding(
+    result: EmailIntelligenceExtraction,
+    source_text: str,
+    task: str,
+) -> list[str]:
+    required = {"part_number", "quantity", "condition_code", "unit_of_measure"}
+    if task == "supplier_quote_extraction":
+        required.update({"target_price", "currency", "lead_time_days", "trace_documents"})
+    required_missing: set[str] = set()
+    extracted_missing = set(result.missing_fields)
+    grounded_fields = (
+        "part_number", "quantity", "condition_code", "target_price",
+        "lead_time_days", "unit_of_measure", "currency",
+    )
+
+    for item in result.items:
+        item_missing = set(item.missing_fields)
+        for name in grounded_fields:
+            field = getattr(item, name)
+            if field.value is not None and not _snippet_proves_value(field, source_text):
+                field.value = None
+                field.source_snippet = None
+            if field.value is None:
+                field.source_snippet = None
+                item_missing.add(name)
+        normalized_source = _normalize_source_text(source_text)
+        item.trace_documents = [
+            certificate for certificate in item.trace_documents
+            if _normalize_source_text(certificate) in normalized_source
+        ]
+        if not item.trace_documents:
+            item_missing.add("trace_documents")
+        required_item_missing = item_missing & required
+        item.needs_escalation = bool(required_item_missing)
+        item.escalation_reason = "required_source_fields_missing" if required_item_missing else None
+        item.missing_fields = sorted(item_missing)
+        extracted_missing.update(item_missing)
+        required_missing.update(required_item_missing)
+
+    result.missing_fields = sorted(extracted_missing)
+    required_missing.update(extracted_missing & required)
+    if required_missing:
+        result.confidence_score = 0.0
+    return sorted(required_missing)
 
 
 def _estimated_response_cost(response: Any) -> float:
@@ -107,7 +171,13 @@ def extract_email_intelligence(
             "For supplier quotes, identify supplier identity, part numbers, prices/currency, quantities, condition, "
             "lead time, location, warranty terms, and trace/cert documents. Never use HTML metadata, MIME tokens, "
             "message IDs, RFQ numbers, tracking numbers, billing references, or opaque encoded strings as part numbers. "
-            "If quantity is absent, use 1 and include quantity in missing_fields. Return only the JSON schema."
+            "This is fact extraction only, not business reasoning or authorization. For part_number, quantity, "
+            "condition_code, target_price, lead_time_days, unit_of_measure, and currency, return an ExtractedField "
+            "with the verbatim value and an exact source_snippet from the supplied text. If a value is not explicitly "
+            "present, set both value and source_snippet to null and include the field name in missing_fields. "
+            "Never infer a quantity, unit, currency, condition, price, lead time, or part-number suffix. "
+            "Only list certificate or trace documents explicitly named in the source. Do not default missing quantity "
+            "to one. Return only the JSON schema."
         ),
         user_prompt=json.dumps({"email": context}, ensure_ascii=False),
         model=ROUTINE_EXTRACTION_MODEL,
@@ -139,9 +209,18 @@ def extract_email_intelligence(
         result = EmailIntelligenceExtraction(missing_fields=["structured extraction"], confidence_score=0.0)
         escalation_reason = "structured_output_invalid"
 
-    invalid_items = [item for item in result.items if not is_valid_extracted_part_number(item.part_number)]
+    required_missing = _validate_source_grounding(result, context, task)
+    if required_missing:
+        escalation_reason = escalation_reason or "required_source_fields_missing"
+    invalid_items = [
+        item for item in result.items
+        if not is_valid_extracted_part_number(item.part_number.value or "")
+    ]
     if invalid_items:
-        result.items = [item for item in result.items if is_valid_extracted_part_number(item.part_number)]
+        result.items = [
+            item for item in result.items
+            if is_valid_extracted_part_number(item.part_number.value or "")
+        ]
         result.missing_fields = list(dict.fromkeys([*result.missing_fields, "valid part number"]))
         result.confidence_score = min(result.confidence_score, 0.0)
         escalation_reason = escalation_reason or "invalid_part_number_reference"
@@ -162,7 +241,11 @@ def extract_email_intelligence(
             raise ValueError("EMAIL_EXTRACTION_ESCALATION_MODEL must be a higher-capacity model, not gpt-4o-mini.")
         escalation_request = LLMRequest(
             task=request.task,
-            system_prompt=request.system_prompt,
+            system_prompt=(
+                f"{request.system_prompt}\nFor each disputed field, include concise resolution_hypotheses "
+                "as objects with field, candidate_value, and source_snippets. Keep unsupported alternatives unresolved; "
+                "hypotheses are review-only and must not alter extracted values or authorize workflow changes."
+            ),
             user_prompt=(
                 f"{request.user_prompt}\n\nEscalation reason: {escalation_reason}. "
                 "Resolve only the extraction ambiguity; do not authorize or mutate any workflow."
@@ -173,6 +256,7 @@ def extract_email_intelligence(
             max_tokens=request.max_tokens,
             response_format="json",
         )
+        escalated_required_missing: list[str] = []
         try:
             escalated, response = router.extract_structured_with_response(
                 escalation_request,
@@ -182,9 +266,16 @@ def extract_email_intelligence(
             )
             model_calls.append(response.model)
             response_cost += _estimated_response_cost(response)
-            invalid_escalated_items = [item for item in escalated.items if not is_valid_extracted_part_number(item.part_number)]
+            escalated_required_missing = _validate_source_grounding(escalated, context, task)
+            invalid_escalated_items = [
+                item for item in escalated.items
+                if not is_valid_extracted_part_number(item.part_number.value or "")
+            ]
             if invalid_escalated_items:
-                escalated.items = [item for item in escalated.items if is_valid_extracted_part_number(item.part_number)]
+                escalated.items = [
+                    item for item in escalated.items
+                    if is_valid_extracted_part_number(item.part_number.value or "")
+                ]
                 escalated.missing_fields = list(dict.fromkeys([*escalated.missing_fields, "valid part number"]))
                 escalated.confidence_score = min(escalated.confidence_score, 0.0)
             result = escalated
@@ -195,6 +286,8 @@ def extract_email_intelligence(
             result.missing_fields = list(dict.fromkeys([*result.missing_fields, "human review required"]))
         except Exception:
             result.missing_fields = list(dict.fromkeys([*result.missing_fields, "human review required"]))
+        if escalated_required_missing:
+            result.missing_fields = sorted(set(result.missing_fields) | set(escalated_required_missing))
 
     result._telemetry = {
         "model_calls": model_calls,

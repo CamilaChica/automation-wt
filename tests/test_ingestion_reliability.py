@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from services.email_intelligence import EmailIntelligenceExtraction, ExtractedEmailItem
+from schemas.extraction import ExtractedField
 from services.supplier_database import supplier_db
 from services.supplier_ingestion_service import SupplierEmailIngestionService
 
@@ -14,8 +15,26 @@ class TestIngestionReliability(unittest.TestCase):
             supplier_email="quotes@multi.example",
             confidence_score=0.98,
             items=[
-                ExtractedEmailItem(part_number="MS20470AD4-6", quantity=50, unit_price=0.12, condition_code="NE", lead_time_days=2, trace_documents=["CoC"]),
-                ExtractedEmailItem(part_number="AN960-416", quantity=12, unit_price=0.08, condition_code="NE", lead_time_days=3, trace_documents=["FAA 8130-3"]),
+                ExtractedEmailItem(
+                    part_number=ExtractedField(value="MS20470AD4-6", source_snippet="Part Number: MS20470AD4-6"),
+                    quantity=ExtractedField(value="50", source_snippet="Quantity: 50"),
+                    condition_code=ExtractedField(value="NE", source_snippet="Condition: NE"),
+                    target_price=ExtractedField(value="0.12", source_snippet="$0.12"),
+                    lead_time_days=ExtractedField(value="2", source_snippet="Lead time 2"),
+                    unit_of_measure=ExtractedField(value="EA", source_snippet="Quantity: 50"),
+                    currency=ExtractedField(value="USD", source_snippet="$0.12"),
+                    trace_documents=["CoC"],
+                ),
+                ExtractedEmailItem(
+                    part_number=ExtractedField(value="AN960-416", source_snippet="Part Number: AN960-416"),
+                    quantity=ExtractedField(value="12", source_snippet="Quantity: 12"),
+                    condition_code=ExtractedField(value="NE", source_snippet="Condition: NE"),
+                    target_price=ExtractedField(value="0.08", source_snippet="$0.08"),
+                    lead_time_days=ExtractedField(value="3", source_snippet="Lead time 3"),
+                    unit_of_measure=ExtractedField(value="EA", source_snippet="Quantity: 12"),
+                    currency=ExtractedField(value="USD", source_snippet="$0.08"),
+                    trace_documents=["FAA 8130-3"],
+                ),
             ],
         )
         service = SupplierEmailIngestionService()

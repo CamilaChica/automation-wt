@@ -12,6 +12,19 @@ from services.llm_provider import LLMRouter
 from services.operations_store import operations_store
 
 
+def _integer_field_value(value: Optional[str]) -> Optional[int]:
+    match = re.search(r"\d+", str(value or ""))
+    return int(match.group()) if match else None
+
+
+def _price_field_value(value: Optional[str]) -> Optional[float]:
+    normalized = re.sub(r"[^0-9.\-]", "", str(value or ""))
+    try:
+        return float(normalized)
+    except ValueError:
+        return None
+
+
 class SupplierEmailIngestionService:
     def __init__(self):
         self.extractor = SupplierEmailExtractor()
@@ -33,7 +46,12 @@ class SupplierEmailIngestionService:
             except Exception:
                 # Deterministic extraction remains the bounded outage fallback.
                 llm_data = None
-            if llm_data and llm_data.pending_human_review:
+            unsupported_currencies = sorted({
+                item.currency.value
+                for item in (llm_data.items if llm_data else [])
+                if item.currency.value and item.currency.value.upper() != "USD"
+            })
+            if llm_data and (llm_data.pending_human_review or unsupported_currencies):
                 sender = ""
                 subject = ""
                 for line in email_text.splitlines():
@@ -57,6 +75,7 @@ class SupplierEmailIngestionService:
                     result=json.dumps({
                         "pending_human_review": True,
                         "missing_fields": llm_data.missing_fields,
+                        "unsupported_currencies": unsupported_currencies,
                         "telemetry": llm_data.telemetry,
                     }),
                     idempotency_key=f"supplier-email-review:{source_email_id}",
@@ -65,26 +84,38 @@ class SupplierEmailIngestionService:
                     "success": False,
                     "status": "Pending_Human_Review",
                     "pending_human_review": True,
+                    "unsupported_currencies": unsupported_currencies,
                     "source_email_id": source_email_id,
                     "review_event_id": review_event_id,
                     "missing_fields": llm_data.missing_fields,
                     "telemetry": llm_data.telemetry,
                 }
             if llm_data and llm_data.items:
-                structured_items = [item.model_dump() for item in llm_data.items]
+                structured_items = [{
+                    "part_number": item.part_number.value,
+                    "quantity": _integer_field_value(item.quantity.value),
+                    "unit_price": _price_field_value(item.target_price.value),
+                    "condition_code": item.condition_code.value,
+                    "lead_time_days": _integer_field_value(item.lead_time_days.value),
+                    "currency": item.currency.value,
+                    "trace_documents": item.trace_documents,
+                    "description": item.description,
+                    "availability_location": item.availability_location,
+                    "warranty_terms": item.warranty_terms,
+                } for item in llm_data.items]
                 item = llm_data.items[0]
                 extracted.update({
                     "supplier_name": llm_data.supplier_name or extracted.get("supplier_name"),
                     "supplier_email": llm_data.supplier_email or extracted.get("supplier_email"),
                     "part_number": (
                         deterministic_part_number
-                        or re.sub(r"\s*[-]\s*", "-", item.part_number).replace(" ", "").upper()
+                        or re.sub(r"\s*[-]\s*", "-", item.part_number.value or "").replace(" ", "").upper()
                     ),
-                    "quantity_available": item.quantity,
-                    "unit_cost": item.unit_price,
+                    "quantity_available": _integer_field_value(item.quantity.value),
+                    "unit_cost": _price_field_value(item.target_price.value),
                     "certificate_type": (item.trace_documents[0] if item.trace_documents else None) or extracted.get("certificate_type"),
-                    "lead_time_days": item.lead_time_days,
-                    "condition_code": item.condition_code,
+                    "lead_time_days": _integer_field_value(item.lead_time_days.value),
+                    "condition_code": item.condition_code.value,
                     "warranty_terms": item.warranty_terms,
                     "trace_documents": item.trace_documents,
                     "missing_fields": llm_data.missing_fields,

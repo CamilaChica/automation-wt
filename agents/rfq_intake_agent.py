@@ -481,14 +481,14 @@ class RFQIntakeAgent(BaseAgent):
                 llm_extraction_used = True
                 extracted_items = [
                     {
-                        "requested_part_number": _normalize_part_number(item.part_number),
-                        "quantity": item.quantity,
-                        "uom": "EA",
+                        "requested_part_number": _normalize_part_number(item.part_number.value or ""),
+                        "quantity": int(item.quantity.value or 1),
+                        "uom": item.unit_of_measure.value or "EA",
                         "aircraft_type": None,
-                        "condition_preference": item.condition_code or "NE",
+                        "condition_preference": item.condition_code.value or "NE",
                     }
                     for item in llm_data.items
-                    if is_valid_extracted_part_number(item.part_number)
+                    if item.part_number.value and is_valid_extracted_part_number(item.part_number.value)
                 ]
                 if extracted_items:
                     part_number = _normalize_part_number(extracted_items[0]["requested_part_number"])

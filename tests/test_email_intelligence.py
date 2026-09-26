@@ -23,28 +23,20 @@ class FakeEmailProvider(LLMProvider):
                 "supplier_email": None,
                 "items": [
                     {
-                        "part_number": "5-89356-42",
+                        "part_number": {"value": "5-89356-42", "source_snippet": "Part No: 5-89356-42"},
+                        "quantity": {"value": "2", "source_snippet": "Quantity: 2 EA"},
+                        "condition_code": {"value": "AR", "source_snippet": "Condition: AR"},
+                        "target_price": {"value": None, "source_snippet": None},
+                        "unit_of_measure": {"value": "EA", "source_snippet": "Quantity: 2 EA"},
                         "description": "WINDOW",
-                        "quantity": 2,
-                        "condition_code": "AR",
-                        "unit_price": None,
-                        "currency": "USD",
-                        "lead_time_days": None,
-                        "availability_location": None,
-                        "warranty_terms": None,
-                        "trace_documents": [],
                     },
                     {
-                        "part_number": "060-1234-00",
+                        "part_number": {"value": "060-1234-00", "source_snippet": "Part No: 060-1234-00"},
+                        "quantity": {"value": "5", "source_snippet": "Quantity: 5 EA"},
+                        "condition_code": {"value": "OH", "source_snippet": "Condition: OH"},
+                        "target_price": {"value": None, "source_snippet": None},
+                        "unit_of_measure": {"value": "EA", "source_snippet": "Quantity: 5 EA"},
                         "description": "ACTUATOR",
-                        "quantity": 5,
-                        "condition_code": "OH",
-                        "unit_price": None,
-                        "currency": "USD",
-                        "lead_time_days": None,
-                        "availability_location": None,
-                        "warranty_terms": None,
-                        "trace_documents": [],
                     },
                 ],
                 "missing_fields": [],
@@ -58,15 +50,16 @@ class EmailIntelligenceTests(unittest.TestCase):
     def test_structured_extraction_preserves_all_line_items_and_identity(self):
         with patch.dict(os.environ, {"LLM_LIVE_ENABLED": "true"}, clear=False):
             result = extract_email_intelligence(
-                "PartsBase table email",
+                "Company: Innovation Aerospace, LLC; Part No: 5-89356-42; Quantity: 2 EA; Condition: AR; "
+                "Part No: 060-1234-00; Quantity: 5 EA; Condition: OH",
                 task="rfq_extraction",
                 router=LLMRouter({"openai": FakeEmailProvider()}),
             )
 
         self.assertEqual(result.customer_company, "Innovation Aerospace, LLC")
-        self.assertEqual([item.part_number for item in result.items], ["5-89356-42", "060-1234-00"])
-        self.assertEqual([item.quantity for item in result.items], [2, 5])
-        self.assertEqual([item.condition_code for item in result.items], ["AR", "OH"])
+        self.assertEqual([item.part_number.value for item in result.items], ["5-89356-42", "060-1234-00"])
+        self.assertEqual([item.quantity.value for item in result.items], ["2", "5"])
+        self.assertEqual([item.condition_code.value for item in result.items], ["AR", "OH"])
 
 
 if __name__ == "__main__":
