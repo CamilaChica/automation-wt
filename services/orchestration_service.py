@@ -81,6 +81,8 @@ class OrchestrationService:
             if not res.success:
                 intake_data = res.data or {}
                 requires_internal_review = (
+                    intake_data.get("pending_human_review") is True
+                    or
                     intake_data.get("AOG_status") is True
                     or intake_data.get("priority") in {"AOG", "Urgent"}
                 )
@@ -106,7 +108,7 @@ class OrchestrationService:
                         rfq_id,
                         "RFQIntakeAgent",
                         "intake_review",
-                        f"AOG/urgent RFQ requires internal review: {res.error_message}",
+                        f"RFQ requires internal review: {res.error_message}",
                         "WARNING",
                         json.dumps(intake_data),
                     )

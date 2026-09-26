@@ -26,6 +26,14 @@ class ProviderTimeoutError(TimeoutError):
     """Raised when a provider exceeds the request timeout."""
 
 
+class StructuredOutputError(ValueError):
+    """Raised when provider output fails schema validation after requested attempts."""
+
+    def __init__(self, message: str, response: "LLMResponse | None" = None):
+        super().__init__(message)
+        self.response = response
+
+
 StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 
@@ -200,7 +208,7 @@ class LLMRouter:
         self.task_providers = self._load_task_providers()
         self.fallback_providers = self._load_fallback_providers()
 
-    def complete(self, request: LLMRequest) -> LLMResponse:
+    def complete(self, request: LLMRequest, *, provider_override: str | None = None) -> LLMResponse:
         request = LLMRequest(
             task=request.task,
             system_prompt=request.system_prompt,
@@ -212,7 +220,7 @@ class LLMRouter:
             max_tokens=request.max_tokens,
             response_format=request.response_format,
         )
-        provider_names = [
+        provider_names = [provider_override] if provider_override else [
             self.task_providers.get(request.task, os.getenv("LLM_DEFAULT_PROVIDER", "openai")),
             *self.fallback_providers.get(request.task, []),
         ]
@@ -254,13 +262,14 @@ class LLMRouter:
         request: LLMRequest,
         schema: Type[StructuredModel],
         max_attempts: int = 2,
+        provider_override: str | None = None,
     ) -> tuple[StructuredModel, LLMResponse]:
         """Return validated structured output together with provider telemetry."""
         last_error: Exception | None = None
         current_request = _with_structured_contract(request, schema)
         last_response: LLMResponse | None = None
         for attempt in range(max_attempts):
-            response = self.complete(current_request)
+            response = self.complete(current_request, provider_override=provider_override)
             last_response = response
             try:
                 raw_text = response.text.strip()
@@ -284,7 +293,10 @@ class LLMRouter:
                     max_tokens=request.max_tokens,
                     response_format=request.response_format,
                 )
-        raise ValueError(f"Structured extraction failed after {max_attempts} attempts: {last_error}") from last_error
+        raise StructuredOutputError(
+            f"Structured extraction failed after {max_attempts} attempts: {last_error}",
+            last_response,
+        ) from last_error
 
     @staticmethod
     def _load_task_providers() -> Dict[str, str]:

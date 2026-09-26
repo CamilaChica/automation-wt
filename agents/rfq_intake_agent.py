@@ -44,7 +44,7 @@ from typing import Dict, Any, List, Optional
 
 from agents.base_agent import BaseAgent, AgentMetadata, AgentResponse, EscalationRule
 from models.db_models import RFQIntakeOutput
-from services.email_intelligence import extract_email_intelligence
+from services.email_intelligence import extract_email_intelligence, is_valid_extracted_part_number
 from services.llm_provider import LLMRouter
 from services.agents.prompts import RFQ_INTAKE_PROMPT
 
@@ -145,7 +145,8 @@ def _extract_part_number(text: str) -> Optional[str]:
         segments = normalized.split("-")
         digit_count = len(re.findall(r"\d", normalized))
         return (
-            normalized not in metadata_tokens
+            is_valid_extracted_part_number(normalized)
+            and normalized not in metadata_tokens
             and not normalized.startswith(("RT-PBILL", "PBILL"))
             and bool(re.search(r"\d", normalized))
             and len(normalized) <= 40
@@ -410,6 +411,11 @@ class RFQIntakeAgent(BaseAgent):
                     action="halt_for_review",
                     escalate_to="human_operator",
                 ),
+                EscalationRule(
+                    condition="llm_extraction_escalation",
+                    action="halt_for_review",
+                    escalate_to="human_operator",
+                ),
             ],
             prompt_templates={
                 "default": "Analyze the raw customer RFQ text. Extract: customer_name, company, part_number (normalize to uppercase), quantity (integer, default 1 when omitted), condition (NE/NS/OH/AR), required_date, delivery_location, AOG_status, certification_requirements, and additional_requirements. Flag missing mandatory fields (part_number, customer identity). Flag ambiguous condition when multiple codes appear. Set priority: AOG > Urgent > Routine. NEVER invent or guess confirmed fields.",
@@ -460,6 +466,8 @@ class RFQIntakeAgent(BaseAgent):
         # Prefer the validated model extraction when a provider is configured;
         # local parsing remains the bounded fallback for provider outages.
         llm_extraction_used = False
+        pending_human_review = False
+        extraction_telemetry: Dict[str, Any] = {}
         try:
             llm_data = await asyncio.to_thread(
                 extract_email_intelligence,
@@ -467,7 +475,9 @@ class RFQIntakeAgent(BaseAgent):
                 task="rfq_extraction",
                 router=self.llm_router,
             )
-            if llm_data.items:
+            extraction_telemetry = llm_data.telemetry
+            pending_human_review = llm_data.pending_human_review
+            if llm_data.items and not pending_human_review:
                 llm_extraction_used = True
                 extracted_items = [
                     {
@@ -478,19 +488,21 @@ class RFQIntakeAgent(BaseAgent):
                         "condition_preference": item.condition_code or "NE",
                     }
                     for item in llm_data.items
+                    if is_valid_extracted_part_number(item.part_number)
                 ]
-                part_number = _normalize_part_number(extracted_items[0]["requested_part_number"])
+                if extracted_items:
+                    part_number = _normalize_part_number(extracted_items[0]["requested_part_number"])
                 # Preserve an explicitly labelled quantity from the raw RFQ when
                 # merging provider extraction results.
-                if extracted_quantity is None:
-                    quantity = extracted_items[0]["quantity"]
-                else:
-                    extracted_items[0]["quantity"] = extracted_quantity
-                    quantity = extracted_quantity
-                condition = extracted_items[0]["condition_preference"]
-                customer_name = llm_data.customer_name or customer_name
-                company = llm_data.customer_company or company
-                customer_email = (llm_data.customer_email or customer_email or "").strip().lower() or None
+                    if extracted_quantity is None:
+                        quantity = extracted_items[0]["quantity"]
+                    else:
+                        extracted_items[0]["quantity"] = extracted_quantity
+                        quantity = extracted_quantity
+                    condition = extracted_items[0]["condition_preference"]
+                    customer_name = llm_data.customer_name or customer_name
+                    company = llm_data.customer_company or company
+                    customer_email = (llm_data.customer_email or customer_email or "").strip().lower() or None
         except Exception as exc:
             logger.warning("rfq_llm_extraction_fallback error=%s", type(exc).__name__)
 
@@ -540,7 +552,7 @@ class RFQIntakeAgent(BaseAgent):
             ambiguous_fields.append("condition")
 
         # ── 4. Determine overall status ─────────────────────────────────
-        needs_clarification = bool(missing_fields or ambiguous_fields)
+        needs_clarification = bool(missing_fields or ambiguous_fields or pending_human_review)
         status = "NEEDS_CLARIFICATION" if needs_clarification else "COMPLETE"
 
         # ── 5. Build structured output ──────────────────────────────────
@@ -579,13 +591,17 @@ class RFQIntakeAgent(BaseAgent):
         payload = intake_output.model_dump()
         payload["quantity_defaulted"] = quantity_defaulted
         payload["llm_extraction_used"] = llm_extraction_used
+        payload["pending_human_review"] = pending_human_review
+        payload["extraction_telemetry"] = extraction_telemetry
         payload["customer_email"] = customer_email  # legacy key
         payload["items"] = items                    # legacy key
 
         # ── 8. Return ───────────────────────────────────────────────────
-        if needs_clarification:
+        if needs_clarification or pending_human_review:
             escalation = (
-                self.metadata.escalation_rules[1]
+                self.metadata.escalation_rules[2]
+                if pending_human_review
+                else self.metadata.escalation_rules[1]
                 if ambiguous_fields and not missing_fields
                 else self.metadata.escalation_rules[0]
             )
@@ -593,6 +609,8 @@ class RFQIntakeAgent(BaseAgent):
                 success=False,
                 data=payload,
                 error_message=(
+                    "LLM escalation requires human review. "
+                    if pending_human_review else
                     f"RFQ requires clarification. "
                     f"Missing: {missing_fields or 'none'}. "
                     f"Ambiguous: {ambiguous_fields or 'none'}."

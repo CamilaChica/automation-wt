@@ -2,6 +2,8 @@ import html
 import re
 from typing import Any, Dict, List, Optional
 
+from services.email_intelligence import is_valid_extracted_part_number
+
 
 class SupplierEmailExtractor:
     """Simple deterministic extractor for supplier emails.
@@ -169,7 +171,8 @@ class SupplierEmailExtractor:
                 "READY-QU", "RFQ", "QTE", "QUOTE", "PO", "ORDER", "INVOICE", "BILL",
             )
             return (
-                normalized not in metadata_tokens
+                is_valid_extracted_part_number(normalized)
+                and normalized not in metadata_tokens
                 and not any(normalized == prefix or normalized.startswith(f"{prefix}-") for prefix in reference_prefixes)
                 and not normalized.startswith(("RT-PBILL", "PBILL"))
                 and bool(re.search(r"\d", normalized))
