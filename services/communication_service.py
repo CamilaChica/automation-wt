@@ -710,7 +710,7 @@ class CommunicationService:
             except Exception as exc:
                 response = getattr(exc, "response", None)
                 status_code = getattr(response, "status_code", None)
-                retryable = bool(status_code and 400 <= status_code < 500 and status_code not in {408, 409})
+                retryable = status_code == 429
                 delivery_state = operations_store.fail_outbox_message(
                     message["id"], f"{type(exc).__name__}: {exc}", retryable=retryable
                 )

@@ -20,10 +20,11 @@
 
 ## PostgreSQL Runtime and Outbox
 
-- [ ] Apply Alembic head `0005_operations_store_contract` to a disposable PostgreSQL database first; verify migration, restart, rollback, and model/schema parity.
+- [ ] Obtain rotated credentials for a disposable PostgreSQL database. The local PostgreSQL 16 service is running, but default local authentication is rejected; do not use the exposed Render credential.
+- [ ] Apply Alembic head `0005_operations_store_contract` to that disposable PostgreSQL database; offline SQL generation, migration history, and the single-head check pass, but real upgrade/restart/rollback/model parity remain unverified.
 - [ ] Exercise RFQ/customer/quote/supplier/task reads and writes against real PostgreSQL, including row locks, optimistic versions, inventory reservation concurrency, and transaction rollback.
 - [ ] Test inbound idempotency with two processes and prove claim plus business writes commit or roll back together.
-- [ ] Test outbox deduplication, concurrent claims, retry/backoff, terminal failure, stale-send recovery, and manual resolution of ambiguous delivery. Do not automatically resend when the external provider may already have accepted a message.
+- [ ] Test outbox deduplication, concurrent claims, retry/backoff, terminal failure, stale-send recovery, and manual resolution of ambiguous delivery against PostgreSQL. Local tests cover send-outside-transaction ordering, HTTP 429 retry, and timeout/manual handling only; do not automatically resend when the external provider may already have accepted a message.
 - [ ] Verify that all production supplier, inbound email, and scheduled task paths use shared PostgreSQL, not the local SQLite fallback.
 - [ ] Verify quote/RFQ state stays pending while email is queued and advances to `Quote_Sent` only after the outbox confirms `SENT`.
 - [ ] Keep `OPERATIONAL_POSTGRES_RUNTIME_ENABLED=false` until these integration and concurrency checks pass.

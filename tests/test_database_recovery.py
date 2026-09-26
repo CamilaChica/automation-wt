@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import socket
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from services.async_database import _database_url, preflight_database
@@ -118,6 +119,37 @@ def test_outbox_dispatch_sends_only_after_claim_transaction_has_closed(monkeypat
     assert events.index("claim_commit") < events.index("send")
     assert events.index("send") < events.index("db_transaction_begin")
     assert events.index("mark_sent") < events.index("db_transaction_end")
+
+
+def test_outbox_retries_only_explicit_provider_throttling(monkeypatch):
+    class Store:
+        storage_engine = "postgresql"
+
+        def __init__(self):
+            self.retryable = None
+
+        def recover_stale_outbox_messages(self):
+            return 0
+
+        def claim_outbox_messages(self, *, limit):
+            return [{"id": "OUT-1", "mailbox": "sales", "recipient": "buyer@example.test",
+                     "subject": "Quote", "payload": {"body": "Body"}, "reply_to": None}]
+
+        def fail_outbox_message(self, _message_id, _error, *, retryable=False):
+            self.retryable = retryable
+            return "PENDING" if retryable else "FAILED"
+
+    throttled_store = Store()
+    monkeypatch.setattr("services.communication_service.operations_store", throttled_store)
+    monkeypatch.setattr("services.communication_service.send_message", Mock(side_effect=type("HttpError", (Exception,), {"response": SimpleNamespace(status_code=429)})()))
+    CommunicationService().dispatch_outbox_once()
+    assert throttled_store.retryable is True
+
+    ambiguous_store = Store()
+    monkeypatch.setattr("services.communication_service.operations_store", ambiguous_store)
+    monkeypatch.setattr("services.communication_service.send_message", Mock(side_effect=TimeoutError("delivery outcome unknown")))
+    CommunicationService().dispatch_outbox_once()
+    assert ambiguous_store.retryable is False
 
 
 def test_reconciliation_maps_legacy_ids_stably_and_conflict_policy_preserves_target():
