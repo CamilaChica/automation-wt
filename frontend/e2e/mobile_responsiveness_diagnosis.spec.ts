@@ -12,8 +12,11 @@ const internalTargets = [
 
 const viewports = [
   { name: 'small-mobile', width: 375, height: 667 },
-  { name: 'standard-mobile', width: 390, height: 844 },
+  { name: 'mobile-393', width: 393, height: 852 },
+  { name: 'mobile-412', width: 412, height: 915 },
   { name: 'small-tablet', width: 768, height: 1024 },
+  { name: 'desktop', width: 1440, height: 900 },
+  { name: 'wide-desktop', width: 2560, height: 1440 },
 ] as const;
 
 const rfq = {
@@ -27,15 +30,16 @@ const rfq = {
   created_at: '2026-08-28T09:30:00Z',
 };
 
-async function installApiRoutes(page: Page) {
+async function installApiRoutes(page: Page, status = rfq.status) {
+  const responseRfq = { ...rfq, status };
   await page.route('**/api/**', async route => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     let body: unknown = [];
 
-    if (path.endsWith('/rfqs')) body = [rfq];
+    if (path.endsWith('/rfqs')) body = [responseRfq];
     else if (path.includes('/rfqs/') && request.method() === 'GET') {
-      body = { ...rfq, logs: [], quote_details: { quote: { id: 'QTE-E2E-001' }, items: [] } };
+      body = { ...responseRfq, logs: [], quote_details: { quote: { id: 'QTE-E2E-001' }, items: [] } };
     } else if (path.endsWith('/catalog/search')) {
       body = [{ part_number: rfq.part_number, condition_code: 'SV', quantity_available: 3, certificate_type: 'FAA 8130-3', has_full_trace: true }];
     } else if (path.endsWith('/supplier-offers')) {
@@ -54,6 +58,68 @@ async function installApiRoutes(page: Page) {
   });
 }
 
+test('failed intake disables quote, sourcing, and trace mutations', async ({ page }) => {
+  await installErrorCapture(page);
+  await installApiRoutes(page, 'Intake_Failed');
+  await page.goto('/internal', { waitUntil: 'networkidle' });
+
+  await selectTargetView(page, { path: '/sales', label: /Sales Command/i });
+  await expect(page.getByRole('button', { name: 'ISSUE QUOTE' })).toBeDisabled();
+
+  await selectTargetView(page, { path: '/procurement', label: /Proc Command/i });
+  await expect(page.getByRole('button', { name: /GENERATE SMART QUOTE/i })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'SPLIT PO' })).toBeDisabled();
+
+  await selectTargetView(page, { path: '/trace', label: /Trace Vault/i });
+  await expect(page.getByRole('button', { name: /ACCEPT & CERTIFY/i })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /HARD FREEZE ORDER/i })).toBeDisabled();
+});
+
+test('cancelled quote and trace confirmations do not submit mutations', async ({ page }) => {
+  const mutationRequests: string[] = [];
+  const confirmationMessages: string[] = [];
+  page.on('request', request => {
+    if (request.url().includes('/api/') && request.method() !== 'GET') mutationRequests.push(request.url());
+  });
+  page.on('dialog', async dialog => {
+    confirmationMessages.push(dialog.message());
+    await dialog.dismiss();
+  });
+
+  await installErrorCapture(page);
+  await installApiRoutes(page);
+  await page.goto('/internal', { waitUntil: 'networkidle' });
+  await selectTargetView(page, { path: '/sales', label: /Sales Command/i });
+  const issueQuote = page.getByRole('button', { name: 'ISSUE QUOTE' });
+  await expect(issueQuote).toBeEnabled();
+  await issueQuote.click();
+  await expect.poll(() => confirmationMessages.length).toBe(1);
+
+  await selectTargetView(page, { path: '/trace', label: /Trace Vault/i });
+  const certify = page.getByRole('button', { name: /ACCEPT & CERTIFY/i });
+  await expect(certify).toBeEnabled();
+  await certify.click();
+  await expect.poll(() => confirmationMessages.length).toBe(2);
+
+  expect(confirmationMessages[0]).toContain('Issue quote');
+  expect(confirmationMessages[1]).toContain('certify trace documents');
+  expect(mutationRequests).toEqual([]);
+});
+
+test('shipment route displays the geographic map or its text fallback', async ({ page }) => {
+  await installErrorCapture(page);
+  await installApiRoutes(page);
+  await page.goto('/internal', { waitUntil: 'networkidle' });
+  await selectTargetView(page, { path: '/sourcing', label: /Sourcing Matrix/i });
+
+  await expect.poll(async () => (
+    await page.locator('.leaflet-container').count() > 0
+    || await page.getByText(/Map tiles unavailable\. Demo routes:/).count() > 0
+  )).toBe(true);
+  await expect(page.getByText(/Demo route geometry only; carrier locations are not live\./)).toBeAttached();
+  await expect(page.getByRole('link', { name: 'Map data: OpenStreetMap contributors' })).toBeAttached();
+});
+
 async function installErrorCapture(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem('wt_access_token', 'e2e-token');
@@ -70,6 +136,8 @@ async function installErrorCapture(page: Page) {
 
 async function selectTargetView(page: Page, target: typeof internalTargets[number]) {
   if (target.path === '/internal') return;
+  const menuButton = page.getByRole('button', { name: 'Open navigation menu' });
+  if (await menuButton.isVisible()) await menuButton.click();
   const navigation = page.getByRole('button', { name: target.label }).first();
   await expect(navigation, `Navigation control for ${target.path} is missing`).toBeVisible();
   await navigation.click();

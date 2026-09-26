@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { apiService } from '../../services/api';
-import { Shipment } from '../../types';
+import { InternalCommand, Shipment } from '../../types';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
-import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { 
   QrCode, 
   Camera, 
@@ -19,6 +18,22 @@ export const FulfillmentHubView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [airworthinessVerified, setAirworthinessVerified] = useState(true);
+  const [commandPending, setCommandPending] = useState<InternalCommand | null>(null);
+
+  const runCommand = async (command: InternalCommand, description: string) => {
+    if (commandPending) return;
+    if (!window.confirm(`Confirm ${description}?`)) return;
+    setCommandPending(command);
+    setNotice(null);
+    try {
+      const result = await apiService.executeInternalCommand(command, 'fulfillment');
+      setNotice(result.message);
+    } catch (requestError) {
+      setNotice(requestError instanceof Error ? requestError.message : `Unable to ${description}.`);
+    } finally {
+      setCommandPending(null);
+    }
+  };
 
   const loadShipments = async () => {
     setLoading(true);
@@ -37,7 +52,6 @@ export const FulfillmentHubView: React.FC = () => {
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
       {notice && <div role="status" aria-live="polite" className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
-      <FallbackDataBanner />
       {/* Stage Progress Breadcrumb Tracker */}
       <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between font-mono text-[11px] gap-2">
@@ -167,14 +181,14 @@ export const FulfillmentHubView: React.FC = () => {
               </div>
             </div>
 
-            <button type="button" onClick={() => void apiService.executeInternalCommand('print_tags', 'fulfillment').then(result => setNotice(result.message)).catch(error => setNotice(error instanceof Error ? error.message : 'Unable to queue tags.'))} className="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-display font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 transition-colors">
+            <button type="button" disabled={Boolean(commandPending)} aria-busy={commandPending === 'print_tags'} onClick={() => void runCommand('print_tags', 'print ATA 300 Category I tags')} className="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-display font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 transition-colors disabled:cursor-not-allowed disabled:opacity-50">
               <Printer className="w-4 h-4 text-aero-blue" />
-              <span>PRINT ATA 300 CAT I TAGS</span>
+              <span>{commandPending === 'print_tags' ? 'QUEUEING TAGS...' : 'PRINT ATA 300 CAT I TAGS'}</span>
             </button>
           </div>
 
           {/* Carrier Telemetry Tracking */}
-          <WorldMapTelemetry title="5. CARRIER TELEMETRY & FLIGHT TRACKING" subtitle="Links: Carrier vehicle GPS to AA Flight 1482 (MIA ✈️ DFW)" />
+          <WorldMapTelemetry title="5. CARRIER ROUTE DEMO" subtitle="Example route from Miami International to Dallas Fort Worth. Not live carrier telemetry." />
         </div>
 
         {/* Right Column (4 cols): COMPLIANCE PACKET COMPILER DRAWER */}
@@ -199,8 +213,8 @@ export const FulfillmentHubView: React.FC = () => {
               <div className="text-emerald-700 dark:text-emerald-400 font-bold">DIGITAL TAMPER-EVIDENT STAMPS</div>
             </div>
 
-            <button type="button" onClick={() => void apiService.executeInternalCommand('generate_stamps', 'fulfillment').then(result => setNotice(result.message)).catch(error => setNotice(error instanceof Error ? error.message : 'Unable to generate stamps.'))} className="w-full bg-blue-50 hover:bg-blue-100 dark:bg-aero-blue/20 dark:hover:bg-aero-blue text-aero-blue dark:text-aero-blue dark:hover:text-white border border-blue-200 dark:border-aero-blue/40 font-bold py-2.5 px-3 rounded-xl text-xs transition-colors">
-              SERIALIZED TAMPER-EVIDENT STAMPS
+            <button type="button" disabled={Boolean(commandPending)} aria-busy={commandPending === 'generate_stamps'} onClick={() => void runCommand('generate_stamps', 'generate serialized tamper-evident stamps')} className="w-full bg-blue-50 hover:bg-blue-100 dark:bg-aero-blue/20 dark:hover:bg-aero-blue text-aero-blue dark:text-aero-blue dark:hover:text-white border border-blue-200 dark:border-aero-blue/40 font-bold py-2.5 px-3 rounded-xl text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50">
+              {commandPending === 'generate_stamps' ? 'GENERATING STAMPS...' : 'SERIALIZED TAMPER-EVIDENT STAMPS'}
             </button>
 
             <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">

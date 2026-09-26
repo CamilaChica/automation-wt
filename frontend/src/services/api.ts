@@ -235,15 +235,19 @@ export const apiService = {
     return Boolean(localStorage.getItem('wt_access_token'));
   },
 
-  async getRFQs(): Promise<RFQ[]> {
+  async getRFQsWithSource(): Promise<{ rfqs: RFQ[]; isFallback: boolean }> {
     try {
       const res = await axios.get(`${API_BASE}/rfqs`);
-      return res.data;
+      return { rfqs: res.data, isFallback: false };
     } catch (error) {
       if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
       if (!allowMockFallbacks) throw error;
-      return mockRFQs;
+      return { rfqs: mockRFQs, isFallback: true };
     }
+  },
+
+  async getRFQs(): Promise<RFQ[]> {
+    return (await this.getRFQsWithSource()).rfqs;
   },
 
   async getAutomationEvents(status?: string): Promise<AutomationEvent[]> {

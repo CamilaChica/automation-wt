@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { apiService } from '../../services/api';
-import { RFQ } from '../../types';
+import { InternalCommand, RFQ } from '../../types';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import { 
   FileCheck, 
@@ -17,12 +17,52 @@ import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
 
 export const AeroProcurementView: React.FC = () => {
   const [selectedSupplier, setSelectedSupplier] = useState<'A' | 'B' | 'C'>('A');
+  const [selectedRfqId, setSelectedRfqId] = useState('');
   const [rfqs, setRfqs] = useState<RFQ[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [usingFallbackData, setUsingFallbackData] = useState(false);
+  const [commandPending, setCommandPending] = useState<InternalCommand | null>(null);
+
+  const loadRfqs = async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const result = await apiService.getRFQsWithSource();
+      setRfqs(result.rfqs);
+      setUsingFallbackData(result.isFallback);
+      setSelectedRfqId(currentId => result.rfqs.some(rfq => rfq.id === currentId) ? currentId : result.rfqs[0]?.id || '');
+    } catch (error) {
+      setRfqs([]);
+      setUsingFallbackData(false);
+      setLoadError(error instanceof Error ? error.message : 'Unable to load RFQs.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    void apiService.getRFQs().then(setRfqs).catch(() => setRfqs([]));
+    void loadRfqs();
   }, []);
+
+  const selectedRfq = rfqs.find(rfq => rfq.id === selectedRfqId);
+  const actionsBlocked = loading || Boolean(loadError) || usingFallbackData || !selectedRfq || isFailedRfq(selectedRfq);
+
+  const runCommand = async (command: InternalCommand, description: string) => {
+    if (actionsBlocked || commandPending || !selectedRfq) return;
+    if (!window.confirm(`Confirm ${description} for RFQ ${selectedRfq.id}?`)) return;
+    setCommandPending(command);
+    setNotice(null);
+    try {
+      const result = await apiService.executeInternalCommand(command, selectedSupplier);
+      setNotice(result.message);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : `Unable to ${description}.`);
+    } finally {
+      setCommandPending(null);
+    }
+  };
 
   const leadTimeData = [
     { month: 'JAN', volume: 120 },
@@ -36,7 +76,8 @@ export const AeroProcurementView: React.FC = () => {
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
       {notice && <div role="status" className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
-      <FallbackDataBanner />
+      {usingFallbackData && <FallbackDataBanner />}
+      {loadError && <div role="alert" className="flex items-center justify-between rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300"><span>{loadError}</span><button type="button" onClick={() => void loadRfqs()} className="font-bold underline">Retry</button></div>}
       {/* Top Section: Active RFQ Queue & Sourcing Detail */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Active RFQ Queue (6 cols) */}
@@ -46,7 +87,6 @@ export const AeroProcurementView: React.FC = () => {
               <span className="w-2 h-2 rounded-full bg-aog-red animate-pulse" />
               <span>ACTIVE RFQ QUEUE (SLA FOCUSED)</span>
             </h2>
-            <FallbackDataBanner />
           </div>
 
           <div className="overflow-x-auto">
@@ -62,10 +102,11 @@ export const AeroProcurementView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
-                {rfqs.length === 0 && <tr><td colSpan={6} className="py-8 text-center text-slate-400">No active RFQs.</td></tr>}
+                {loading && <tr><td colSpan={6} className="py-8 text-center text-slate-400" role="status">Loading RFQs...</td></tr>}
+                {!loading && !loadError && rfqs.length === 0 && <tr><td colSpan={6} className="py-8 text-center text-slate-400" role="status">No active RFQs.</td></tr>}
                 {rfqs.map((rfq, idx) => {
                   const supplier = (['A', 'B', 'C'] as const)[idx % 3];
-                  return <tr key={rfq.id} tabIndex={0} role="button" onClick={() => setSelectedSupplier(supplier)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedSupplier(supplier); } }} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors focus:outline-none focus-visible:bg-blue-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-aero-blue">
+                  return <tr key={rfq.id} tabIndex={0} role="button" aria-pressed={selectedRfqId === rfq.id} onClick={() => { setSelectedRfqId(rfq.id); setSelectedSupplier(supplier); }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedRfqId(rfq.id); setSelectedSupplier(supplier); } }} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors focus:outline-none focus-visible:bg-blue-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-aero-blue">
                     <td className="py-2.5 text-aero-blue font-bold">{rfq.id}</td>
                     <td className="py-2.5">
                       <div className="font-bold text-slate-900 dark:text-slate-200">{rfq.part_number || 'Pending extraction'}</div>
@@ -99,7 +140,7 @@ export const AeroProcurementView: React.FC = () => {
             <span className="font-mono text-[10px] text-slate-500 dark:text-slate-400">P/N: 32-11-45-01 | SV</span>
           </div>
 
-          {rfqs.some(isFailedRfq) && <div role="alert" className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">Intake Failed - Extraction Error. Retry intake or escalate this RFQ before sourcing.</div>}
+          {isFailedRfq(selectedRfq) && <div role="alert" className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">Intake failed. Sourcing and order actions are disabled. Contact intake operations to arrange retry or escalation.</div>}
           <div className="font-mono text-[11px] text-slate-800 dark:text-slate-300 bg-slate-50 dark:bg-slate-900/80 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
             <span className="text-aero-blue font-bold">PART:</span> Main Landing Gear Actuator | 32-11-45-01 | Condition: SV (Serviceable)
           </div>
@@ -198,17 +239,17 @@ export const AeroProcurementView: React.FC = () => {
 
           {/* Action Buttons */}
           <div className="grid grid-cols-3 gap-2 pt-1 font-display">
-            <button type="button" disabled={rfqs.some(isFailedRfq)} onClick={() => void apiService.executeInternalCommand('generate_quote', selectedSupplier).then(result => setNotice(result.message)).catch(error => setNotice(error instanceof Error ? error.message : 'Unable to generate quote.'))} className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow-sm disabled:cursor-not-allowed disabled:opacity-50">
+            <button type="button" disabled={actionsBlocked || Boolean(commandPending)} aria-busy={commandPending === 'generate_quote'} onClick={() => void runCommand('generate_quote', 'generate a quote')} className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow-sm disabled:cursor-not-allowed disabled:opacity-50">
               <FileText className="w-3.5 h-3.5" />
-              <span>GENERATE SMART QUOTE</span>
+              <span>{commandPending === 'generate_quote' ? 'GENERATING...' : 'GENERATE SMART QUOTE'}</span>
             </button>
-            <button type="button" onClick={() => void apiService.executeInternalCommand('split_po', selectedSupplier).then(result => setNotice(result.message)).catch(error => setNotice(error instanceof Error ? error.message : 'Unable to split PO.'))} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1">
+            <button type="button" disabled={actionsBlocked || Boolean(commandPending)} aria-busy={commandPending === 'split_po'} onClick={() => void runCommand('split_po', 'split the purchase order')} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1 disabled:cursor-not-allowed disabled:opacity-50">
               <Split className="w-3.5 h-3.5" />
-              <span>SPLIT PO</span>
+              <span>{commandPending === 'split_po' ? 'SPLITTING...' : 'SPLIT PO'}</span>
             </button>
-            <button type="button" onClick={() => void apiService.executeInternalCommand('escalate_aog', selectedSupplier).then(result => setNotice(result.message)).catch(error => setNotice(error instanceof Error ? error.message : 'Unable to escalate AOG.'))} className="bg-red-500 hover:bg-red-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow aog-pulse-badge">
+            <button type="button" disabled={actionsBlocked || Boolean(commandPending)} aria-busy={commandPending === 'escalate_aog'} onClick={() => void runCommand('escalate_aog', 'escalate this AOG')} className="bg-red-500 hover:bg-red-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow aog-pulse-badge disabled:cursor-not-allowed disabled:opacity-50">
               <Flame className="w-3.5 h-3.5" />
-              <span>ESCALATE AOG</span>
+              <span>{commandPending === 'escalate_aog' ? 'ESCALATING...' : 'ESCALATE AOG'}</span>
             </button>
           </div>
         </div>
@@ -275,7 +316,7 @@ export const AeroProcurementView: React.FC = () => {
 
         {/* Aero-Logistics Telemetry Map (5 cols) */}
         <div className="lg:col-span-5">
-          <WorldMapTelemetry title="AERO-LOGISTICS TRACKING" subtitle="In-transit flight and ground courier telemetry" />
+          <WorldMapTelemetry title="AERO-LOGISTICS ROUTE DEMO" subtitle="Example air and ground routes. Carrier locations are not live." />
         </div>
       </div>
     </div>

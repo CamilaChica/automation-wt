@@ -26,6 +26,9 @@ export const SalesCommandView: React.FC = () => {
   const [notification, setNotification] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
+  const [usingFallbackData, setUsingFallbackData] = useState(false);
+  const selectedRfq = rfqInbox.find(rfq => rfq.id === selectedRfqId);
+  const selectedRfqFailed = isFailedRfq(selectedRfq);
 
   const loadRfqDetail = async (rfqId: string) => {
     setSelectedRfqId(rfqId);
@@ -45,13 +48,16 @@ export const SalesCommandView: React.FC = () => {
 
   const refreshRfqs = async () => {
     try {
-      const rfqs = await apiService.getRFQs();
+      const result = await apiService.getRFQsWithSource();
+      const rfqs = result.rfqs;
+      setUsingFallbackData(result.isFallback);
       setRfqInbox(rfqs);
       const quoteReadyRfq = rfqs.find(rfq => rfq.status === 'Quoted') || rfqs[0];
       if (quoteReadyRfq) {
         await loadRfqDetail(quoteReadyRfq.id);
       }
     } catch (error) {
+      setUsingFallbackData(false);
       setNotification(error instanceof Error ? error.message : 'Unable to load RFQs.');
     }
   };
@@ -113,12 +119,13 @@ export const SalesCommandView: React.FC = () => {
   };
 
   const handleIssueQuote = async () => {
+    if (!selectedQuoteId || !selectedRfq || selectedRfqFailed || usingFallbackData) {
+      setNotification('Select a live, quote-ready RFQ before issuing a customer quote.');
+      return;
+    }
+    if (!window.confirm(`Issue quote ${selectedQuoteId} to ${selectedRfq.customer_name}?`)) return;
     setIssuing(true);
     try {
-      if (!selectedQuoteId) {
-        setNotification('Select a quote-ready RFQ before issuing a customer quote.');
-        return;
-      }
       await apiService.approveQuote(selectedQuoteId, 'Alex R. (Sales Lead)', [
         { quote_item_id: 'QITEM-01', unit_price: unitPrice }
       ]);
@@ -163,7 +170,7 @@ export const SalesCommandView: React.FC = () => {
           <button type="button" aria-label="Dismiss notification" onClick={() => setNotification(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">✕</button>
         </div>
       )}
-      <FallbackDataBanner />
+      {usingFallbackData && <FallbackDataBanner />}
 
       {detailError && (
         <div role="alert" className="bg-red-50 dark:bg-red-500/20 border border-red-300 dark:border-red-500 text-red-800 dark:text-red-300 p-4 rounded-2xl flex items-center justify-between text-xs font-semibold">
@@ -181,7 +188,6 @@ export const SalesCommandView: React.FC = () => {
               <span className="w-2 h-2 rounded-full bg-aero-blue animate-pulse" />
               <span>GLOBAL RFQ INBOX</span>
             </h2>
-            <FallbackDataBanner />
           </div>
 
           <div className="overflow-x-auto">
@@ -363,11 +369,11 @@ export const SalesCommandView: React.FC = () => {
 
               {/* Action Buttons */}
               <div className="grid grid-cols-2 gap-2 pt-1 font-display">
-                {rfqInbox.some(isFailedRfq) && <div role="alert" className="mb-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">Intake Failed - Extraction Error. Retry intake or escalate before issuing a quote.</div>}
+                {selectedRfqFailed && <div role="alert" className="mb-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">Intake failed. Quote issuance is disabled. Contact intake operations to arrange retry or escalation.</div>}
                 <button
                   onClick={handleIssueQuote}
-                  disabled={issuing || !quoteReady || rfqInbox.some(isFailedRfq)}
-                  aria-busy={issuing || !quoteReady}
+                  disabled={issuing || usingFallbackData || !quoteReady || !selectedRfq || selectedRfqFailed}
+                  aria-busy={issuing}
                   className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1.5 shadow-sm"
                 >
                   <Send className="w-3.5 h-3.5" />
@@ -427,7 +433,7 @@ export const SalesCommandView: React.FC = () => {
           </div>
 
           {/* Real-Time Tracking & Delivery Map */}
-          <WorldMapTelemetry title="REAL-TIME TRACKING" subtitle="In-transit flight telemetry" />
+          <WorldMapTelemetry title="SHIPMENT ROUTE DEMO" subtitle="Example flight route. Carrier location is not live." />
         </div>
       </div>
     </div>

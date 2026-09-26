@@ -23,7 +23,11 @@ export const WorkflowStepper: React.FC<WorkflowStepperProps> = ({
 
   return (
     <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 shadow-sm select-none">
-      <div className="flex items-center justify-between overflow-x-auto font-mono text-[10px] space-x-1">
+      <div
+        aria-label="RFQ workflow steps"
+        className="flex w-full items-center overflow-x-auto font-mono text-[10px]"
+      >
+        <div className="flex w-max min-w-max flex-nowrap items-center gap-1">
         {steps.map((step, idx) => {
           const isComplete = idx < currentStepIndex;
           const isCurrent = idx === currentStepIndex;
@@ -35,7 +39,7 @@ export const WorkflowStepper: React.FC<WorkflowStepperProps> = ({
                 onClick={() => onSelectStep?.(idx)}
                 disabled={!onSelectStep}
                 aria-current={isCurrent ? 'step' : undefined}
-                className={`flex items-center space-x-1.5 ${onSelectStep ? 'cursor-pointer' : 'cursor-default'} py-1.5 px-3 rounded-xl transition-all whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${
+                className={`flex shrink-0 items-center space-x-1.5 ${onSelectStep ? 'cursor-pointer' : 'cursor-default'} py-1.5 px-3 rounded-xl transition-all whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${
                   isCurrent
                     ? 'bg-aero-blue text-white font-bold shadow-md shadow-aero-blue/20 ring-1 ring-aero-blue'
                     : isComplete
@@ -56,11 +60,12 @@ export const WorkflowStepper: React.FC<WorkflowStepperProps> = ({
               </button>
 
               {idx < steps.length - 1 && (
-                <ChevronRight className="w-3 h-3 text-slate-300 dark:text-slate-700 shrink-0" />
+                <ChevronRight aria-hidden="true" className="w-3 h-3 shrink-0 text-slate-300 dark:text-slate-700" />
               )}
             </React.Fragment>
           );
         })}
+        </div>
       </div>
     </div>
   );

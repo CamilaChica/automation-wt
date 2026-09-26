@@ -1,6 +1,12 @@
 import React from 'react';
-import { Plane, MapPin, CheckCircle, Clock } from 'lucide-react';
-import { FallbackDataBanner } from './FallbackDataBanner';
+import { CircleMarker, MapContainer, Polyline, TileLayer, Tooltip } from 'react-leaflet';
+import { LatLngBounds, type LatLngExpression } from 'leaflet';
+import { MapPin, CheckCircle, Clock } from 'lucide-react';
+
+const mia: LatLngExpression = [25.7959, -80.287];
+const dfw: LatLngExpression = [32.8998, -97.0403];
+const fra: LatLngExpression = [50.0379, 8.5622];
+const routeBounds = new LatLngBounds([25.7959, -97.0403], [50.0379, 8.5622]);
 
 interface WorldMapTelemetryProps {
   title?: string;
@@ -9,112 +15,69 @@ interface WorldMapTelemetryProps {
 }
 
 export const WorldMapTelemetry: React.FC<WorldMapTelemetryProps> = ({
-  title = "ORDER TELEMETRY & TRACING",
-  subtitle = "In-Transit orders in a next-mask-mode interactive live tracking.",
+  title = 'DEMO ROUTE TRACKING',
+  subtitle = 'Example routes. Carrier locations are not live.',
   orderId = "WT-29471"
 }) => {
+  const [tilesUnavailable, setTilesUnavailable] = React.useState(false);
+
   return (
     <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex flex-col justify-between shadow-sm relative overflow-hidden transition-colors">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <h3 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase flex items-center space-x-2">
-            <span className="w-2 h-2 rounded-full bg-aero-blue animate-ping" />
-            <span>{title}</span>
+      <div className="mb-3 flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h3 className="flex min-w-0 items-center space-x-2 font-display text-xs font-bold tracking-wider text-slate-900 dark:text-slate-100">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+            <span className="min-w-0 break-words uppercase">{title}</span>
           </h3>
-          <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+          <p className="max-w-full break-words text-[11px] font-mono text-slate-500 dark:text-slate-400">
             {subtitle}
           </p>
         </div>
-        <div className="flex items-center gap-2"><FallbackDataBanner /><span className="px-2.5 py-1 rounded-full bg-blue-50 dark:bg-aero-blue/10 border border-blue-200 dark:border-aero-blue/30 text-aero-blue font-mono text-[10px] font-bold">ORDER: {orderId}</span></div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <span className="inline-flex items-center whitespace-nowrap rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 font-mono text-[10px] font-bold text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">DEMO ROUTE</span>
+          <span className="inline-flex items-center whitespace-nowrap rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 font-mono text-[10px] font-bold text-aero-blue dark:border-aero-blue/30 dark:bg-aero-blue/10">ORDER: {orderId}</span>
+        </div>
       </div>
 
-      {/* SVG Map Canvas */}
-      <div className="relative w-full h-48 bg-slate-50 dark:bg-slate-950/80 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden flex items-center justify-center">
-        {/* World Map SVG outlines */}
-        <svg viewBox="0 0 1000 450" className="w-full h-full opacity-60 dark:opacity-30 stroke-slate-300 dark:stroke-slate-600 fill-slate-200 dark:fill-slate-800/40">
-          {/* Continents simplified SVG paths */}
-          {/* North America */}
-          <path d="M150,90 Q220,60 300,100 T350,220 T200,280 T100,200 Z" />
-          {/* South America */}
-          <path d="M300,290 Q340,320 320,400 T260,420 T280,330 Z" />
-          {/* Europe & Asia */}
-          <path d="M500,80 Q650,50 850,90 T900,240 T700,260 T550,180 Z" />
-          {/* Africa */}
-          <path d="M480,200 Q560,220 580,340 T500,380 T460,250 Z" />
-          {/* Australia */}
-          <path d="M800,320 Q880,300 890,380 T810,390 Z" />
-        </svg>
-
-        {/* Flight Trajectory Arcs */}
-        <svg viewBox="0 0 1000 450" className="absolute inset-0 w-full h-full">
-          <defs>
-            <linearGradient id="flightArc" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="#006BFF" stopOpacity="0.3" />
-              <stop offset="50%" stopColor="#006BFF" stopOpacity="1" />
-              <stop offset="100%" stopColor="#10B981" stopOpacity="0.9" />
-            </linearGradient>
-          </defs>
-          {/* Flight 1 Arc MIA -> DFW */}
-          <path
-            d="M 240,210 Q 210,140 180,180"
-            fill="none"
-            stroke="url(#flightArc)"
-            strokeWidth="2.5"
-            strokeDasharray="6 4"
-          />
-          {/* Flight 2 Arc MIA -> FRA */}
-          <path
-            d="M 240,210 Q 380,80 520,130"
-            fill="none"
-            stroke="url(#flightArc)"
-            strokeWidth="3"
-          />
-          {/* Flight 3 Arc FRA -> NFO Delivery */}
-          <path
-            d="M 520,130 Q 680,110 820,200"
-            fill="none"
-            stroke="url(#flightArc)"
-            strokeWidth="2"
-            strokeDasharray="4 4"
-          />
-        </svg>
-
-        {/* Live Nodes / Airports */}
-        {/* MIA */}
-        <div className="absolute left-[24%] top-[46%] flex flex-col items-center group cursor-pointer">
-          <div className="w-3.5 h-3.5 rounded-full bg-aero-blue animate-ping absolute" />
-          <div className="w-3.5 h-3.5 rounded-full bg-aero-blue border-2 border-white flex items-center justify-center shadow-md" />
-          <span className="font-mono text-[9px] font-bold text-slate-900 dark:text-white bg-white/95 dark:bg-slate-900/90 px-1.5 py-0.5 rounded-md border border-slate-200 dark:border-slate-700 shadow-sm mt-1">
-            MIA (ORIGIN)
-          </span>
-        </div>
-
-        {/* Flying Plane 1 */}
-        <div className="absolute left-[38%] top-[24%] -rotate-12 animate-pulse text-aero-blue">
-          <Plane className="w-5 h-5 drop-shadow-md" />
-        </div>
-
-        {/* DFW */}
-        <div className="absolute left-[18%] top-[40%] flex flex-col items-center">
-          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 border border-white" />
-          <span className="font-mono text-[9px] font-semibold text-slate-700 dark:text-slate-300 bg-white/90 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 px-1 py-0.5 rounded shadow-sm mt-1">
-            DFW
-          </span>
-        </div>
-
-        {/* FRA */}
-        <div className="absolute left-[52%] top-[28%] flex flex-col items-center">
-          <div className="w-3 h-3 rounded-full bg-emerald-500 border border-white" />
-          <span className="font-mono text-[9px] font-bold text-emerald-700 dark:text-emerald-400 bg-white/95 dark:bg-slate-900/90 px-1.5 py-0.5 rounded border border-emerald-200 dark:border-emerald-500/40 shadow-sm mt-1">
-            FRA (SUPPLIER B)
-          </span>
-        </div>
-
-        {/* Flying Plane 2 */}
-        <div className="absolute left-[66%] top-[30%] rotate-45 text-emerald-500">
-          <Plane className="w-4 h-4 drop-shadow-md" />
-        </div>
+      <div className="relative h-48 w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-100 dark:border-slate-800 dark:bg-slate-950/80">
+        {tilesUnavailable ? (
+          <div role="status" className="flex h-full flex-col justify-center gap-2 p-4 text-xs text-slate-700 dark:text-slate-200">
+            <strong>Map tiles unavailable. Demo routes:</strong>
+            <span>MIA, Miami to DFW, Dallas-Fort Worth</span>
+            <span>MIA, Miami to FRA, Frankfurt</span>
+          </div>
+        ) : (
+          <MapContainer
+            bounds={routeBounds}
+            boundsOptions={{ padding: [20, 20] }}
+            className="h-full w-full"
+            attributionControl={false}
+            scrollWheelZoom={false}
+            zoomControl={false}
+          >
+            <TileLayer
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              eventHandlers={{ tileerror: () => setTilesUnavailable(true) }}
+            />
+            <Polyline positions={[mia, dfw]} pathOptions={{ color: '#006BFF', weight: 3, dashArray: '6 5' }} />
+            <Polyline positions={[mia, fra]} pathOptions={{ color: '#10B981', weight: 3 }} />
+            {[
+              { position: mia, code: 'MIA', name: 'Miami International Airport', color: '#006BFF' },
+              { position: dfw, code: 'DFW', name: 'Dallas Fort Worth International Airport', color: '#10B981' },
+              { position: fra, code: 'FRA', name: 'Frankfurt Airport', color: '#10B981' },
+            ].map(airport => (
+              <CircleMarker key={airport.code} center={airport.position} radius={6} pathOptions={{ color: '#fff', weight: 2, fillColor: airport.color, fillOpacity: 1 }}>
+                <Tooltip>{airport.code}: {airport.name}</Tooltip>
+              </CircleMarker>
+            ))}
+          </MapContainer>
+        )}
+      </div>
+      <div className="flex min-h-11 flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500 dark:text-slate-400">
+        <p>Demo route geometry only; carrier locations are not live.</p>
+        <a className="inline-flex min-h-11 items-center underline underline-offset-2" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">
+          Map data: OpenStreetMap contributors
+        </a>
       </div>
 
       {/* Courier Timeline Stepper Bar */}
@@ -122,7 +85,7 @@ export const WorldMapTelemetry: React.FC<WorldMapTelemetryProps> = ({
         <div className="flex flex-col text-left p-2 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800">
           <div className="flex items-center space-x-1 text-emerald-600 dark:text-emerald-400 font-mono text-[10px] font-bold">
             <CheckCircle className="w-3 h-3" />
-            <span>PICKUP COMPLETED</span>
+            <span>SAMPLE PICKUP COMPLETED</span>
           </div>
           <span className="text-[10px] text-slate-500 truncate">WAREHOUSE DOCK</span>
           <span className="text-[11px] font-mono text-slate-900 dark:text-slate-200 font-bold truncate">FEDEX AVIATION</span>
@@ -131,7 +94,7 @@ export const WorldMapTelemetry: React.FC<WorldMapTelemetryProps> = ({
         <div className="flex flex-col text-left p-2 rounded-xl bg-blue-50/60 dark:bg-slate-900/40 border border-blue-100 dark:border-slate-800">
           <div className="flex items-center space-x-1 text-aero-blue font-mono text-[10px] font-bold">
             <Clock className="w-3 h-3 animate-spin" />
-            <span>IN TRANSIT</span>
+            <span>SAMPLE IN TRANSIT</span>
           </div>
           <span className="text-[10px] text-slate-500 truncate">AIR FREIGHT</span>
           <span className="text-[11px] font-mono text-slate-900 dark:text-slate-200 font-bold truncate">FDX AIR CARGO</span>
@@ -140,7 +103,7 @@ export const WorldMapTelemetry: React.FC<WorldMapTelemetryProps> = ({
         <div className="flex flex-col text-left p-2 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800">
           <div className="flex items-center space-x-1 text-slate-600 dark:text-slate-400 font-mono text-[10px] font-semibold">
             <MapPin className="w-3 h-3 text-slate-400" />
-            <span>CUSTOMS / DOCS</span>
+            <span>SAMPLE CUSTOMS / DOCS</span>
           </div>
           <span className="text-[10px] text-slate-500 truncate">FAA 8130-3 ATTACHED</span>
           <span className="text-[11px] font-mono text-slate-900 dark:text-slate-200 font-bold truncate">CLEARED AIRSIDE</span>
@@ -149,7 +112,7 @@ export const WorldMapTelemetry: React.FC<WorldMapTelemetryProps> = ({
         <div className="flex flex-col text-left p-2 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800">
           <div className="flex items-center space-x-1 text-amber-600 dark:text-amber-400 font-mono text-[10px] font-bold">
             <Clock className="w-3 h-3" />
-            <span>ESTIMATED ARRIVAL</span>
+            <span>SAMPLE ESTIMATED ARRIVAL</span>
           </div>
           <span className="text-[10px] text-slate-500 truncate">TOUCHDOWN</span>
           <span className="text-[11px] font-mono text-slate-900 dark:text-slate-200 font-bold truncate">11:20 CDT (HOT-SHOT)</span>

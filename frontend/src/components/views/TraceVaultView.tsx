@@ -24,12 +24,20 @@ export const TraceVaultView: React.FC = () => {
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [decisionLoading, setDecisionLoading] = useState(false);
+  const [usingFallbackData, setUsingFallbackData] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const selectedRfq = rfqs.find(rfq => rfq.id === activeTab);
+  const actionsBlocked = loading || decisionLoading || usingFallbackData || !selectedRfq || isFailedRfq(selectedRfq);
 
   const recordDecision = async (decision: 'certify' | 'reject' | 'rescan' | 'freeze') => {
-    if (!activeTab) {
-      setNotice('Select an RFQ before recording a trace decision.');
+    if (!selectedRfq || isFailedRfq(selectedRfq) || usingFallbackData) {
+      setNotice(isFailedRfq(selectedRfq)
+        ? 'Intake failed. Trace decisions are disabled. Contact intake operations to arrange retry or escalation.'
+        : 'Select a live RFQ before recording a trace decision.');
       return;
     }
+    const decisionLabel = decision === 'freeze' ? 'place a hard freeze on' : `${decision} trace documents for`;
+    if (!window.confirm(`Confirm ${decisionLabel} RFQ ${activeTab}?`)) return;
     setDecisionLoading(true);
     try {
       await apiService.recordTraceDecision(activeTab, decision);
@@ -45,13 +53,16 @@ export const TraceVaultView: React.FC = () => {
 
   const loadRfqs = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
-      const items = await apiService.getRFQs();
-      setRfqs(items);
-      if (items[0]) setActiveTab(items[0].id);
+      const result = await apiService.getRFQsWithSource();
+      setRfqs(result.rfqs);
+      setUsingFallbackData(result.isFallback);
+      setActiveTab(currentId => result.rfqs.some(rfq => rfq.id === currentId) ? currentId : result.rfqs[0]?.id || '');
       setNotice(null);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Unable to load trace records.');
+      setUsingFallbackData(false);
+      setLoadError(error instanceof Error ? error.message : 'Unable to load trace records.');
     } finally {
       setLoading(false);
     }
@@ -61,8 +72,9 @@ export const TraceVaultView: React.FC = () => {
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
-      {notice && <div role="alert" aria-live="assertive" className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700"><span>{notice}</span><button type="button" aria-label="Retry loading trace records" onClick={() => void loadRfqs()} className="font-bold underline focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">Retry</button></div>}
-      <FallbackDataBanner />
+      {loadError && <div role="alert" className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700"><span>{loadError}</span><button type="button" aria-label="Retry loading trace records" onClick={() => void loadRfqs()} className="font-bold underline focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">Retry</button></div>}
+      {notice && <div role="status" aria-live="polite" className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
+      {usingFallbackData && <FallbackDataBanner />}
       {/* Top Grid: Pipeline & Active Vault & Document Viewer */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Top (4 cols): DOCUMENTATION STATUS PIPELINE & ACTIVE DOCUMENT VAULT */}
@@ -164,7 +176,7 @@ export const TraceVaultView: React.FC = () => {
         {/* Right Top (8 cols): DOCUMENT REVIEW & VERIFICATION TERMINAL */}
         <div className="lg:col-span-8 bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between">
           <div>
-            {rfqs.some(isFailedRfq) && <div role="alert" className="mb-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">Intake Failed - Extraction Error. Retry intake or escalate before certifying documents.</div>}
+            {isFailedRfq(selectedRfq) && <div role="alert" className="mb-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">Intake failed. Trace decisions are disabled. Contact intake operations to arrange retry or escalation.</div>}
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
               <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase flex items-center space-x-2">
                 <FileSearch className="w-4 h-4 text-aero-blue" />
@@ -244,7 +256,7 @@ export const TraceVaultView: React.FC = () => {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 font-display pt-2">
             <button
               type="button"
-              disabled={decisionLoading}
+              disabled={actionsBlocked}
               onClick={() => void recordDecision('certify')}
               className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 text-xs"
             >
@@ -253,20 +265,20 @@ export const TraceVaultView: React.FC = () => {
             </button>
             <button
               type="button"
-              disabled={decisionLoading}
+              disabled={actionsBlocked}
               onClick={() => void recordDecision('reject')}
               className="bg-red-500 hover:bg-red-600 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-red-500/20 flex items-center justify-center space-x-2 text-xs"
             >
               <XCircle className="w-4 h-4" />
               <span>REJECT DOC</span>
             </button>
-            <button type="button" disabled={decisionLoading} onClick={() => void recordDecision('rescan')} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 text-xs">
+            <button type="button" disabled={actionsBlocked} onClick={() => void recordDecision('rescan')} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 text-xs disabled:cursor-not-allowed disabled:opacity-50">
               <FileSearch className="w-4 h-4" />
               <span>REQUEST RE-SCAN</span>
             </button>
             <button
               type="button"
-              disabled={decisionLoading}
+              disabled={actionsBlocked}
               onClick={() => void recordDecision('freeze')}
               className="bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 px-4 rounded-xl border border-red-500/60 flex items-center justify-center space-x-2 text-xs"
             >

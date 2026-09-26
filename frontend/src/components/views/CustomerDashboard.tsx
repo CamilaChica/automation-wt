@@ -3,7 +3,9 @@ import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { WorkflowStepper } from '../common/WorkflowStepper';
 import { apiService } from '../../services/api';
 import { SimulatedDataBanner } from '../common/SimulatedDataBanner';
+import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { RFQ } from '../../types';
+import { isFailedRfq } from '../../utils/rfqState';
 import { 
   Send, 
   CheckCircle, 
@@ -56,6 +58,7 @@ export const CustomerDashboard: React.FC = () => {
   const [activeRfqs, setActiveRfqs] = useState<RFQ[]>([]);
   const [selectedRfqId, setSelectedRfqId] = useState('');
   const [loadingRfqs, setLoadingRfqs] = useState(true);
+  const [usingFallbackData, setUsingFallbackData] = useState(false);
   const [approving, setApproving] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'info' | 'error'; message: string } | null>(null);
   const [selectedOption, setSelectedOption] = useState<'A' | 'B' | 'C'>('A');
@@ -76,14 +79,18 @@ export const CustomerDashboard: React.FC = () => {
     raw_text: '',
     created_at: new Date(0).toISOString()
   };
+  const selectedRfqFailed = isFailedRfq(activeRfqs.find(rfq => rfq.id === selectedRfqId));
 
   const refreshRfqs = async () => {
     setLoadingRfqs(true);
     try {
-      const rfqs = await apiService.getRFQs();
+      const result = await apiService.getRFQsWithSource();
+      const rfqs = result.rfqs;
+      setUsingFallbackData(result.isFallback);
       setActiveRfqs(rfqs);
       setSelectedRfqId(currentId => rfqs.some(rfq => rfq.id === currentId) ? currentId : rfqs[0]?.id || '');
     } catch (error) {
+      setUsingFallbackData(false);
       setNotification({ type: 'error', message: error instanceof Error ? error.message : 'Unable to load your RFQs. Please retry.' });
     } finally {
       setLoadingRfqs(false);
@@ -150,6 +157,10 @@ export const CustomerDashboard: React.FC = () => {
   };
 
   const handleApproveQuote = async () => {
+    if (usingFallbackData || selectedRfqFailed) {
+      setNotification({ type: 'error', message: selectedRfqFailed ? 'Intake failed. Approval is disabled; contact intake operations.' : 'Quote approval is disabled while sample data is displayed.' });
+      return;
+    }
     setApproving(true);
     try {
       await apiService.submitPurchaseOrder(
@@ -176,6 +187,7 @@ export const CustomerDashboard: React.FC = () => {
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans">
       <SimulatedDataBanner label="SIMULATED CUSTOMER METRICS AND SOURCING OPTIONS" />
+      {usingFallbackData && <FallbackDataBanner />}
       {/* 1. Client Header & Profile Card */}
       <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm transition-all">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -184,14 +196,14 @@ export const CustomerDashboard: React.FC = () => {
               GA
             </div>
             <div>
-              <div className="flex items-center space-x-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <h1 className="text-xl font-display font-bold text-slate-900 dark:text-white">
                   GLOBAL AIRLINES
                 </h1>
-                <span className="bg-blue-50 dark:bg-blue-950/40 text-aero-blue border border-blue-200 dark:border-blue-800 text-[11px] font-mono font-bold px-2 py-0.5 rounded-full">
+                <span className="inline-flex shrink-0 items-center whitespace-nowrap leading-4 bg-blue-50 dark:bg-blue-950/40 text-aero-blue border border-blue-200 dark:border-blue-800 text-[11px] font-mono font-bold px-2 py-0.5 rounded-full">
                   MRO FLEET OPS
                 </span>
-                <span className="bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 text-[11px] font-mono font-bold px-2 py-0.5 rounded-full flex items-center space-x-1">
+                <span className="inline-flex shrink-0 items-center space-x-1 whitespace-nowrap leading-4 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 text-[11px] font-mono font-bold px-2 py-0.5 rounded-full">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                   <span>VIP GOLD TIER</span>
                 </span>
@@ -268,11 +280,12 @@ export const CustomerDashboard: React.FC = () => {
 
       {/* 3. Client Sub-Navigation Bar (Light & Easy to Navigate) */}
       <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-1">
-        <nav className="flex space-x-2 sm:space-x-4 overflow-x-auto">
+        <nav aria-label="Customer dashboard" className="w-full min-w-0 overflow-x-auto">
+          <div className="flex w-max min-w-max flex-nowrap items-center gap-2 sm:gap-4">
           {[
             { id: 'quotations', label: 'Quotations & Approvals', icon: FileText, badge: '2 Ready' },
             { id: 'new-rfq', label: 'Submit New RFQ', icon: Send, badge: null },
-            { id: 'tracking', label: 'Live Telemetry & Tracking', icon: Plane, badge: '1 Live' },
+            { id: 'tracking', label: 'Shipment Route Demo', icon: Plane, badge: 'Sample' },
             { id: 'trace-vault', label: 'Airworthiness Trace Vault', icon: ShieldCheck, badge: '4 Certs' },
             { id: 'analytics', label: 'Spend & Fleet Analytics', icon: TrendingUp, badge: null }
           ].map((tab) => {
@@ -282,7 +295,7 @@ export const CustomerDashboard: React.FC = () => {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as ClientTab)}
-                className={`flex items-center space-x-2 py-3 px-3.5 border-b-2 font-display text-xs font-bold transition-all whitespace-nowrap ${
+                className={`flex shrink-0 items-center space-x-2 py-3 px-3.5 border-b-2 font-display text-xs font-bold transition-all whitespace-nowrap ${
                   isActive
                     ? 'border-aero-blue text-aero-blue bg-blue-50/50 dark:bg-blue-950/20 rounded-t-lg'
                     : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:border-slate-300'
@@ -302,6 +315,7 @@ export const CustomerDashboard: React.FC = () => {
               </button>
             );
           })}
+          </div>
         </nav>
       </div>
 
@@ -553,7 +567,8 @@ export const CustomerDashboard: React.FC = () => {
                 <div className="mt-4 flex flex-col sm:flex-row items-center gap-3">
                   <button
                     onClick={() => setIsApproveModalOpen(true)}
-                    className="w-full sm:flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-display font-bold py-2.5 px-4 rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 transition-all transform active:scale-95"
+                    disabled={loadingRfqs || usingFallbackData || selectedRfqFailed}
+                    className="w-full sm:flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-display font-bold py-2.5 px-4 rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 transition-all transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <CheckCircle2 className="w-4 h-4" />
                     <span>APPROVE & ISSUE PURCHASE ORDER</span>
@@ -614,7 +629,7 @@ export const CustomerDashboard: React.FC = () => {
                   onClick={() => applyPreset('routine-overhaul')}
                   className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 hover:bg-slate-100 text-left transition-all"
                 >
-                  <div className="font-bold text-slate-800 dark:text-slate-200 font-mono text-[11px]">⚙️ Routine OH</div>
+                  <div className="font-bold text-slate-800 dark:text-slate-200 font-mono text-[11px]">Routine OH</div>
                   <div className="text-[10px] text-slate-500 font-mono">P/N 32-11-45-01 (Qty 2)</div>
                 </button>
 
@@ -623,7 +638,7 @@ export const CustomerDashboard: React.FC = () => {
                   onClick={() => applyPreset('hydraulic-pump')}
                   className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 hover:bg-slate-100 text-left transition-all"
                 >
-                  <div className="font-bold text-slate-800 dark:text-slate-200 font-mono text-[11px]">🛢️ Hydraulic Pump</div>
+                  <div className="font-bold text-slate-800 dark:text-slate-200 font-mono text-[11px]">Hydraulic Pump</div>
                   <div className="text-[10px] text-slate-500 font-mono">P/N 747-1011-00 (B777)</div>
                 </button>
 
@@ -632,7 +647,7 @@ export const CustomerDashboard: React.FC = () => {
                   onClick={() => applyPreset('avionics')}
                   className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 hover:bg-slate-100 text-left transition-all"
                 >
-                  <div className="font-bold text-slate-800 dark:text-slate-200 font-mono text-[11px]">📦 Avionics FMGC</div>
+                  <div className="font-bold text-slate-800 dark:text-slate-200 font-mono text-[11px]">Avionics FMGC</div>
                   <div className="text-[10px] text-slate-500 font-mono">P/N NAV-4402-A (A320)</div>
                 </button>
               </div>
@@ -827,8 +842,8 @@ export const CustomerDashboard: React.FC = () => {
                     className="w-full bg-white dark:bg-slate-900 border border-red-300 dark:border-red-900/60 rounded-xl px-3 py-2 font-mono text-xs font-bold text-aog-red focus:ring-2 focus:ring-red-200 focus:outline-none"
                   >
                     <option value="AOG">🚨 AOG (4h Target SLA)</option>
-                    <option value="Critical">⚠️ Critical (24h SLA)</option>
-                    <option value="Routine">📦 Routine (48h Standard)</option>
+                    <option value="Critical">Critical (24h SLA)</option>
+                    <option value="Routine">Routine (48h Standard)</option>
                   </select>
                 </div>
               </div>
@@ -904,8 +919,8 @@ export const CustomerDashboard: React.FC = () => {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <div className="lg:col-span-8">
               <WorldMapTelemetry 
-                title="GLOBAL SHIPMENT TELEMETRY (LIVE)" 
-                subtitle="Real-time flight tracking for active MRO parts in transit." 
+                title="GLOBAL SHIPMENT ROUTE DEMO"
+                subtitle="Example routes for MRO parts. Carrier locations are not live."
                 orderId="WT-29471" 
               />
             </div>
@@ -914,10 +929,10 @@ export const CustomerDashboard: React.FC = () => {
               <div>
                 <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 mb-3">
                   <h3 className="font-display font-bold text-sm text-slate-900 dark:text-white">
-                    LIVE FLIGHT STATUS
+                    DEMO FLIGHT STATUS
                   </h3>
                   <span className="bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 font-mono text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
-                    AIRBORNE
+                    SAMPLE
                   </span>
                 </div>
 

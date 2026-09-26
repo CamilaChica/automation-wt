@@ -65,24 +65,24 @@ export const TopBar: React.FC<TopBarProps> = ({
   };
 
   return (
-    <header className="min-h-14 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-card-dark px-2 md:px-4 py-2 flex items-center justify-between gap-2 text-xs font-sans select-none transition-colors overflow-hidden">
+    <header className="min-h-14 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-card-dark px-2 md:px-4 py-2 flex items-center justify-between gap-2 text-xs font-sans select-none transition-colors">
       {/* Brand & Page Title */}
-      <div className="flex min-w-0 items-center space-x-2 md:space-x-3">
+      <div className="flex min-w-0 flex-1 items-center space-x-2 md:space-x-3">
         <button type="button" aria-label="Open navigation menu" onClick={onOpenSidebar} className="min-h-11 min-w-11 rounded-xl border border-slate-200 bg-slate-100 p-2 dark:border-slate-700 dark:bg-slate-800 lg:hidden">
           <Menu className="mx-auto h-5 w-5" aria-hidden="true" />
         </button>
         <a
           href="/"
           aria-label="Winged Tycoons Executive Dashboard"
-          className="flex items-center space-x-2 bg-slate-100 dark:bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700/80 hover:border-aero-blue transition-colors"
+          className="flex shrink-0 items-center space-x-2 bg-slate-100 dark:bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700/80 hover:border-aero-blue transition-colors"
         >
           <BrandMark compact />
           <span className="hidden font-display font-bold text-sm tracking-wider text-slate-900 dark:text-slate-100 sm:inline">
             WINGED TYCOONS
           </span>
         </a>
-        <div className="h-4 w-px bg-slate-300 dark:bg-slate-700" />
-        <span className="hidden sm:inline font-display font-semibold text-slate-700 dark:text-slate-300 tracking-wide uppercase truncate max-w-xl">
+        <div className="h-4 w-px shrink-0 bg-slate-300 dark:bg-slate-700" />
+        <span className="hidden min-w-0 flex-1 truncate font-display font-semibold text-slate-700 dark:text-slate-300 tracking-wide uppercase sm:inline">
           {getViewTitle()}
         </span>
       </div>
@@ -129,7 +129,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button
           onClick={onOpenAuditLog}
           aria-label="Open agent logs"
-          className="p-2 md:px-3 md:py-1.5 rounded-xl border border-blue-200 dark:border-aero-blue/40 bg-blue-50 dark:bg-aero-blue/10 text-aero-blue hover:bg-aero-blue hover:text-white font-mono text-[10px] font-bold flex items-center space-x-1.5 transition-all shadow-sm"
+          className="flex min-h-11 min-w-11 shrink-0 items-center justify-center space-x-1.5 rounded-xl border border-blue-200 bg-blue-50 p-2 font-mono text-[10px] font-bold text-aero-blue shadow-sm transition-all hover:bg-aero-blue hover:text-white dark:border-aero-blue/40 dark:bg-aero-blue/10 md:px-3 md:py-1.5"
         >
           <Bot className="w-3.5 h-3.5" />
           <span className="hidden md:inline">AGENT LOGS</span>
@@ -140,7 +140,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           onClick={onToggleTheme}
           aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
           title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} Mode`}
-          className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800/80 text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:border-aero-blue transition-all"
+          className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 p-2 text-slate-700 transition-all hover:border-aero-blue hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-300 dark:hover:text-white"
         >
           {theme === 'dark' ? (
             <Sun className="w-4 h-4 text-amber-400" />
@@ -154,11 +154,11 @@ export const TopBar: React.FC<TopBarProps> = ({
           <button
             onClick={onOpenAuditLog}
             aria-label="Open operational notifications"
-            className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800/80 text-slate-700 dark:text-slate-300 hover:text-slate-900 hover:border-aero-blue transition-all"
+            className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 p-2 text-slate-700 transition-all hover:border-aero-blue hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-300"
           >
             <Bell className="w-4 h-4" />
           </button>
-          <span className="absolute -top-1 -right-1 w-4 h-4 bg-aero-blue text-white font-mono text-[9px] font-bold rounded-full flex items-center justify-center shadow">
+          <span className="absolute -right-1 -top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-aero-blue font-mono text-[9px] font-bold leading-none text-white shadow">
             4
           </span>
         </div>
