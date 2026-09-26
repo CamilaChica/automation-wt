@@ -38,13 +38,13 @@
 - [ ] Submit one controlled RFQ from an authorized test customer and verify the record, quote, outbox, and communication rows in PostgreSQL.
 - [ ] Capture message ID, sender, RFQ ID, quote ID, outbox ID, communication ID, recipient, and final `transmission_status=SENT`.
 - [ ] Verify the customer mailbox actually receives the quote. The local Playwright test uses mocked APIs and proves UI behavior only.
+- [ ] After disposable PostgreSQL is reachable, run the customer portal flow against the real local API/database and verify persisted RFQ plus outbox rows before production smoke testing.
 - [ ] Submit one supplier reply, replay the same Graph message, and verify only one business effect is committed.
 - [ ] Verify self-sent sales messages are ignored and unreadable supplier PDFs receive at most one same-thread clarification.
 
 ## Validation and Release
 
 - [ ] Run `alembic heads`, `alembic history`, and `alembic upgrade head` against disposable PostgreSQL; then run backend PostgreSQL integration and concurrency suites.
-- [ ] Run frontend unit tests, lint, build, and the customer RFQ Playwright flow.
 - [ ] Resolve or explicitly waive the unrelated full-suite failure `tests/agents/test_agent_harness.py::test_agent_schema_contract_and_metadata[RFQIntakeAgent]` (empty `permissions`).
 - [ ] Deploy a pinned reviewed commit, repeat readiness and authenticated mailbox checks, and retain evidence.
 - [ ] Resume workers gradually and monitor duplicate messages, outbox failures, stuck workflows, and actual delivery before signing off.
