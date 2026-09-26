@@ -11,6 +11,7 @@ import {
   TrendingUp, 
   LogOut,
   FlaskConical,
+  Headphones,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -62,6 +63,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView, isM
       id: 'swarm-simulation' as ViewMode,
       label: 'Swarm Runner',
       icon: FlaskConical,
+      badge: null
+    },
+    {
+      id: 'voice-service' as ViewMode,
+      label: 'Voice Service',
+      icon: Headphones,
       badge: null
     }
   ];

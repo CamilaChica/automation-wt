@@ -11,6 +11,8 @@ import { FulfillmentHubView } from './components/views/FulfillmentHubView';
 import { SalesCommandView } from './components/views/SalesCommandView';
 import { CustomerPortal } from './components/views/CustomerPortal';
 import { SwarmSimulationView } from './components/views/SwarmSimulationView';
+import { VoiceServiceView } from './components/views/VoiceServiceView';
+import { FloatingQa } from './components/common/FloatingQa';
 import { AuthScreen } from './components/common/AuthScreen';
 import { apiService } from './services/api';
 import { getThemePreference, getViewPreference, setThemePreference, setViewPreference } from './services/preferences';
@@ -170,6 +172,8 @@ const InternalApp: React.FC = () => {
         return <SalesCommandView />;
       case 'swarm-simulation':
         return <SwarmSimulationView />;
+      case 'voice-service':
+        return <VoiceServiceView />;
       default:
         return <CustomerDashboard />;
     }
@@ -222,6 +226,7 @@ const InternalApp: React.FC = () => {
         rfqId={auditRfqId || 'Live operations'}
         isLiveAuditUnavailable={isLiveAuditUnavailable}
       />
+      <FloatingQa audience="internal" />
     </div>
   );
 };

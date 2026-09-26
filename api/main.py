@@ -1,13 +1,16 @@
 import os
+import hashlib
 import secrets
 import uuid
 import json
 import logging
 import time
 import re
+import asyncio
 from pathlib import Path
 from collections import defaultdict, deque
 from typing import List, Dict, Any, Optional, Literal
+import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, File, Request, Response, UploadFile
 from fastapi.responses import FileResponse
@@ -37,6 +40,14 @@ from services.async_database import create_engine_from_environment, search_suppl
 from services.export_control_service import export_control_service
 from services.attachment_service import AttachmentService
 from services.swarm_runtime import swarm_runtime
+from services.voice_service import (
+    check_inventory_availability,
+    get_customer_order_status,
+    get_order_status,
+    get_voice_dashboard,
+    log_customer_concern,
+)
+from services.voice_media import initialize_voice_media
 from api.auth import current_user, init_auth_db, request_otp, require_roles, verify_otp, ROLE_CUSTOMER
 
 app = FastAPI(
@@ -72,6 +83,10 @@ _RATE_LIMIT_RULES = {
     "/api/rfqs/intake": (30, 60),
     "/api/purchase-orders": (20, 60),
     "/api/catalog/search": (120, 60),
+    "/api/session": (8, 60),
+    "/api/voice/tools/check_inventory_availability": (60, 60),
+    "/api/voice/tools/get_order_status": (30, 60),
+    "/api/voice/tools/log_customer_concern": (10, 60),
 }
 _rate_limit_events: dict[tuple[str, str], deque[float]] = defaultdict(deque)
 
@@ -125,7 +140,7 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Response-Time-Ms"] = str(duration_ms)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=()"
     response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
     csrf_token = csrf_cookie or secrets.token_urlsafe(24)
     response.set_cookie(
@@ -303,6 +318,55 @@ class InternalCommandRequest(BaseModel):
     entity_id: str = Field(..., min_length=1)
     details: Optional[str] = None
 
+class VoiceToolRequest(BaseModel):
+    part_number: Optional[str] = None
+    rfq_or_order_id: Optional[str] = None
+    issue_type: Optional[str] = None
+    details: Optional[str] = None
+
+class VoiceSessionRequest(BaseModel):
+    language: Literal["en", "es", "fr", "de", "pt", "it", "ja", "zh", "ko", "nl", "ar", "hi"] = "en"
+
+VOICE_TOOL_DEFINITIONS = [
+    {
+        "type": "function",
+        "name": "check_inventory_availability",
+        "description": "Search aerospace stock by exact or partial part number. Quote only the returned quantity, condition, price, and lead time.",
+        "parameters": {
+            "type": "object",
+            "properties": {"part_number": {"type": "string", "description": "Aircraft part number or partial part number"}},
+            "required": ["part_number"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "get_order_status",
+        "description": "Look up the current status, tracking details, or operator review notice for an RFQ or order.",
+        "parameters": {
+            "type": "object",
+            "properties": {"rfq_or_order_id": {"type": "string", "description": "RFQ or order identifier"}},
+            "required": ["rfq_or_order_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "log_customer_concern",
+        "description": "Record a concern or quote follow-up. Export-controlled, non-USD, or ambiguous requests are routed to an operator.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "issue_type": {"type": "string"},
+                "details": {"type": "string"},
+                "part_number": {"type": "string"},
+            },
+            "required": ["issue_type", "details", "part_number"],
+            "additionalProperties": False,
+        },
+    },
+]
+
 # Endpoints
 
 @app.post("/api/auth/otp/request")
@@ -412,6 +476,128 @@ async def ready():
         "persistence": persistence,
         **persistence,
     }
+
+
+@app.post("/api/session")
+async def create_realtime_session(
+    request: VoiceSessionRequest,
+    user: dict = Depends(require_roles("ROLE_CUSTOMER", "ROLE_INTERNAL", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
+):
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Voice service is not configured.")
+    await asyncio.to_thread(initialize_voice_media)
+
+    language_names = {
+        "en": "English", "es": "Spanish", "fr": "French", "de": "German",
+        "pt": "Portuguese", "it": "Italian", "ja": "Japanese", "zh": "Chinese",
+        "ko": "Korean", "nl": "Dutch", "ar": "Arabic", "hi": "Hindi",
+    }
+    language_name = language_names[request.language]
+    voice_id = os.getenv("OPENAI_REALTIME_VOICE_ID", "").strip()
+    output_voice: str | dict[str, str] = {"id": voice_id} if voice_id else "marin"
+    session_payload = {
+        "type": "realtime",
+        "model": os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2").strip(),
+        "output_modalities": ["audio"],
+        "instructions": (
+            "You are Camila, Winged Tycoons' AI voice customer-service assistant, not a human. At the start, "
+            f"briefly disclose that you are Camila, an AI assistant, and greet the customer in {language_name}. "
+            f"Continue speaking in {language_name} unless the customer asks to switch languages. Be "
+            "concise, professional, and precise. Use the inventory and order tools before stating "
+            "availability, prices, lead times, or status. Prices are USD. Never promise stock or issue "
+            "a binding quote. Route export-controlled, non-USD, ambiguous, or unresolved requests to "
+            "an operator using log_customer_concern, and clearly tell the caller their request is being reviewed."
+        ),
+        "audio": {
+            "input": {
+                "transcription": {"model": "gpt-4o-transcribe", "language": request.language},
+                "turn_detection": {"type": "semantic_vad", "interrupt_response": True},
+            },
+            "output": {"voice": output_voice},
+        },
+        "tools": VOICE_TOOL_DEFINITIONS,
+        "tool_choice": "auto",
+    }
+    session_request = {
+        "expires_after": {"anchor": "created_at", "seconds": 600},
+        "session": session_payload,
+    }
+    session_headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "OpenAI-Safety-Identifier": hashlib.sha256(str(user.get("email", "")).lower().encode()).hexdigest(),
+    }
+    try:
+        response = await asyncio.to_thread(
+            requests.post,
+            "https://api.openai.com/v1/realtime/client_secrets",
+            headers=session_headers,
+            json=session_request,
+            timeout=20,
+        )
+        error_text = str(getattr(response, "text", "")).lower()
+        custom_voice_rejected = voice_id and response.status_code in {400, 404} and (
+            not error_text
+            or "voice" in error_text
+            or "not found" in error_text
+            or "not available" in error_text
+            or "unsupported" in error_text
+        )
+        if custom_voice_rejected:
+            logger.warning("realtime_custom_voice_rejected status=%s fallback=builtin", response.status_code)
+            session_payload["audio"]["output"]["voice"] = "marin"
+            response = await asyncio.to_thread(
+                requests.post,
+                "https://api.openai.com/v1/realtime/client_secrets",
+                headers=session_headers,
+                json=session_request,
+                timeout=20,
+            )
+        if response.status_code >= 400:
+            logger.warning("realtime_session_create_failed status=%s", response.status_code)
+            raise HTTPException(status_code=502, detail="Unable to start the voice session.")
+        session = response.json()
+    except requests.RequestException as exc:
+        logger.warning("realtime_session_request_failed error=%s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Unable to reach the voice service.") from exc
+
+    ephemeral_key = session.get("value")
+    if not ephemeral_key:
+        logger.warning("realtime_session_missing_ephemeral_key")
+        raise HTTPException(status_code=502, detail="Voice service returned an invalid session.")
+    return {"client_secret": ephemeral_key, "model": session_payload["model"]}
+
+
+@app.get("/api/voice/dashboard")
+async def voice_dashboard(_user: dict = Depends(require_roles("ROLE_INTERNAL", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"))):
+    return get_voice_dashboard(db_service.list_rfqs())
+
+
+@app.post("/api/voice/tools/{tool_name}")
+async def execute_voice_tool(
+    tool_name: str,
+    request: VoiceToolRequest,
+    user: dict = Depends(require_roles("ROLE_CUSTOMER", "ROLE_INTERNAL", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
+):
+    if tool_name == "check_inventory_availability":
+        return check_inventory_availability(request.part_number or "")
+    if tool_name == "get_order_status":
+        if user.get("role") == "ROLE_CUSTOMER":
+            return get_customer_order_status(
+                request.rfq_or_order_id or "",
+                user.get("email", ""),
+                db_service.list_rfqs(),
+            )
+        return get_order_status(request.rfq_or_order_id or "", db_service.list_rfqs())
+    if tool_name == "log_customer_concern":
+        return log_customer_concern(
+            request.issue_type or "unspecified",
+            request.details or "",
+            request.part_number or "",
+            user.get("email", "") if user.get("role") == "ROLE_CUSTOMER" else "",
+        )
+    raise HTTPException(status_code=404, detail="Unknown voice tool.")
 
 
 @app.get("/api/attachments/{attachment_id}")

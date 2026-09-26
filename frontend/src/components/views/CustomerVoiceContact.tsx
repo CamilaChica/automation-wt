@@ -95,7 +95,7 @@ export const CustomerVoiceContact: React.FC<CustomerVoiceContactProps> = ({ uiLa
             <div className="flex items-center justify-between px-5 py-3"><h3 className="text-xs font-bold uppercase text-slate-600">{t('transcript')}</h3><span className="text-[11px] text-slate-500">{t('transcriptLive')}</span></div>
             <div className="max-h-56 min-h-32 flex-1 space-y-3 overflow-y-auto px-5 pb-4" aria-live="polite" aria-relevant="additions text">
               {call.transcript.length ? call.transcript.map(entry => <article key={entry.id} className={`border-l-2 px-3 py-2 ${entry.speaker === 'Customer' ? 'border-slate-300' : 'border-cyan-600'}`}>
-                <div className="mb-1 flex items-center justify-between gap-2"><span className="text-xs font-bold text-slate-800">{entry.speaker === 'Customer' ? t('you') : t('voiceAssistant')}</span><time className="text-[10px] text-slate-500">{entry.time}</time></div>
+                <div className="mb-1 flex items-center justify-between gap-2"><span className="text-xs font-bold text-slate-800">{entry.speaker === 'Customer' ? t('you') : `Camila · ${t('voiceAssistant')}`}</span><time className="text-[10px] text-slate-500">{entry.time}</time></div>
                 <p className="text-sm leading-5 text-slate-700">{entry.text}</p>
               </article>) : <p className="py-10 text-center text-sm text-slate-500">{t('transcriptPlaceholder')}</p>}
             </div>

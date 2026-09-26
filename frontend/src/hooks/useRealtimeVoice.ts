@@ -169,9 +169,12 @@ export function useRealtimeVoice({ onEscalated }: UseRealtimeVoiceOptions = {}) 
         setCallStatus('Connected');
         setIsConnecting(false);
         const languageLabel = voiceLanguages.find(item => item.code === language)?.label || 'English';
+        const greetingInstructions = language === 'es'
+          ? 'Say exactly: "Hola, soy Camila, la asistente de voz con IA de Winged Tycoons. ¿En qué puedo ayudarte hoy?"'
+          : `Greet the customer briefly in ${languageLabel}. Introduce yourself as Camila, Winged Tycoons' AI voice assistant, and ask how you can help.`;
         channel.send(JSON.stringify({
           type: 'response.create',
-          response: { instructions: `Greet the customer briefly in ${languageLabel}. Clearly say you are Winged Tycoons' AI voice assistant, then ask how you can help.` },
+          response: { instructions: greetingInstructions },
         }));
       };
       channel.onmessage = message => { void handleRealtimeEvent(message.data, generation); };
