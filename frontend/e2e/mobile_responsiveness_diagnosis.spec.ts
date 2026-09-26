@@ -209,6 +209,122 @@ test('RFQ, fulfillment, and trace labels retain Montserrat and align on mobile',
   await expect(page.getByText('AOG ALERTS: 3 ACTIVE', { exact: true })).toHaveCSS('white-space', 'nowrap');
 });
 
+test('customer language menu translates all supported locales and persists the cookie', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('wt_access_token', 'customer-language-test');
+    localStorage.setItem('wt_role', 'ROLE_CUSTOMER');
+  });
+  await installApiRoutes(page);
+  await page.goto('/customer-portal', { waitUntil: 'networkidle' });
+
+  const languageSelect = page.locator('#customer-language');
+  await expect(languageSelect.locator('option')).toHaveCount(12);
+  const englishHeading = await page.getByRole('heading', { level: 1 }).innerText();
+
+  for (const code of ['fr', 'es', 'de', 'pt', 'it', 'ja', 'zh', 'ko', 'nl', 'ar', 'hi', 'en']) {
+    await languageSelect.selectOption(code);
+    await expect(page.locator('html')).toHaveAttribute('lang', code);
+    if (code !== 'en') await expect(page.getByRole('heading', { level: 1 })).not.toHaveText(englishHeading);
+  }
+
+  await languageSelect.selectOption('ar');
+  await expect(page.locator('#root > div')).toHaveAttribute('dir', 'rtl');
+  await expect.poll(() => page.evaluate(() => document.cookie)).toContain('wt_customer_language=ar');
+  await page.reload({ waitUntil: 'networkidle' });
+  await expect(page.getByRole('combobox', { name: 'اللغة' })).toHaveValue('ar');
+  await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
+});
+
+test('first visit suggests a language from browser locale and region', async ({ browser }) => {
+  const context = await browser.newContext({ locale: 'de-DE' });
+  const page = await context.newPage();
+  await page.addInitScript(() => {
+    localStorage.setItem('wt_access_token', 'customer-locale-test');
+    localStorage.setItem('wt_role', 'ROLE_CUSTOMER');
+  });
+  await installApiRoutes(page);
+  await page.goto('/customer-portal', { waitUntil: 'networkidle' });
+  await expect(page.getByRole('combobox', { name: 'Sprache' })).toHaveValue('de');
+  await context.close();
+});
+
+test('saved customer language takes precedence over browser locale', async ({ browser }) => {
+  const context = await browser.newContext({ locale: 'de-DE' });
+  await context.addInitScript(() => {
+    document.cookie = 'wt_customer_language=fr; Path=/; SameSite=Lax';
+    localStorage.setItem('wt_access_token', 'customer-saved-language-test');
+    localStorage.setItem('wt_role', 'ROLE_CUSTOMER');
+  });
+  const page = await context.newPage();
+  await installApiRoutes(page);
+  await page.goto('/customer-portal', { waitUntil: 'networkidle' });
+  await expect(page.locator('#customer-language')).toHaveValue('fr');
+  await context.close();
+});
+
+test('voice support uses the portal language while keeping call language selectable', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('wt_access_token', 'customer-voice-language-test');
+    localStorage.setItem('wt_role', 'ROLE_CUSTOMER');
+  });
+  await installApiRoutes(page);
+  await page.goto('/customer-portal', { waitUntil: 'networkidle' });
+  await page.locator('#customer-language').selectOption('fr');
+  await page.getByRole('button', { name: 'Nous contacter' }).click();
+  await page.getByRole('menuitem', { name: 'Assistance vocale' }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'Assistance vocale' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: /Démarrer l’appel vocal/i })).toBeVisible();
+  await expect(dialog.getByRole('combobox', { name: 'Langue de conversation' })).toBeVisible();
+  await expect(dialog.getByText('Transcription de la conversation')).toBeVisible();
+  const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+  expect(results.violations.map(violation => ({ id: violation.id, nodes: violation.nodes.map(node => node.target) }))).toEqual([]);
+});
+
+test('customer language selector is accessible and usable on mobile and desktop', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('wt_access_token', 'customer-language-a11y-test');
+    localStorage.setItem('wt_role', 'ROLE_CUSTOMER');
+  });
+  await installApiRoutes(page);
+
+  for (const viewport of [{ width: 375, height: 667 }, { width: 768, height: 1024 }, { width: 1440, height: 900 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/customer-portal', { waitUntil: 'networkidle' });
+    const languageSelect = page.locator('#customer-language');
+    await expect(languageSelect).toBeVisible();
+    const dimensions = await languageSelect.evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      return { width: rect.width, height: rect.height };
+    });
+    expect(dimensions.width).toBeGreaterThanOrEqual(44);
+    expect(dimensions.height).toBeGreaterThanOrEqual(44);
+    expect(dimensions.width).toBeLessThanOrEqual(48);
+    if (viewport.width < 640) await expect(page.getByText('WINGED TYCOONS', { exact: true })).toBeHidden();
+    if (viewport.width >= 768) await expect(page.getByText('WINGED TYCOONS', { exact: true })).toBeVisible();
+    const agreementSize = await page.locator('#agreement-signed').evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      return { width: rect.width, height: rect.height };
+    });
+    expect(agreementSize.width).toBe(16);
+    expect(agreementSize.height).toBe(16);
+    const overflow = await page.evaluate(() => ({
+      hasOverflow: document.documentElement.scrollWidth > window.innerWidth,
+      width: document.documentElement.scrollWidth,
+      viewport: window.innerWidth,
+      sources: Array.from(document.querySelectorAll<HTMLElement>('body *')).map(element => {
+        const rect = element.getBoundingClientRect();
+        return rect.right > window.innerWidth + 1 ? `${element.tagName}.${String(element.className).slice(0, 80)} ${Math.round(rect.right)}` : null;
+      }).filter(Boolean).slice(0, 10),
+    }));
+    expect(overflow.hasOverflow, JSON.stringify(overflow)).toBe(false);
+    await expect(page.getByRole('button', { name: /Contact Us|Contact|Nous contacter|お問い合わせ/ })).toBeVisible();
+    const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+    expect(results.violations.map(violation => ({ id: violation.id, nodes: violation.nodes.map(node => node.target) }))).toEqual([]);
+  }
+});
+
 test('shipment route displays the geographic map or its text fallback', async ({ page }) => {
   await installErrorCapture(page);
   await installApiRoutes(page);

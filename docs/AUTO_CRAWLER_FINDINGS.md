@@ -15,6 +15,10 @@ Target: `https://winged-tycoons-frontend.onrender.com/internal`
 - The local-only airworthiness toggle was removed and replaced by a clearly labeled `SAMPLE` status; airport route copy includes IATA codes (`MIA`, `DFW`).
 - Trace history milestones use equal-width grid columns with centered circles, captions, and sublabels.
 - The RFQ queue's requestor heading is split into a deliberate two-line `Requested by` label.
+- Customer portal language control is a globe-only selector beside Contact Us at every viewport; its accessible name and tooltip include the current language. The logo wordmark stays hidden at compact widths so it cannot wrap into the controls and uses the medium aero-navy token with light-theme contrast preserved.
+- The customer UI supports English, French, Spanish, German, Portuguese, Italian, Japanese, Chinese, Korean, Dutch, Arabic, and Hindi. User cookie preference takes precedence over browser language/region; first visit uses the browser's language and region without requesting precise location. Arabic switches direction to RTL.
+- Portal text, form labels/options, validation/loading/failure messages, shipment display, footer, Contact Us menu, and voice-support dialog use the selected language. The voice call's conversation language remains an independent setting.
+- The RFQ compliance checkbox is 16x16px; the global 44px target minimum remains applied to the containing label/click area.
 - Base interactive hit targets are at least 44px at all viewport sizes.
 - Shipment map now uses Leaflet with MIA, DFW, and FRA coordinates, OpenStreetMap attribution, non-overlapping hover labels, and a text fallback when tiles fail.
 - Hard-coded shipment routes and statuses are labeled as sample/demo data, not live telemetry.
@@ -30,7 +34,8 @@ Target: `https://winged-tycoons-frontend.onrender.com/internal`
 - `npm --prefix frontend run build`: passed.
 - `npm --prefix frontend run lint`: passed.
 - `npm --prefix frontend audit`: 0 vulnerabilities after updating Playwright, Vite, and Vitest and adding axe tooling.
-- `npm --prefix frontend run test:e2e -- --project=ui-gadgets e2e/mobile_responsiveness_diagnosis.spec.ts`: 44 passed across the viewport matrix, axe, keyboard, failed-RFQ, map-render, cancellation, confirmed-pending, and attached-DOM regression checks.
+- `npm --prefix frontend run test:e2e -- --project=ui-gadgets e2e/mobile_responsiveness_diagnosis.spec.ts`: 49 passed across the viewport matrix, axe, keyboard, failed-RFQ, map-render, cancellation, confirmed-pending, attached-DOM, and language-selector regressions.
+- Language regressions verify all 12 options, translated content, preference cookie persistence, saved preference precedence over locale, `de-DE` first-visit detection, Arabic RTL, voice-modal language propagation, and mobile/desktop selector accessibility.
 - Viewport matrix: `375x667`, `393x852`, `412x915`, `768x1024`, `1440x900`, and `2560x1440`, across six internal views. Checks include horizontal overflow, visible text clipping, interactive dimensions, and browser runtime errors.
 - axe WCAG 2.0/2.1 A/AA scan: no violations across all six internal views.
 - Keyboard test: audit drawer traps focus and restores focus to its opener after Escape.

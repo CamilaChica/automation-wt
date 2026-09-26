@@ -6,6 +6,14 @@ export default defineConfig({
   plugins: [react()],
   build: {
     chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('/src/i18n/customerPortal')) return 'customer-language-catalog';
+          if (id.includes('/node_modules/leaflet/') || id.includes('/node_modules/react-leaflet/')) return 'map-vendor';
+        },
+      },
+    },
   },
   resolve: {
     alias: {

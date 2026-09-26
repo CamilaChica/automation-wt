@@ -6,7 +6,7 @@ const hostedApiBase = window.location.hostname === 'winged-tycoons-frontend.onre
   : '/api';
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL?.trim();
 const isDeployedStaticHost = window.location.hostname === 'winged-tycoons-frontend.onrender.com';
-const API_BASE = isDeployedStaticHost && (!configuredApiBase || configuredApiBase.startsWith('/'))
+export const API_BASE = isDeployedStaticHost && (!configuredApiBase || configuredApiBase.startsWith('/'))
   ? hostedApiBase
   : (configuredApiBase || hostedApiBase);
 const allowMockFallbacks = import.meta.env.VITE_ALLOW_MOCK_FALLBACKS === 'true';
