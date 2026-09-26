@@ -36,6 +36,7 @@ class OperationsStore:
             self._ensure_column(conn, "automation_events", "idempotency_key", "TEXT")
             self._ensure_column(conn, "automation_events", "attempts", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "automation_events", "max_attempts", "INTEGER NOT NULL DEFAULT 3")
+            self._ensure_column(conn, "operator_review_queue", "prompt_version", "TEXT")
             conn.commit()
         finally:
             conn.close()
@@ -296,6 +297,7 @@ class OperationsStore:
         source_text: str,
         extraction: Dict[str, Any],
         reason: str,
+        prompt_version: str | None = None,
         hold_flags: list[str] | None = None,
         entity_id: str | None = None,
     ) -> str:
@@ -309,16 +311,17 @@ class OperationsStore:
             if existing:
                 conn.execute(
                     "UPDATE operator_review_queue SET entity_id = COALESCE(?, entity_id), "
-                    "source_text = ?, extraction_json = ?, reason = ?, hold_flags_json = ?, updated_at = ? "
+                    "source_text = ?, extraction_json = ?, reason = ?, prompt_version = COALESCE(?, prompt_version), "
+                    "hold_flags_json = ?, updated_at = ? "
                     "WHERE id = ? AND status = 'PENDING'",
-                    (entity_id, source_text, json.dumps(extraction), reason, json.dumps(hold_flags or []), now, existing[0]),
+                    (entity_id, source_text, json.dumps(extraction), reason, prompt_version, json.dumps(hold_flags or []), now, existing[0]),
                 )
                 return str(existing[0])
             conn.execute(
                 "INSERT INTO operator_review_queue "
-                "(id, idempotency_key, task, entity_id, source_text, extraction_json, reason, hold_flags_json, status, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)",
-                (review_id, idempotency_key, task, entity_id, source_text, json.dumps(extraction), reason,
+                "(id, idempotency_key, task, prompt_version, entity_id, source_text, extraction_json, reason, hold_flags_json, status, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)",
+                (review_id, idempotency_key, task, prompt_version, entity_id, source_text, json.dumps(extraction), reason,
                  json.dumps(hold_flags or []), now, now),
             )
         return review_id
@@ -406,6 +409,71 @@ class OperationsStore:
                 "WHERE id = ? AND status IN ('PROCESSING', 'PENDING')",
                 (status, error, status, status, status, datetime.now(timezone.utc).isoformat(), review_id),
             )
+            if status in {"APPROVED", "REJECTED"}:
+                conn.execute(
+                    "UPDATE llm_telemetry SET operator_review_outcome = ? WHERE review_queue_id = ?",
+                    (status, review_id),
+                )
+
+    def record_llm_telemetry(
+        self,
+        *,
+        task: str,
+        prompt_version: str,
+        model_id: str,
+        model_calls: list[str],
+        latency_ms: float,
+        input_tokens: int,
+        output_tokens: int,
+        estimated_cost_usd: float,
+        validation_result: str,
+        review_queue_id: str | None = None,
+    ) -> str:
+        telemetry_id = f"LLM-{uuid.uuid4().hex[:12].upper()}"
+        with self.transaction() as conn:
+            conn.execute(
+                "INSERT INTO llm_telemetry "
+                "(id, task, prompt_version, model_id, model_calls_json, latency_ms, input_tokens, output_tokens, "
+                "estimated_cost_usd, validation_result, review_queue_id, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    telemetry_id,
+                    task,
+                    prompt_version,
+                    model_id,
+                    json.dumps(model_calls),
+                    max(float(latency_ms), 0.0),
+                    max(int(input_tokens), 0),
+                    max(int(output_tokens), 0),
+                    max(float(estimated_cost_usd), 0.0),
+                    validation_result,
+                    review_queue_id,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+        return telemetry_id
+
+    def list_llm_telemetry(self, *, task: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        conn = self._connect()
+        conn.row_factory = sqlite3.Row
+        try:
+            bounded_limit = min(max(int(limit), 1), 500)
+            if task:
+                rows = conn.execute(
+                    "SELECT * FROM llm_telemetry WHERE task = ? ORDER BY created_at DESC LIMIT ?",
+                    (task, bounded_limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM llm_telemetry ORDER BY created_at DESC LIMIT ?",
+                    (bounded_limit,),
+                ).fetchall()
+            results = [dict(row) for row in rows]
+            for result in results:
+                result["model_calls"] = json.loads(result.pop("model_calls_json"))
+            return results
+        finally:
+            conn.close()
 
 
 operations_store = OperationsStore()

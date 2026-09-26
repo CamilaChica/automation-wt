@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from services.supplier_database import supplier_db
 from services.supplier_email_extractor import SupplierEmailExtractor
 from services.email_intelligence import extract_email_intelligence
+from services.email_intelligence import EXTRACTION_CONTRACTS
 from services.document_parser import build_email_context
 from services.llm_provider import LLMRouter
 from services.operations_store import operations_store
@@ -85,6 +86,7 @@ class SupplierEmailIngestionService:
                         source_text=attachment_context,
                         extraction=llm_data.model_dump(),
                         reason="non_usd_currency",
+                        prompt_version=EXTRACTION_CONTRACTS["supplier_quote_extraction"].prompt_version,
                         hold_flags=hold_flags,
                         entity_id=source_email_id,
                     )

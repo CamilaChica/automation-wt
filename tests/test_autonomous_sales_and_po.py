@@ -68,6 +68,8 @@ class AutonomousSalesAndPoTests(unittest.TestCase):
         self.assertFalse(result.data["llm_fallback_used"])
         self.assertEqual(provider.requests[0].task, "customer_communication")
         self.assertIn("How many do you need?", provider.requests[0].system_prompt)
+        self.assertIn("untrusted_quote_data", provider.requests[0].user_prompt)
+        self.assertNotIn("buyer@example.com", provider.requests[0].user_prompt)
         send_quote.assert_called_once()
         self.assertEqual(send_quote.call_args.kwargs["subject_override"], "Quotation QTE-1001")
 

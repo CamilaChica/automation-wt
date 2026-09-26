@@ -20,7 +20,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from models.db_models import RFQ, RFQItem, Quote, QuoteItem, AgentAuditLog, Supplier
 from services.db_service import db_service
-from services.orchestration_service import orchestration_service
+from services.orchestration_service import (
+    ReviewDecisionConflict,
+    ReviewDecisionValidationError,
+    orchestration_service,
+)
 from services.mailbox_service import fetch_inbox_messages, fetch_inbox_headers, health_check_mailboxes, send_message, send_otp_email
 from services.communication_service import communication_service
 from services.supplier_database import supplier_db
@@ -28,7 +32,6 @@ from services.carrier_tracking_service import carrier_tracking_service
 from services.twilio_service import twilio_service
 from services.freight_service import FreightRequest, freight_rate_service
 from services.operations_store import operations_store
-from services.email_intelligence import EmailIntelligenceExtraction, _validate_source_grounding
 from services.persistence_status import persistence_status
 from services.async_database import create_engine_from_environment, search_supplier_inventory, session_scope
 from services.export_control_service import export_control_service
@@ -517,15 +520,7 @@ async def submit_rfq(request: IntakeRequest, user: dict = Depends(current_user))
         destination=request.customer_country,
     )
     if screening.blocked:
-        db_service.update_rfq_status(rfq.id, "Blocked_Compliance_Review")
-        db_service.add_audit_log(
-            rfq.id,
-            "ExportControlService",
-            "export_screening",
-            "RFQ blocked pending export-control compliance review.",
-            "FAILURE",
-            json.dumps(screening.model_dump()),
-        )
+        orchestration_service.block_rfq_for_compliance(rfq.id, screening)
         return IntakeResponse(
             rfq_id=rfq.id,
             status="Blocked_Compliance_Review",
@@ -566,22 +561,12 @@ async def set_automation_pause(
     request: AutomationPauseRequest,
     user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER")),
 ):
-    rfq = db_service.set_rfq_automation_paused(rfq_id, request.paused, request.reason)
-    if not rfq:
-        raise HTTPException(status_code=404, detail="RFQ not found.")
-    db_service.add_audit_log(
-        rfq_id,
-        "AutomationControl",
-        "automation_pause" if request.paused else "automation_resume",
-        f"Automation {'paused' if request.paused else 'resumed'} by {user['email']}."
-        + (f" Reason: {rfq.pause_reason}" if rfq.pause_reason else ""),
-        "WARNING" if request.paused else "SUCCESS",
-    )
-    return {
-        "rfq_id": rfq_id,
-        "automation_paused": rfq.automation_paused,
-        "pause_reason": rfq.pause_reason,
-    }
+    try:
+        return orchestration_service.set_automation_pause(
+            rfq_id, request.paused, request.reason, user["email"]
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 @app.post("/api/internal/rfqs/{rfq_id}/trace-decision")
 async def record_trace_decision(
@@ -589,25 +574,13 @@ async def record_trace_decision(
     request: TraceDecisionRequest,
     user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
 ):
-    rfq = db_service.get_rfq(rfq_id)
-    if not rfq:
-        raise HTTPException(status_code=404, detail="RFQ not found.")
     reason = request.reason or f"Trace decision '{request.decision}' recorded by {user['email']}."
-    if request.decision == "freeze":
-        db_service.set_rfq_automation_paused(rfq_id, True, reason)
-    db_service.add_audit_log(
-        rfq_id,
-        "TraceVault",
-        f"trace_{request.decision}",
-        reason,
-        "WARNING" if request.decision in {"reject", "freeze"} else "SUCCESS",
-    )
-    updated = db_service.get_rfq(rfq_id)
-    return {
-        "rfq_id": rfq_id,
-        "decision": request.decision,
-        "automation_paused": updated.automation_paused if updated else request.decision == "freeze",
-    }
+    try:
+        return orchestration_service.record_trace_decision(
+            rfq_id, request.decision, reason, user["email"]
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 @app.get("/api/internal/automation-events")
 async def list_automation_events(
@@ -625,6 +598,15 @@ async def list_extraction_reviews(
     _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
 ):
     return operations_store.list_operator_reviews(status=status.upper(), limit=limit)
+
+
+@app.get("/api/internal/llm/telemetry")
+async def list_llm_telemetry(
+    task: Optional[str] = None,
+    limit: int = 100,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER")),
+):
+    return operations_store.list_llm_telemetry(task=task, limit=limit)
 
 
 @app.get("/api/internal/extraction-reviews/{review_id}")
@@ -647,106 +629,21 @@ async def decide_extraction_review(
     review = operations_store.get_operator_review(review_id)
     if not review:
         raise HTTPException(status_code=404, detail="Extraction review not found.")
-    if review["status"] != "PENDING":
-        raise HTTPException(status_code=409, detail=f"Review is already {review['status'].lower()}.")
-
     operator = (request.operator_name or user["email"]).strip()
-    if request.decision == "reject":
-        if not operations_store.claim_operator_review_decision(review_id, "REJECT", operator, {"comments": request.comments}):
-            raise HTTPException(status_code=409, detail="Review was already claimed by another operator.")
-        if review.get("task") == "rfq_extraction" and review.get("entity_id"):
-            rfq = db_service.get_rfq(review["entity_id"])
-            if rfq and rfq.status == "Pending_Internal_Review":
-                db_service.update_rfq_status(rfq.id, "Rejected")
-                db_service.add_audit_log(rfq.id, "ExtractionReview", "rejected", f"Extraction rejected by {operator}. {request.comments or ''}", "WARNING")
-        operations_store.complete_operator_review_decision(review_id, status="REJECTED")
-        return {"review_id": review_id, "status": "REJECTED", "decision_by": operator}
-
     try:
-        extraction_data = request.approved_extraction or review["extraction"]
-        extraction = EmailIntelligenceExtraction.model_validate(extraction_data)
+        return await orchestration_service.decide_extraction_review(
+            review=review,
+            decision=request.decision,
+            operator=operator,
+            comments=request.comments,
+            approved_extraction=request.approved_extraction,
+        )
+    except ReviewDecisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ReviewDecisionValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Approved extraction does not match the schema: {exc}") from exc
-
-    missing = _validate_source_grounding(extraction, review["source_text"], review["task"])
-    if missing:
-        raise HTTPException(status_code=422, detail={"detail": "Approval requires source-grounded required fields.", "missing_fields": missing})
-    if not extraction.items:
-        raise HTTPException(status_code=422, detail="Approval requires at least one source-grounded item.")
-    from services.email_intelligence import is_valid_extracted_part_number
-    if any(not is_valid_extracted_part_number(item.part_number.value or "") for item in extraction.items):
-        raise HTTPException(status_code=422, detail="Approval includes an invalid or reference-like part number.")
-
-    if review["task"] == "supplier_quote_extraction":
-        non_usd = [item.currency.value for item in extraction.items if item.currency.value and item.currency.value.upper() != "USD"]
-        if non_usd:
-            raise HTTPException(status_code=409, detail="Non-USD supplier quotes remain held until a separately verified USD conversion is provided.")
-        if any(not item.trace_documents for item in extraction.items):
-            raise HTTPException(status_code=422, detail="Supplier offer approval requires source-grounded release certificate evidence.")
-    elif review["task"] != "rfq_extraction":
-        raise HTTPException(status_code=409, detail="This extraction task has no downstream approval handler.")
-
-    if not operations_store.claim_operator_review_decision(
-        review_id,
-        "APPROVE",
-        operator,
-        {"comments": request.comments, "approved_extraction": extraction.model_dump()},
-    ):
-        raise HTTPException(status_code=409, detail="Review was already claimed by another operator.")
-
-    try:
-        if review["task"] == "rfq_extraction":
-            rfq = db_service.get_rfq(str(review.get("entity_id") or ""))
-            if not rfq or rfq.status != "Pending_Internal_Review":
-                raise HTTPException(status_code=409, detail="The linked RFQ is not waiting for extraction review.")
-            db_service.update_rfq_customer(rfq.id, extraction.customer_name or extraction.customer_company or rfq.customer_name, extraction.customer_email or rfq.customer_email)
-            db_service.replace_rfq_items(rfq.id, [{
-                "part_number": item.part_number.value,
-                "quantity": int(item.quantity.value or "0"),
-                "condition_code": item.condition_code.value,
-                "unit_of_measure": item.unit_of_measure.value,
-            } for item in extraction.items])
-            db_service.update_rfq_status(rfq.id, "Validating")
-            db_service.add_audit_log(rfq.id, "ExtractionReview", "approved", f"Source-grounded extraction approved by {operator}. {request.comments or ''}", "SUCCESS", json.dumps(extraction.model_dump()))
-            operations_store.complete_operator_review_decision(review_id, status="APPROVED")
-            pipeline_result = await orchestration_service.process_rfq_pipeline(rfq.id)
-            return {"review_id": review_id, "status": "APPROVED", "rfq_id": rfq.id, "pipeline": pipeline_result}
-
-        sender = ""
-        for line in review["source_text"].splitlines():
-            if line.lower().startswith("from:"):
-                sender = line.split(":", 1)[1].strip()
-                break
-        source_id = review.get("entity_id") or review_id
-        approved_offers = []
-        for index, item in enumerate(extraction.items):
-            price_text = item.target_price.value or ""
-            price = float(re.sub(r"[^0-9.\-]", "", price_text))
-            quantity = int(re.search(r"\d+", item.quantity.value or "").group())
-            lead_time_match = re.search(r"\d+", item.lead_time_days.value or "")
-            offer = supplier_db.save_supplier_offer(
-                supplier_name=extraction.supplier_name or "Supplier Pending Identification",
-                supplier_email=extraction.supplier_email or sender,
-                part_number=item.part_number.value or "",
-                quantity_available=quantity,
-                unit_cost=price,
-                certificate_type=item.trace_documents[0],
-                lead_time_days=int(lead_time_match.group()) if lead_time_match else None,
-                approval_status="Pending",
-                condition_code=item.condition_code.value,
-                source_email_id=f"{source_id}:{index}" if index else str(source_id),
-                confidence=extraction.confidence_score,
-                trace_documents=item.trace_documents,
-            )
-            approved_offers.append(offer)
-        operations_store.complete_operator_review_decision(review_id, status="APPROVED")
-        return {"review_id": review_id, "status": "APPROVED", "offers": approved_offers}
-    except HTTPException:
-        operations_store.complete_operator_review_decision(review_id, status="PENDING", error="Approval validation failed.")
-        raise
-    except Exception as exc:
-        operations_store.complete_operator_review_decision(review_id, status="PENDING", error=f"{type(exc).__name__}: {exc}")
-        raise HTTPException(status_code=500, detail="Review approval could not be completed.") from exc
+        raise HTTPException(status_code=500, detail="Review decision could not be completed.") from exc
 
 @app.post("/api/internal/commands")
 async def execute_internal_command(
@@ -873,15 +770,14 @@ async def approve_quote(quote_id: str, request: ApproveRequest, _user: dict = De
     res = await orchestration_service.approve_and_send_quote(
         quote_id=quote_id,
         operator_name=request.operator_name,
-        overrides=overrides_list
+        overrides=overrides_list,
+        comments=request.comments,
     )
     
     # Use the status produced by orchestration; the original object is stale after approval.
     final_status = res.get("status")
     if not final_status or res.get("error"):
         raise HTTPException(status_code=409, detail=res.get("error", "Quote approval failed."))
-    db_service.update_quote_status(quote_id, final_status, comments=request.comments)
-    
     return res
 
 @app.post("/api/quotes/{quote_id}/reject")
@@ -893,20 +789,10 @@ async def reject_quote(quote_id: str, request: RejectRequest, _user: dict = Depe
     if not quote:
         raise HTTPException(status_code=404, detail="Quote not found.")
         
-    db_service.update_quote_status(
-        quote_id, "Rejected", 
-        approved_by=request.operator_name, 
-        comments=request.comments
-    )
-    db_service.update_rfq_status(quote.rfq_id, "Rejected")
-    
-    db_service.add_audit_log(
-        quote.rfq_id, "Orchestrator", "human_rejection",
-        f"Quote rejected by {request.operator_name}. Reason: {request.comments}",
-        "WARNING"
-    )
-    
-    return {"status": "Rejected", "quote_id": quote_id}
+    result = orchestration_service.reject_quote(quote_id, request.operator_name, request.comments)
+    if result.get("error"):
+        raise HTTPException(status_code=409, detail=result["error"])
+    return result
 
 @app.post("/api/purchase-orders")
 async def submit_purchase_order(request: PurchaseOrderRequest, user: dict = Depends(current_user)):
@@ -970,15 +856,7 @@ async def submit_purchase_order(request: PurchaseOrderRequest, user: dict = Depe
         items=internal_items,
         review_url=os.getenv("SALES_DASHBOARD_URL") or os.getenv("PUBLIC_APP_URL", "http://localhost:3000"),
     )
-    db_service.update_rfq_status(rfq.id, "Pending_PO_Review")
-    db_service.add_audit_log(
-        rfq.id,
-        "PurchaseOrderAgent",
-        "purchase_order_received",
-        f"Purchase order {request.po_number} received; fulfillment and invoicing are blocked pending human review.",
-        "SUCCESS",
-        json.dumps({"attachment_ids": request.attachment_ids}),
-    )
+    orchestration_service.mark_purchase_order_received(rfq.id, request.po_number, request.attachment_ids)
     return {
         "status": "Pending_PO_Review",
         "po_number": request.po_number,
@@ -1003,15 +881,7 @@ async def approve_purchase_order(
     if rfq.status != "Pending_PO_Review":
         raise HTTPException(status_code=409, detail="PO is not waiting for human review.")
 
-    db_service.update_rfq_status(rfq.id, "Purchase_Order_Received")
-    db_service.add_audit_log(
-        rfq.id,
-        "PurchaseOrderAgent",
-        "purchase_order_approved",
-        f"PO approved by {request.operator_name}; downstream purchasing may proceed."
-        + (f" Comments: {request.comments}" if request.comments else ""),
-        "SUCCESS",
-    )
+    orchestration_service.approve_purchase_order(rfq.id, request.operator_name, request.comments)
     return {"status": "Purchase_Order_Received", "quote_id": quote_id, "rfq_id": rfq.id}
 
 @app.get("/api/shipments/track/{public_token}")
@@ -1153,20 +1023,10 @@ async def carrier_webhook(request: Request):
         raise HTTPException(status_code=401, detail="Invalid carrier webhook signature.")
     payload = await request.json()
     normalized = carrier_tracking_service.normalize_webhook(payload)
-    shipment = db_service.find_shipment_by_tracking(
-        normalized.get("carrier", ""), normalized.get("tracking_number", "")
-    )
-    if not shipment:
-        raise HTTPException(status_code=404, detail="No shipment matches carrier tracking event.")
-    if not operations_store.claim_carrier_webhook_event(normalized["event_id"]):
-        return {"status": "duplicate", "shipment_id": shipment.id}
-    event = db_service.add_shipment_event(
-        shipment.id,
-        normalized["status"],
-        normalized.get("location"),
-        normalized["description"],
-    )
-    return {"status": "accepted", "shipment_id": shipment.id, "event_id": event.id}
+    try:
+        return orchestration_service.apply_signed_carrier_event(normalized)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 @app.get("/api/catalog/search", response_model=List[CatalogItem])
 async def search_catalog(query: str = "", condition: Optional[str] = None, _user: dict = Depends(require_roles("ROLE_CUSTOMER", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"))):

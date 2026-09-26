@@ -44,7 +44,7 @@ def extract_attachment_text(filename: str, content_type: str, content: bytes) ->
 
 
 def build_email_context(body: str, attachments: list[dict[str, Any]] | None = None) -> str:
-    sections = [body.strip()]
+    sections = [str(body or "")]
     for attachment in attachments or []:
         text = extract_attachment_text(
             str(attachment.get("filename", "attachment")),
@@ -53,4 +53,4 @@ def build_email_context(body: str, attachments: list[dict[str, Any]] | None = No
         )
         if text:
             sections.append(f"Attachment {attachment.get('filename', 'attachment')}:\n{text}")
-    return "\n\n".join(section for section in sections if section)
+    return "\n\n".join(section for section in sections if section.strip())

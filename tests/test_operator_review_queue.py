@@ -1,3 +1,4 @@
+import asyncio
 import json
 import tempfile
 import unittest
@@ -9,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from api.auth import current_user
 from api.main import app
+from services.orchestration_service import OrchestrationService
 from services.operations_store import OperationsStore
 
 
@@ -31,6 +33,7 @@ class OperatorReviewQueueTests(unittest.TestCase):
                 source_text="Part Number: 060-1234-00; Qty: 2 or 3",
                 extraction=extraction,
                 reason="conflicting_quantity",
+                prompt_version="supplier-quote-v1",
                 hold_flags=["quantity"],
             )
 
@@ -39,10 +42,97 @@ class OperatorReviewQueueTests(unittest.TestCase):
             self.assertEqual(record["extraction"]["items"][0]["part_number"]["source_snippet"], "Part Number: 060-1234-00")
             self.assertEqual(record["extraction"]["items"][0]["resolution_hypotheses"][0]["field"], "quantity")
             self.assertEqual(len(store.list_operator_reviews()), 1)
+            self.assertEqual(record["prompt_version"], "supplier-quote-v1")
+            store.record_llm_telemetry(
+                task="supplier_quote_extraction",
+                prompt_version="supplier-quote-v1",
+                model_id="gpt-4o",
+                model_calls=["gpt-4o-mini", "gpt-4o"],
+                latency_ms=130.5,
+                input_tokens=210,
+                output_tokens=65,
+                estimated_cost_usd=0.0009,
+                validation_result="VALIDATED",
+                review_queue_id=review_id,
+            )
             self.assertTrue(store.claim_operator_review_decision(review_id, "APPROVE", "operator@example.test", {"comments": "verified"}))
             self.assertFalse(store.claim_operator_review_decision(review_id, "REJECT", "other@example.test", {}))
             store.complete_operator_review_decision(review_id, status="APPROVED")
             self.assertEqual(store.get_operator_review(review_id)["status"], "APPROVED")
+            telemetry = store.list_llm_telemetry(task="supplier_quote_extraction")[0]
+            self.assertEqual(telemetry["prompt_version"], "supplier-quote-v1")
+            self.assertEqual(telemetry["model_calls"], ["gpt-4o-mini", "gpt-4o"])
+            self.assertEqual(telemetry["input_tokens"], 210)
+            self.assertEqual(telemetry["output_tokens"], 65)
+            self.assertEqual(telemetry["operator_review_outcome"], "APPROVED")
+
+    def test_orchestration_owns_rfq_review_transition_and_resumes_without_model_call(self):
+        source = "Company: Example Maintenance; Part Number: 060-1234-00; Quantity: 2 EA; Condition: NE"
+        review = {
+            "id": "REV-SERVICE-1",
+            "task": "rfq_extraction",
+            "entity_id": "RFQ-SERVICE-1",
+            "source_text": source,
+            "status": "PENDING",
+            "extraction": {
+                "email_type": "customer_rfq",
+                "customer_name": "Buyer",
+                "customer_company": "Example Maintenance",
+                "customer_email": "buyer@example.test",
+                "items": [{
+                    "part_number": {"value": "060-1234-00", "source_snippet": "Part Number: 060-1234-00"},
+                    "quantity": {"value": "2", "source_snippet": "Quantity: 2 EA"},
+                    "condition_code": {"value": "NE", "source_snippet": "Condition: NE"},
+                    "target_price": {"value": None, "source_snippet": None},
+                    "lead_time_days": {"value": None, "source_snippet": None},
+                    "unit_of_measure": {"value": "EA", "source_snippet": "Quantity: 2 EA"},
+                    "currency": {"value": None, "source_snippet": None},
+                    "trace_documents": [],
+                    "missing_fields": [],
+                    "needs_escalation": True,
+                    "escalation_reason": "low_extraction_confidence",
+                    "resolution_hypotheses": [],
+                }],
+                "missing_fields": [],
+                "confidence_score": 0.94,
+                "needs_escalation": True,
+                "escalation_reason": "low_extraction_confidence",
+            },
+        }
+        rfq = SimpleNamespace(
+            id="RFQ-SERVICE-1",
+            status="Pending_Internal_Review",
+            customer_name="Buyer",
+            customer_email="buyer@example.test",
+        )
+        service = OrchestrationService()
+        service.process_rfq_pipeline = AsyncMock(return_value={"status": "Supplier_Request_Sent"})
+        with (
+            patch("services.orchestration_service.operations_store.claim_operator_review_decision", return_value=True),
+            patch("services.orchestration_service.operations_store.complete_operator_review_decision") as complete,
+            patch("services.orchestration_service.db_service.get_rfq", return_value=rfq),
+            patch("services.orchestration_service.db_service.update_rfq_customer"),
+            patch("services.orchestration_service.db_service.replace_rfq_items") as replace_items,
+            patch("services.orchestration_service.db_service.update_rfq_status") as update_status,
+            patch("services.orchestration_service.db_service.add_audit_log"),
+            patch("services.email_intelligence.extract_email_intelligence", side_effect=AssertionError("must not rerun extraction")),
+        ):
+            result = asyncio.run(service.decide_extraction_review(
+                review=review,
+                decision="approve",
+                operator="operator@example.test",
+            ))
+
+        self.assertEqual(result["status"], "APPROVED")
+        replace_items.assert_called_once_with("RFQ-SERVICE-1", [{
+            "part_number": "060-1234-00",
+            "quantity": 2,
+            "condition_code": "NE",
+            "unit_of_measure": "EA",
+        }])
+        update_status.assert_called_once_with("RFQ-SERVICE-1", "Validating")
+        complete.assert_called_once_with("REV-SERVICE-1", status="APPROVED")
+        service.process_rfq_pipeline.assert_awaited_once_with("RFQ-SERVICE-1")
 
     def test_operator_api_exposes_evidence_and_denies_customer(self):
         review = {
@@ -102,9 +192,7 @@ class OperatorReviewQueueTests(unittest.TestCase):
         app.dependency_overrides[current_user] = lambda: {"role": "ROLE_PURCHASING", "email": "buyer-ops@example.test"}
         with (
             patch("api.main.operations_store.get_operator_review", return_value=review),
-            patch("api.main.operations_store.claim_operator_review_decision", return_value=True),
-            patch("api.main.operations_store.complete_operator_review_decision") as complete,
-            patch("api.main.supplier_db.save_supplier_offer", return_value={"id": "SPO-1"}) as save_offer,
+            patch("api.main.orchestration_service.decide_extraction_review", new_callable=AsyncMock, return_value={"review_id": "REV-APPROVE-1", "status": "APPROVED", "offers": [{"id": "SPO-1"}]}) as decide,
             patch("services.email_intelligence.extract_email_intelligence", side_effect=AssertionError("LLM must not run during approval")),
         ):
             response = TestClient(app).post(
@@ -114,10 +202,9 @@ class OperatorReviewQueueTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["status"], "APPROVED")
-        save_offer.assert_called_once()
-        self.assertEqual(save_offer.call_args.kwargs["unit_cost"], 125.0)
-        self.assertEqual(save_offer.call_args.kwargs["approval_status"], "Pending")
-        complete.assert_called_once_with("REV-APPROVE-1", status="APPROVED")
+        decide.assert_awaited_once()
+        self.assertEqual(decide.call_args.kwargs["decision"], "approve")
+        self.assertEqual(decide.call_args.kwargs["approved_extraction"], None)
 
     def test_rfq_approval_transitions_to_validation_without_llm_reexecution(self):
         source = "Company: Example Maintenance; Part Number: 060-1234-00; Quantity: 2 EA; Condition: NE"
@@ -150,14 +237,7 @@ class OperatorReviewQueueTests(unittest.TestCase):
         app.dependency_overrides[current_user] = lambda: {"role": "ROLE_SALES", "email": "sales-ops@example.test"}
         with (
             patch("api.main.operations_store.get_operator_review", return_value=review),
-            patch("api.main.operations_store.claim_operator_review_decision", return_value=True),
-            patch("api.main.operations_store.complete_operator_review_decision") as complete,
-            patch("api.main.db_service.get_rfq", return_value=rfq),
-            patch("api.main.db_service.update_rfq_customer") as update_customer,
-            patch("api.main.db_service.replace_rfq_items") as replace_items,
-            patch("api.main.db_service.update_rfq_status") as update_status,
-            patch("api.main.db_service.add_audit_log"),
-            patch("api.main.orchestration_service.process_rfq_pipeline", new_callable=AsyncMock, return_value={"status": "Supplier_Request_Sent"}) as process,
+            patch("api.main.orchestration_service.decide_extraction_review", new_callable=AsyncMock, return_value={"review_id": "REV-RFQ-1", "status": "APPROVED", "rfq_id": "RFQ-REVIEW-1", "pipeline": {"status": "Supplier_Request_Sent"}}) as decide,
             patch("services.email_intelligence.extract_email_intelligence", side_effect=AssertionError("approval must not re-extract")),
         ):
             response = TestClient(app).post(
@@ -167,24 +247,15 @@ class OperatorReviewQueueTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["pipeline"]["status"], "Supplier_Request_Sent")
-        update_customer.assert_called_once()
-        replace_items.assert_called_once_with("RFQ-REVIEW-1", [{
-            "part_number": "060-1234-00",
-            "quantity": 2,
-            "condition_code": "NE",
-            "unit_of_measure": "EA",
-        }])
-        update_status.assert_called_once_with("RFQ-REVIEW-1", "Validating")
-        complete.assert_called_once_with("REV-RFQ-1", status="APPROVED")
-        process.assert_awaited_once_with("RFQ-REVIEW-1")
+        decide.assert_awaited_once()
+        self.assertEqual(decide.call_args.kwargs["decision"], "approve")
 
     def test_operator_can_reject_a_pending_extraction(self):
         review = {"id": "REV-REJECT-1", "task": "supplier_quote_extraction", "entity_id": "EMAIL-REJECT-1", "status": "PENDING", "extraction": {}, "source_text": ""}
         app.dependency_overrides[current_user] = lambda: {"role": "ROLE_PURCHASING", "email": "buyer-ops@example.test"}
         with (
             patch("api.main.operations_store.get_operator_review", return_value=review),
-            patch("api.main.operations_store.claim_operator_review_decision", return_value=True) as claim,
-            patch("api.main.operations_store.complete_operator_review_decision") as complete,
+            patch("api.main.orchestration_service.decide_extraction_review", new_callable=AsyncMock, return_value={"review_id": "REV-REJECT-1", "status": "REJECTED"}) as decide,
         ):
             response = TestClient(app).post(
                 "/api/internal/extraction-reviews/REV-REJECT-1/decision",
@@ -193,8 +264,8 @@ class OperatorReviewQueueTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["status"], "REJECTED")
-        claim.assert_called_once()
-        complete.assert_called_once_with("REV-REJECT-1", status="REJECTED")
+        decide.assert_awaited_once()
+        self.assertEqual(decide.call_args.kwargs["decision"], "reject")
 
 
 if __name__ == "__main__":

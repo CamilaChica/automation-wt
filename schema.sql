@@ -162,6 +162,7 @@ CREATE TABLE IF NOT EXISTS operator_review_queue (
     id TEXT PRIMARY KEY,
     idempotency_key TEXT NOT NULL UNIQUE,
     task TEXT NOT NULL,
+    prompt_version TEXT,
     entity_id TEXT,
     source_text TEXT NOT NULL,
     extraction_json TEXT NOT NULL,
@@ -174,6 +175,22 @@ CREATE TABLE IF NOT EXISTS operator_review_queue (
     error TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS llm_telemetry (
+    id TEXT PRIMARY KEY,
+    task TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    model_calls_json TEXT NOT NULL DEFAULT '[]',
+    latency_ms REAL NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    estimated_cost_usd REAL NOT NULL DEFAULT 0,
+    validation_result TEXT NOT NULL,
+    operator_review_outcome TEXT,
+    review_queue_id TEXT,
+    created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS operations_state (
@@ -195,3 +212,5 @@ CREATE INDEX IF NOT EXISTS idx_automation_events_entity ON automation_events(ent
 CREATE INDEX IF NOT EXISTS idx_automation_events_status ON automation_events(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_operator_review_status ON operator_review_queue(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_operator_review_entity ON operator_review_queue(entity_id);
+CREATE INDEX IF NOT EXISTS idx_llm_telemetry_task_created ON llm_telemetry(task, created_at);
+CREATE INDEX IF NOT EXISTS idx_llm_telemetry_review ON llm_telemetry(review_queue_id);

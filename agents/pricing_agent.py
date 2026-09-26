@@ -57,48 +57,21 @@ class PricingAgent(BaseAgent):
     async def execute(self, inputs: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> AgentResponse:
         unit_cost = inputs.get("unit_cost", 0.0)
         qty = inputs.get("quantity", 1)
-        urgency = inputs.get("urgency", "Routine")
-        source = inputs.get("source", "Inventory")
-        
-        # Determine base markup margin
-        default_margin = 0.20 # 20%
-        
-        # Apply quantity discounts
-        if qty >= 10:
-            default_margin = 0.15 # 15% margin
-        elif qty >= 5:
-            default_margin = 0.18 # 18% margin
-            
-        # Shipping is customer-selected and must not be embedded into the customer quote price.
-        actual_margin = default_margin
-        if context and context.get("requested_price_limit", 0) > 0:
-            limit = context["requested_price_limit"]
-            # Force target price that might dip margin
-            suggested_unit_price = limit
-            actual_margin = (suggested_unit_price - unit_cost) / suggested_unit_price
-        else:
-            # Standard calculation: Price = Cost / (1 - Margin)
-            suggested_unit_price = round(unit_cost / (1 - actual_margin), 2)
-            
-        calculated_markup = round(suggested_unit_price - unit_cost, 2)
-        margin_percent = round(actual_margin * 100, 2)
+        requested_limit = (context or {}).get("requested_price_limit")
+        from services.orchestration_service import OrchestrationService
 
-        if suggested_unit_price <= unit_cost:
-            raise NegativeMarginError(
-                f"Customer price ${suggested_unit_price:.2f} must exceed source cost ${unit_cost:.2f}."
+        try:
+            response_data, low_margin = OrchestrationService.calculate_pricing(
+                float(unit_cost),
+                int(qty),
+                float(requested_limit) if requested_limit else None,
             )
-        
-        response_data = {
-            "unit_cost": unit_cost,
-            "suggested_unit_price": suggested_unit_price,
-            "margin_percent": margin_percent,
-            "calculated_markup_amount": calculated_markup,
-        }
-        
-        # Keep agent escalation aligned with the autonomous policy gate.
-        if actual_margin < self.MIN_AUTONOMOUS_MARGIN:
+        except ValueError as exc:
+            raise NegativeMarginError(str(exc)) from exc
+
+        if low_margin:
             return AgentResponse(
-                success=True, # Calculation completed, but needs human override
+                success=True,
                 data=response_data,
                 escalation_triggered=self.metadata.escalation_rules[0]
             )

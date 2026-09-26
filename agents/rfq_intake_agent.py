@@ -400,7 +400,7 @@ class RFQIntakeAgent(BaseAgent):
                 "required": ["rfq_id", "status", "priority", "missing_fields", "ambiguous_fields"],
             },
             available_tools=[],
-            permissions=["create_rfq"],
+            permissions=[],
             escalation_rules=[
                 EscalationRule(
                     condition="missing_mandatory_fields",

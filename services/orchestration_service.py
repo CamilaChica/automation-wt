@@ -15,6 +15,16 @@ from agents.customer_communication_agent import CustomerCommunicationAgent
 from services.communication_service import communication_service
 from services.storage import storage_service
 from services.agents.prompts import AgentPipelineState
+from services.operations_store import operations_store
+from services.supplier_database import supplier_db
+
+
+class ReviewDecisionConflict(RuntimeError):
+    """Raised when a review is no longer pending or a decision is already claimed."""
+
+
+class ReviewDecisionValidationError(ValueError):
+    """Raised when an operator decision includes unsupported extraction values."""
 
 
 def _lead_time_days(value: Any) -> Optional[int]:
@@ -31,6 +41,8 @@ def _is_partsbase_rfq(rfq: Any) -> bool:
     return "partsbase.com" in source
 
 class OrchestrationService:
+    MIN_AUTONOMOUS_MARGIN = 0.18
+
     def __init__(self):
         self.storage = storage_service
         self.intake_agent = RFQIntakeAgent()
@@ -52,6 +64,296 @@ class OrchestrationService:
         if "8130" in text:
             return "FAA 8130-3"
         return "Applicable airworthiness certification"
+
+    @classmethod
+    def calculate_pricing(
+        cls,
+        unit_cost: float,
+        quantity: int,
+        requested_price_limit: float | None = None,
+    ) -> tuple[Dict[str, float], bool]:
+        """Apply the deterministic margin matrix used by every quote path."""
+        margin = 0.20
+        if quantity >= 10:
+            margin = 0.15
+        elif quantity >= 5:
+            margin = 0.18
+        if requested_price_limit and requested_price_limit > 0:
+            suggested_unit_price = float(requested_price_limit)
+            actual_margin = (suggested_unit_price - unit_cost) / suggested_unit_price
+        else:
+            actual_margin = margin
+            suggested_unit_price = round(unit_cost / (1 - actual_margin), 2)
+        if suggested_unit_price <= unit_cost:
+            raise ValueError(
+                f"Customer price ${suggested_unit_price:.2f} must exceed source cost ${unit_cost:.2f}."
+            )
+        return ({
+            "unit_cost": float(unit_cost),
+            "suggested_unit_price": suggested_unit_price,
+            "margin_percent": round(actual_margin * 100, 2),
+            "calculated_markup_amount": round(suggested_unit_price - unit_cost, 2),
+        }, actual_margin < cls.MIN_AUTONOMOUS_MARGIN)
+
+    def set_automation_pause(self, rfq_id: str, paused: bool, reason: Optional[str], operator: str) -> Dict[str, Any]:
+        rfq = db_service.set_rfq_automation_paused(rfq_id, paused, reason)
+        if not rfq:
+            raise ValueError(f"RFQ {rfq_id} not found.")
+        db_service.add_audit_log(
+            rfq_id,
+            "AutomationControl",
+            "automation_pause" if paused else "automation_resume",
+            f"Automation {'paused' if paused else 'resumed'} by {operator}."
+            + (f" Reason: {rfq.pause_reason}" if rfq.pause_reason else ""),
+            "WARNING" if paused else "SUCCESS",
+        )
+        return {"rfq_id": rfq_id, "automation_paused": rfq.automation_paused, "pause_reason": rfq.pause_reason}
+
+    def record_trace_decision(self, rfq_id: str, decision: str, reason: str, operator: str) -> Dict[str, Any]:
+        rfq = db_service.get_rfq(rfq_id)
+        if not rfq:
+            raise ValueError(f"RFQ {rfq_id} not found.")
+        if decision == "freeze":
+            db_service.set_rfq_automation_paused(rfq_id, True, reason)
+        db_service.add_audit_log(
+            rfq_id,
+            "TraceVault",
+            f"trace_{decision}",
+            reason or f"Trace decision '{decision}' recorded by {operator}.",
+            "WARNING" if decision in {"reject", "freeze"} else "SUCCESS",
+        )
+        updated = db_service.get_rfq(rfq_id)
+        return {"rfq_id": rfq_id, "decision": decision, "automation_paused": updated.automation_paused if updated else decision == "freeze"}
+
+    def apply_signed_carrier_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply an authenticated carrier event idempotently inside backend orchestration."""
+        shipment = db_service.find_shipment_by_tracking(
+            event.get("carrier", ""), event.get("tracking_number", "")
+        )
+        if not shipment:
+            raise ValueError("No shipment matches carrier tracking event.")
+        if not operations_store.claim_carrier_webhook_event(event["event_id"]):
+            return {"status": "duplicate", "shipment_id": shipment.id}
+        saved_event = db_service.add_shipment_event(
+            shipment.id,
+            event["status"],
+            event.get("location"),
+            event["description"],
+        )
+        return {"status": "accepted", "shipment_id": shipment.id, "event_id": saved_event.id}
+
+    def block_rfq_for_compliance(self, rfq_id: str, screening: Any) -> None:
+        db_service.update_rfq_status(rfq_id, "Blocked_Compliance_Review")
+        db_service.add_audit_log(
+            rfq_id,
+            "ExportControlService",
+            "export_screening",
+            "RFQ blocked pending export-control compliance review.",
+            "FAILURE",
+            json.dumps(screening.model_dump() if hasattr(screening, "model_dump") else screening),
+        )
+
+    def reject_quote(self, quote_id: str, operator_name: str, comments: str) -> Dict[str, Any]:
+        quote = db_service.get_quote(quote_id)
+        if not quote:
+            return {"error": f"Quote {quote_id} not found."}
+        db_service.update_quote_status(quote_id, "Rejected", approved_by=operator_name, comments=comments)
+        db_service.update_rfq_status(quote.rfq_id, "Rejected")
+        db_service.add_audit_log(
+            quote.rfq_id,
+            "Orchestrator",
+            "human_rejection",
+            f"Quote rejected by {operator_name}. Reason: {comments}",
+            "WARNING",
+        )
+        return {"status": "Rejected", "quote_id": quote_id}
+
+    def mark_purchase_order_received(self, rfq_id: str, po_number: str, attachment_ids: List[str]) -> None:
+        rfq = db_service.get_rfq(rfq_id)
+        if not rfq:
+            raise ValueError(f"RFQ {rfq_id} not found.")
+        if rfq.status in {"Purchase_Order_Received", "Pending_PO_Review"}:
+            raise ValueError("Purchase order already received for this RFQ.")
+        db_service.update_rfq_status(rfq_id, "Pending_PO_Review")
+        db_service.add_audit_log(
+            rfq_id,
+            "PurchaseOrderAgent",
+            "purchase_order_received",
+            f"Purchase order {po_number} received; fulfillment and invoicing are blocked pending human review.",
+            "SUCCESS",
+            json.dumps({"attachment_ids": attachment_ids}),
+        )
+
+    def approve_purchase_order(self, rfq_id: str, operator_name: str, comments: str | None = None) -> None:
+        rfq = db_service.get_rfq(rfq_id)
+        if not rfq:
+            raise ValueError(f"RFQ {rfq_id} not found.")
+        if rfq.status != "Pending_PO_Review":
+            raise ValueError("PO is not waiting for human review.")
+        db_service.update_rfq_status(rfq_id, "Purchase_Order_Received")
+        db_service.add_audit_log(
+            rfq_id,
+            "PurchaseOrderAgent",
+            "purchase_order_approved",
+            f"PO approved by {operator_name}; downstream purchasing may proceed."
+            + (f" Comments: {comments}" if comments else ""),
+            "SUCCESS",
+        )
+
+    async def decide_extraction_review(
+        self,
+        *,
+        review: Dict[str, Any],
+        decision: str,
+        operator: str,
+        comments: Optional[str] = None,
+        approved_extraction: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Apply an operator decision and downstream state changes without LLM calls."""
+        from services.email_intelligence import (
+            EmailIntelligenceExtraction,
+            _validate_source_grounding,
+            is_valid_extracted_part_number,
+        )
+
+        review_id = str(review["id"])
+        decision = decision.upper()
+        if decision not in {"APPROVE", "REJECT"}:
+            raise ReviewDecisionValidationError("Decision must be APPROVE or REJECT.")
+        if review.get("status") != "PENDING":
+            raise ReviewDecisionConflict(f"Review is already {str(review.get('status')).lower()}.")
+
+        if decision == "REJECT":
+            if not operations_store.claim_operator_review_decision(
+                review_id, decision, operator, {"comments": comments}
+            ):
+                raise ReviewDecisionConflict("Review was already claimed by another operator.")
+            if review.get("task") == "rfq_extraction" and review.get("entity_id"):
+                rfq = db_service.get_rfq(review["entity_id"])
+                if rfq and rfq.status == "Pending_Internal_Review":
+                    db_service.update_rfq_status(rfq.id, "Rejected")
+                    db_service.add_audit_log(
+                        rfq.id,
+                        "ExtractionReview",
+                        "rejected",
+                        f"Extraction rejected by {operator}. {comments or ''}",
+                        "WARNING",
+                    )
+            operations_store.complete_operator_review_decision(review_id, status="REJECTED")
+            return {"review_id": review_id, "status": "REJECTED", "decision_by": operator}
+
+        try:
+            extraction = EmailIntelligenceExtraction.model_validate(
+                approved_extraction or review["extraction"]
+            )
+        except Exception as exc:
+            raise ReviewDecisionValidationError(
+                f"Approved extraction does not match the schema: {exc}"
+            ) from exc
+
+        missing = _validate_source_grounding(extraction, review["source_text"], review["task"])
+        if missing:
+            raise ReviewDecisionValidationError(
+                "Approval requires source-grounded required fields: " + ", ".join(missing)
+            )
+        if not extraction.items:
+            raise ReviewDecisionValidationError("Approval requires at least one source-grounded item.")
+        if any(not is_valid_extracted_part_number(item.part_number.value or "") for item in extraction.items):
+            raise ReviewDecisionValidationError("Approval includes an invalid or reference-like part number.")
+
+        if review["task"] == "supplier_quote_extraction":
+            non_usd = [
+                item.currency.value
+                for item in extraction.items
+                if item.currency.value and item.currency.value.upper() != "USD"
+            ]
+            if non_usd:
+                raise ReviewDecisionConflict(
+                    "Non-USD supplier quotes remain held until a separately verified USD conversion is provided."
+                )
+            if any(not item.trace_documents for item in extraction.items):
+                raise ReviewDecisionValidationError(
+                    "Supplier offer approval requires source-grounded release certificate evidence."
+                )
+        elif review["task"] != "rfq_extraction":
+            raise ReviewDecisionConflict("This extraction task has no downstream approval handler.")
+
+        if not operations_store.claim_operator_review_decision(
+            review_id,
+            decision,
+            operator,
+            {"comments": comments, "approved_extraction": extraction.model_dump()},
+        ):
+            raise ReviewDecisionConflict("Review was already claimed by another operator.")
+
+        try:
+            if review["task"] == "rfq_extraction":
+                rfq = db_service.get_rfq(str(review.get("entity_id") or ""))
+                if not rfq or rfq.status != "Pending_Internal_Review":
+                    raise ReviewDecisionConflict("The linked RFQ is not waiting for extraction review.")
+                db_service.update_rfq_customer(
+                    rfq.id,
+                    extraction.customer_name or extraction.customer_company or rfq.customer_name,
+                    extraction.customer_email or rfq.customer_email,
+                )
+                db_service.replace_rfq_items(rfq.id, [{
+                    "part_number": item.part_number.value,
+                    "quantity": int(item.quantity.value or "0"),
+                    "condition_code": item.condition_code.value,
+                    "unit_of_measure": item.unit_of_measure.value,
+                } for item in extraction.items])
+                db_service.update_rfq_status(rfq.id, "Validating")
+                db_service.add_audit_log(
+                    rfq.id,
+                    "ExtractionReview",
+                    "approved",
+                    f"Source-grounded extraction approved by {operator}. {comments or ''}",
+                    "SUCCESS",
+                    json.dumps(extraction.model_dump()),
+                )
+                operations_store.complete_operator_review_decision(review_id, status="APPROVED")
+                pipeline_result = await self.process_rfq_pipeline(rfq.id)
+                return {
+                    "review_id": review_id,
+                    "status": "APPROVED",
+                    "rfq_id": rfq.id,
+                    "pipeline": pipeline_result,
+                }
+
+            sender = ""
+            for line in review["source_text"].splitlines():
+                if line.lower().startswith("from:"):
+                    sender = line.split(":", 1)[1].strip()
+                    break
+            source_id = review.get("entity_id") or review_id
+            approved_offers = []
+            for index, item in enumerate(extraction.items):
+                price = float(re.sub(r"[^0-9.\-]", "", item.target_price.value or ""))
+                quantity = int(re.search(r"\d+", item.quantity.value or "").group())
+                lead_time_match = re.search(r"\d+", item.lead_time_days.value or "")
+                approved_offers.append(supplier_db.save_supplier_offer(
+                    supplier_name=extraction.supplier_name or "Supplier Pending Identification",
+                    supplier_email=extraction.supplier_email or sender,
+                    part_number=item.part_number.value or "",
+                    quantity_available=quantity,
+                    unit_cost=price,
+                    certificate_type=item.trace_documents[0],
+                    lead_time_days=int(lead_time_match.group()) if lead_time_match else None,
+                    approval_status="Pending",
+                    condition_code=item.condition_code.value,
+                    source_email_id=f"{source_id}:{index}" if index else str(source_id),
+                    confidence=extraction.confidence_score,
+                    trace_documents=item.trace_documents,
+                ))
+            operations_store.complete_operator_review_decision(review_id, status="APPROVED")
+            return {"review_id": review_id, "status": "APPROVED", "offers": approved_offers}
+        except Exception as exc:
+            operations_store.complete_operator_review_decision(
+                review_id,
+                status="PENDING",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            raise
 
     async def process_rfq_pipeline(self, rfq_id: str) -> Dict[str, Any]:
         """
@@ -409,23 +711,19 @@ class OrchestrationService:
             
             for item in items:
                 source_details = allocated_sources.get(item.id, {})
-                price_res = await self.pricing_agent.execute({
-                    "unit_cost": source_details.get("unit_cost", 0.0),
-                    "quantity": item.quantity,
-                    "urgency": "Routine",
-                    "source": source_details.get("source")
-                })
-                
-                p_data = price_res.data
+                p_data, low_margin = self.calculate_pricing(
+                    float(source_details.get("unit_cost", 0.0)),
+                    int(item.quantity),
+                )
                 
                 # Check low-margin warning
-                if price_res.escalation_triggered and price_res.escalation_triggered.condition == "margin_below_threshold":
+                if low_margin:
                     has_low_margin_escalation = True
-                    margin_esc_rule = price_res.escalation_triggered
+                    margin_esc_rule = self.pricing_agent.metadata.escalation_rules[0]
                     db_service.add_audit_log(
                         rfq_id, "PricingAgent", "pricing_calc",
                         f"Low margin warning on item '{item.resolved_part_number}': Margin is {p_data.get('margin_percent')}% (below 10%).",
-                        "WARNING", json.dumps(price_res.dict())
+                        "WARNING", json.dumps({"data": p_data, "escalation_triggered": margin_esc_rule.model_dump()})
                     )
                 else:
                     db_service.add_audit_log(
@@ -602,7 +900,13 @@ class OrchestrationService:
             "reply_to": reply_to,
         }, context={"pipeline_state": pipeline_state})
 
-    async def approve_and_send_quote(self, quote_id: str, operator_name: str, overrides: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    async def approve_and_send_quote(
+        self,
+        quote_id: str,
+        operator_name: str,
+        overrides: Optional[List[Dict[str, Any]]] = None,
+        comments: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Processes human approval. Overrides prices if supplied, recalculates totals,
         and fires Customer Communication transmission.
@@ -638,7 +942,8 @@ class OrchestrationService:
         db_service.update_rfq_status(rfq_id, "Quote_Sent")
         db_service.add_audit_log(
             rfq_id, "Orchestrator", "human_approval",
-            f"Quote {quote_id} approved by commercial operator '{operator_name}'.",
+            f"Quote {quote_id} approved by commercial operator '{operator_name}'."
+            + (f" Comments: {comments}" if comments else ""),
             "SUCCESS"
         )
         
@@ -666,6 +971,13 @@ class OrchestrationService:
             },
             "reply_to": rfq.thread_id,
         })
+
+        if not comm_res.success:
+            db_service.update_quote_status(quote_id, "Dispatch_Failed", comments=comm_res.error_message)
+            db_service.update_rfq_status(rfq_id, "Quote_Dispatch_Failed")
+            return {"error": comm_res.error_message, "status": "Quote_Dispatch_Failed"}
+
+        db_service.update_quote_status(quote_id, "Sent", comments=comments)
         
         db_service.add_audit_log(
             rfq_id, "CustomerCommunicationAgent", "email_dispatch",
