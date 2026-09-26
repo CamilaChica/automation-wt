@@ -74,6 +74,8 @@ Worker ownership:
 - Ignore messages sent by `sales@wingedtycoons.com` to prevent self-reply loops.
 - Read only Inbox messages for RFQ ingestion.
 - Process each Graph message ID once.
+- Use `IdempotencyRepository.claim()` as an atomic PostgreSQL operation before processing; integrate the claim and business writes into the same transaction in both workers.
+- Make workers claim message IDs through `IdempotencyRepository.claim()` using PostgreSQL atomic insert-on-conflict within the same transaction as business writes.
 - Reject supplier quote references as part numbers.
 - If a supplier PDF is unreadable, request quote details in the same email body thread.
 - Exclude supplier offers older than 30 days from automatic pricing and request threaded confirmation.
@@ -132,3 +134,21 @@ Do not mark the application ready until:
 - A new RFQ reaches `Quote_Sent`.
 - The communication record reports `transmission_status=SENT`.
 - The customer receives the response.
+
+## Runtime Cutover Progress
+
+- Completed: PostgreSQL models, Alembic migration `0003_shared_operational_state`, async RFQ/quote/communication/workflow/idempotency repositories, and fail-closed SQLite production guard.
+- Completed: idempotency claim changed to PostgreSQL `INSERT ... ON CONFLICT DO NOTHING RETURNING`, which is safe against concurrent claims.
+- Remaining: replace the SQLite-backed `OperationsStore` implementation for the API, communication services, review queue, automation events, and carrier webhook idempotency with PostgreSQL repositories.
+- Remaining: update `MockDatabaseService` runtime reads/writes to use PostgreSQL repositories instead of its serialized SQLite state snapshot.
+- Remaining: wire both inbound workers to claim message IDs and write RFQ/supplier/communication state in a shared PostgreSQL transaction.
+- Not yet proven: live PostgreSQL integration, dual-worker concurrency, Render migration success, and end-to-end sent-email trace.
+- Do not mark production ready or rely on PostgreSQL readiness until runtime repository call sites are migrated and migration/integration gates pass.
+
+## Runtime Migration Status
+
+- PostgreSQL operational models, Alembic migration, and repositories are present.
+- Idempotency claims use atomic PostgreSQL `INSERT ... ON CONFLICT DO NOTHING RETURNING` to prevent concurrent workers from both claiming a Graph message.
+- Production startup refuses SQLite `OperationsStore` until PostgreSQL repositories are wired into the runtime.
+- Remaining P0 work: migrate `db_service`, communication/audit persistence, workflow state, operator-review/tasks, API routes, and both workers to shared PostgreSQL repositories and transactions.
+- Local tests for schema coverage, fail-closed SQLite behavior, readiness, and idempotency pass. Live PostgreSQL integration and concurrent-worker tests require a test PostgreSQL instance and are not yet verified.
