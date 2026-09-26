@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
+from repositories.review_telemetry_repository import PostgresReviewTelemetryRepository
+
 
 DEFAULT_PATH = Path(__file__).resolve().parent.parent / "data" / "operations.db"
 SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema.sql"
@@ -16,17 +18,17 @@ SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema.sql"
 
 class OperationsStore:
     def __init__(self, path: str | Path | None = None):
-        production = (
-            os.getenv("ENVIRONMENT", os.getenv("WT_ENV", "development")).strip().lower() == "production"
-            or os.getenv("RENDER", "false").strip().lower() in {"1", "true", "yes", "on"}
-        )
+        production = any(
+            os.getenv(name, "").strip().lower() == "production"
+            for name in ("ENVIRONMENT", "WT_ENV", "WT_AUTH_ENV")
+        ) or os.getenv("RENDER", "false").strip().lower() in {"1", "true", "yes", "on"}
         if production and not os.getenv("DATABASE_URL", "").strip():
             raise RuntimeError("DATABASE_URL is required for production operational persistence.")
         if production:
-            raise RuntimeError(
-                "PostgreSQL operational repositories are not wired into OperationsStore; "
-                "refusing to use SQLite for production business state."
-            )
+            self.path = None
+            self._postgres = PostgresReviewTelemetryRepository()
+            return
+        self._postgres = None
         configured = path or os.getenv("OPERATIONS_DB_PATH")
         self.path = Path(configured) if configured else DEFAULT_PATH
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -43,7 +45,7 @@ class OperationsStore:
 
     @property
     def storage_engine(self) -> str:
-        return "sqlite"
+        return "postgresql" if self._postgres else "sqlite"
 
     @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -52,12 +54,20 @@ class OperationsStore:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def _connect(self) -> sqlite3.Connection:
+        if self._postgres:
+            raise RuntimeError(
+                "This operation is not wired to the production PostgreSQL repository; refusing SQLite fallback."
+            )
         connection = sqlite3.connect(self.path)
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
     @contextmanager
     def transaction(self):
+        if self._postgres:
+            raise RuntimeError(
+                "This operation is not wired to the production PostgreSQL repository; refusing SQLite fallback."
+            )
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -70,6 +80,8 @@ class OperationsStore:
             connection.close()
 
     def load(self) -> Dict[str, Any] | None:
+        if self._postgres:
+            return self._postgres.load_operations_state()
         conn = self._connect()
         try:
             row = conn.execute(
@@ -80,6 +92,9 @@ class OperationsStore:
         return json.loads(row[0]) if row else None
 
     def save(self, state: Dict[str, Any]) -> None:
+        if self._postgres:
+            self._postgres.save_operations_state(state)
+            return
         payload = json.dumps(state, separators=(",", ":"))
         with self.transaction() as conn:
             conn.execute(
@@ -89,6 +104,9 @@ class OperationsStore:
             )
 
     def clear(self) -> None:
+        if self._postgres:
+            self._postgres.clear_operations_state()
+            return
         conn = self._connect()
         try:
             conn.execute("DELETE FROM operations_state WHERE state_key = 'current'")
@@ -221,6 +239,18 @@ class OperationsStore:
         attempts: int = 0,
         max_attempts: int = 3,
     ) -> str:
+        if self._postgres:
+            return self._postgres.record_automation_event(
+                event_type=event_type,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                status=status,
+                result=result,
+                error=error,
+                idempotency_key=idempotency_key,
+                attempts=attempts,
+                max_attempts=max_attempts,
+            )
         if idempotency_key:
             conn = self._connect()
             try:
@@ -248,6 +278,10 @@ class OperationsStore:
         return event_id
 
     def update_automation_event(self, event_id: str, *, status: str, attempts: int, result: str | None = None, error: str | None = None) -> None:
+        if self._postgres:
+            return self._postgres.update_automation_event(
+                event_id, status=status, attempts=attempts, result=result, error=error
+            )
         conn = self._connect()
         try:
             conn.execute(
@@ -259,6 +293,8 @@ class OperationsStore:
             conn.close()
 
     def claim_carrier_webhook_event(self, event_id: str) -> bool:
+        if self._postgres:
+            return self._postgres.claim_carrier_webhook_event(event_id)
         now = datetime.now(timezone.utc).isoformat()
         conn = self._connect()
         try:
@@ -272,6 +308,8 @@ class OperationsStore:
             conn.close()
 
     def list_automation_events(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        if self._postgres:
+            return self._postgres.list_automation_events(status=status, limit=limit)
         conn = self._connect()
         conn.row_factory = sqlite3.Row
         try:
@@ -289,6 +327,17 @@ class OperationsStore:
         finally:
             conn.close()
 
+    def get_automation_event(self, event_id: str) -> dict[str, Any] | None:
+        if self._postgres:
+            return self._postgres.get_automation_event(event_id)
+        conn = self._connect()
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT * FROM automation_events WHERE id = ?", (event_id,)).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     def enqueue_operator_review(
         self,
         *,
@@ -301,6 +350,17 @@ class OperationsStore:
         hold_flags: list[str] | None = None,
         entity_id: str | None = None,
     ) -> str:
+        if self._postgres:
+            return self._postgres.enqueue_operator_review(
+                idempotency_key=idempotency_key,
+                task=task,
+                source_text=source_text,
+                extraction=extraction,
+                reason=reason,
+                prompt_version=prompt_version,
+                hold_flags=hold_flags,
+                entity_id=entity_id,
+            )
         now = datetime.now(timezone.utc).isoformat()
         review_id = f"REV-{uuid.uuid4().hex[:12].upper()}"
         with self.transaction() as conn:
@@ -327,6 +387,8 @@ class OperationsStore:
         return review_id
 
     def get_operator_review(self, review_id: str) -> dict[str, Any] | None:
+        if self._postgres:
+            return self._postgres.get_operator_review(review_id)
         conn = self._connect()
         conn.row_factory = sqlite3.Row
         try:
@@ -336,6 +398,8 @@ class OperationsStore:
             conn.close()
 
     def list_operator_reviews(self, *, status: str = "PENDING", limit: int = 100) -> list[dict[str, Any]]:
+        if self._postgres:
+            return self._postgres.list_operator_reviews(status=status, limit=limit)
         conn = self._connect()
         conn.row_factory = sqlite3.Row
         try:
@@ -355,6 +419,8 @@ class OperationsStore:
         return row
 
     def link_operator_review_entity(self, review_id: str, entity_id: str) -> bool:
+        if self._postgres:
+            return self._postgres.link_operator_review_entity(review_id, entity_id)
         with self.transaction() as conn:
             cursor = conn.execute(
                 "UPDATE operator_review_queue SET entity_id = ?, updated_at = ? WHERE id = ? AND status = 'PENDING'",
@@ -370,6 +436,10 @@ class OperationsStore:
         reason: str | None = None,
         entity_id: str | None = None,
     ) -> bool:
+        if self._postgres:
+            return self._postgres.add_operator_review_flags(
+                review_id, hold_flags=hold_flags, reason=reason, entity_id=entity_id
+            )
         with self.transaction() as conn:
             row = conn.execute(
                 "SELECT hold_flags_json, reason FROM operator_review_queue WHERE id = ? AND status = 'PENDING'",
@@ -387,6 +457,8 @@ class OperationsStore:
             return cursor.rowcount == 1
 
     def claim_operator_review_decision(self, review_id: str, decision: str, operator: str, payload: Dict[str, Any]) -> bool:
+        if self._postgres:
+            return self._postgres.claim_operator_review_decision(review_id, decision, operator, payload)
         if decision not in {"APPROVE", "REJECT"}:
             raise ValueError("Review decision must be APPROVE or REJECT.")
         with self.transaction() as conn:
@@ -398,6 +470,8 @@ class OperationsStore:
             return cursor.rowcount == 1
 
     def complete_operator_review_decision(self, review_id: str, *, status: str, error: str | None = None) -> None:
+        if self._postgres:
+            return self._postgres.complete_operator_review_decision(review_id, status=status, error=error)
         if status not in {"APPROVED", "REJECTED", "PENDING"}:
             raise ValueError("Invalid operator review status.")
         with self.transaction() as conn:
@@ -429,6 +503,19 @@ class OperationsStore:
         validation_result: str,
         review_queue_id: str | None = None,
     ) -> str:
+        if self._postgres:
+            return self._postgres.record_llm_telemetry(
+                task=task,
+                prompt_version=prompt_version,
+                model_id=model_id,
+                model_calls=model_calls,
+                latency_ms=latency_ms,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                estimated_cost_usd=estimated_cost_usd,
+                validation_result=validation_result,
+                review_queue_id=review_queue_id,
+            )
         telemetry_id = f"LLM-{uuid.uuid4().hex[:12].upper()}"
         with self.transaction() as conn:
             conn.execute(
@@ -454,6 +541,8 @@ class OperationsStore:
         return telemetry_id
 
     def list_llm_telemetry(self, *, task: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        if self._postgres:
+            return self._postgres.list_llm_telemetry(task=task, limit=limit)
         conn = self._connect()
         conn.row_factory = sqlite3.Row
         try:

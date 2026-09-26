@@ -395,11 +395,15 @@ async def ready():
         raise HTTPException(status_code=503, detail=f"database not ready: {exc}") from exc
     persistence = persistence_status(postgres_healthy=postgres_healthy)
     postgresql_mirroring = bool(postgres_healthy and persistence["inventory_postgres_mirror_enabled"])
-    operational_postgresql_primary = persistence["storage_engine"] == "postgresql"
-    if production and not (postgresql_mirroring and operational_postgresql_primary):
+    full_operational_postgresql = bool(persistence.get("full_operational_persistence_ready"))
+    if production and not (postgresql_mirroring and full_operational_postgresql):
         raise HTTPException(
             status_code=503,
-            detail="PostgreSQL mirroring and PostgreSQL operational repositories must both be active.",
+            detail=(
+                "Production remains disabled until inventory mirroring and the full operational "
+                "RFQ/supplier/quote repositories are PostgreSQL-backed. Review/telemetry persistence "
+                "alone does not enable the workflow."
+            ),
         )
     return {
         "status": "ready",

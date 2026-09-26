@@ -67,15 +67,7 @@ class AutomationQueue:
                 await asyncio.sleep(0)
 
     def _event(self, event_id: str):
-        import sqlite3
-
-        conn = sqlite3.connect(operations_store.path)
-        conn.row_factory = sqlite3.Row
-        try:
-            row = conn.execute("SELECT * FROM automation_events WHERE id = ?", (event_id,)).fetchone()
-            return dict(row) if row else None
-        finally:
-            conn.close()
+        return operations_store.get_automation_event(event_id)
 
 
 automation_queue = AutomationQueue()

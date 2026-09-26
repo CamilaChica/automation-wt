@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
@@ -42,7 +42,7 @@ class RFQ(BaseModel):
     version: int = Field(1, ge=1, description="Optimistic concurrency version")
     raw_text: str = Field(description="Raw unstructured text from email or document")
     thread_id: Optional[str] = Field(None, description="Originating email message ID used for same-thread replies")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class InventoryItem(BaseModel):
     id: str = Field(description="Unique inventory item record ID")
@@ -128,7 +128,7 @@ class ShipmentEvent(BaseModel):
     status: str = Field(description="Shipment status")
     location: Optional[str] = Field(None, description="Public-safe event location")
     description: str = Field(description="Customer-safe event description")
-    occurred_at: datetime = Field(default_factory=datetime.utcnow)
+    occurred_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class Shipment(BaseModel):
     id: str = Field(description="Unique shipment ID")
@@ -142,8 +142,8 @@ class Shipment(BaseModel):
     status: str = Field("Preparing Shipment", description="Current shipment status")
     estimated_delivery: Optional[str] = None
     public_token: str = Field(description="Opaque customer tracking token")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class AgentAuditLog(BaseModel):
     id: Optional[int] = Field(None, description="Autoincrement log ID")
@@ -153,4 +153,4 @@ class AgentAuditLog(BaseModel):
     message: str = Field(description="Human readable description of the action")
     status: str = Field("SUCCESS", description="SUCCESS, WARNING, FAILURE")
     payload_json: Optional[str] = Field(None, description="Serialized JSON payload of details, inputs, or outputs")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, Float, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from models.async_models import Base
@@ -126,3 +126,68 @@ class AgentHandoffRecord(Base):
     to_agent: Mapped[str] = mapped_column(String(128))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class OperatorReviewRecord(Base):
+    __tablename__ = "operator_review_queue"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    task: Mapped[str] = mapped_column(String(128), index=True)
+    prompt_version: Mapped[str | None] = mapped_column(String(128))
+    entity_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    source_text: Mapped[str] = mapped_column(Text)
+    extraction_json: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text)
+    hold_flags_json: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[str] = mapped_column(String(32), index=True, default="PENDING")
+    decision: Mapped[str | None] = mapped_column(String(16))
+    decision_by: Mapped[str | None] = mapped_column(String(320))
+    decision_payload: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class LLMTelemetryRecord(Base):
+    __tablename__ = "llm_telemetry"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task: Mapped[str] = mapped_column(String(128), index=True)
+    prompt_version: Mapped[str] = mapped_column(String(128))
+    model_id: Mapped[str] = mapped_column(String(128))
+    model_calls_json: Mapped[str] = mapped_column(Text, default="[]")
+    latency_ms: Mapped[float] = mapped_column(Float)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0)
+    validation_result: Mapped[str] = mapped_column(String(64))
+    operator_review_outcome: Mapped[str | None] = mapped_column(String(32))
+    review_queue_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AutomationEventRecord(Base):
+    __tablename__ = "automation_events"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), unique=True)
+    event_type: Mapped[str] = mapped_column(String(128), index=True)
+    entity_type: Mapped[str] = mapped_column(String(64))
+    entity_id: Mapped[str] = mapped_column(String(128), index=True)
+    status: Mapped[str] = mapped_column(String(64), index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    execution_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    result: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CarrierWebhookEventRecord(Base):
+    __tablename__ = "carrier_webhook_events"
+    event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class OperationsStateRecord(Base):
+    __tablename__ = "operations_state"
+    state_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)

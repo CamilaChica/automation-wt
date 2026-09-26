@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -23,9 +24,14 @@ class MockDatabaseService:
         self.shipments: Dict[str, Shipment] = {}
         self.shipment_events: Dict[str, List[ShipmentEvent]] = {}
         
-        if not self._restore_state():
+        production = any(
+            os.getenv(name, "").strip().lower() == "production"
+            for name in ("ENVIRONMENT", "WT_ENV", "WT_AUTH_ENV")
+        ) or os.getenv("RENDER", "false").strip().lower() in {"1", "true", "yes", "on"}
+        if not self._restore_state() and not production:
             self.seed_mock_data()
-        self.seed_supplier_records()
+        if not production:
+            self.seed_supplier_records()
 
     @staticmethod
     def _model_data(model):
@@ -213,7 +219,7 @@ class MockDatabaseService:
             status="Intake",
             raw_text=raw_text,
             thread_id=thread_id,
-            created_at=datetime.utcnow()
+            created_at=datetime.now(timezone.utc)
         )
         self.rfqs[rfq_id] = rfq
         operations_store.upsert_customer(
@@ -378,7 +384,7 @@ class MockDatabaseService:
             message=message,
             status=status,
             payload_json=payload,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now(timezone.utc)
         )
         if rfq_id not in self.audit_logs:
             self.audit_logs[rfq_id] = []
@@ -506,7 +512,7 @@ class MockDatabaseService:
             quote.status = status
             if approved_by:
                 quote.approved_by = approved_by
-                quote.approved_at = datetime.utcnow()
+                quote.approved_at = datetime.now(timezone.utc)
             if comments:
                 quote.comments = comments
             quote.version += 1
@@ -541,7 +547,7 @@ class MockDatabaseService:
         self.shipment_events.setdefault(shipment_id, []).append(event)
         if shipment_id in self.shipments:
             self.shipments[shipment_id].status = status
-            self.shipments[shipment_id].updated_at = datetime.utcnow()
+            self.shipments[shipment_id].updated_at = datetime.now(timezone.utc)
         self._persist_state()
         return event
 
@@ -574,7 +580,7 @@ class MockDatabaseService:
             return None
         shipment.carrier = carrier
         shipment.tracking_number = tracking_number
-        shipment.updated_at = datetime.utcnow()
+        shipment.updated_at = datetime.now(timezone.utc)
         self._persist_state()
         return shipment
 

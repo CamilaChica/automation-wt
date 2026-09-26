@@ -1,4 +1,14 @@
+import os
+
 import pytest
+
+
+def pytest_configure():
+    # Import-time singletons must not bind local test runs to deployment storage.
+    os.environ["ENVIRONMENT"] = "development"
+    os.environ["WT_ENV"] = "development"
+    os.environ["WT_AUTH_ENV"] = "development"
+    os.environ["RENDER"] = "false"
 
 
 def pytest_addoption(parser):
