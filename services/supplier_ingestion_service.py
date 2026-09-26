@@ -67,18 +67,38 @@ class SupplierEmailIngestionService:
                     subject=subject or "Supplier quote requires human review",
                     body=email_text,
                 )
-                review_event_id = operations_store.record_automation_event(
+                review_event_id = llm_data.telemetry.get("review_queue_id")
+                hold_flags = list(llm_data.missing_fields)
+                if unsupported_currencies:
+                    hold_flags.append("non-USD currency: " + ", ".join(unsupported_currencies))
+                if review_event_id:
+                    operations_store.add_operator_review_flags(
+                        review_event_id,
+                        hold_flags=hold_flags,
+                        reason="non_usd_currency" if unsupported_currencies else None,
+                        entity_id=source_email_id,
+                    )
+                else:
+                    review_event_id = operations_store.enqueue_operator_review(
+                        idempotency_key=f"supplier-email-review:{source_email_id}",
+                        task="supplier_quote_extraction",
+                        source_text=attachment_context,
+                        extraction=llm_data.model_dump(),
+                        reason="non_usd_currency",
+                        hold_flags=hold_flags,
+                        entity_id=source_email_id,
+                    )
+                operations_store.record_automation_event(
                     event_type="supplier_email_extraction_review",
                     entity_type="email",
                     entity_id=source_email_id,
                     status="PENDING_HUMAN_REVIEW",
                     result=json.dumps({
-                        "pending_human_review": True,
+                        "review_queue_id": review_event_id,
                         "missing_fields": llm_data.missing_fields,
                         "unsupported_currencies": unsupported_currencies,
-                        "telemetry": llm_data.telemetry,
                     }),
-                    idempotency_key=f"supplier-email-review:{source_email_id}",
+                    idempotency_key=f"supplier-email-review-event:{source_email_id}",
                 )
                 return {
                     "success": False,

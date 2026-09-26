@@ -2,7 +2,7 @@ import json
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from models.db_models import RFQ, RFQItem, InventoryItem, SupplierQuote, Quote, QuoteItem, AgentAuditLog, Supplier, Shipment, ShipmentEvent
 from services.operations_store import operations_store
 from services.supplier_database import supplier_db
@@ -350,6 +350,23 @@ class MockDatabaseService:
 
     def get_rfq_items(self, rfq_id: str) -> List[RFQItem]:
         return self.rfq_items.get(rfq_id, [])
+
+    def replace_rfq_items(self, rfq_id: str, items: List[Dict[str, Any]]) -> List[RFQItem]:
+        if rfq_id not in self.rfqs:
+            raise ValueError(f"RFQ {rfq_id} not found.")
+        self.rfq_items[rfq_id] = []
+        replaced = [
+            self.add_rfq_item(
+                rfq_id,
+                str(item["part_number"]),
+                int(item["quantity"]),
+                uom=str(item.get("unit_of_measure") or "EA"),
+                condition=str(item.get("condition_code") or "NE"),
+            )
+            for item in items
+        ]
+        self._persist_state()
+        return replaced
 
     # Audit Log Operations
     def add_audit_log(self, rfq_id: str, agent_name: str, action: str, message: str, status: str = "SUCCESS", payload: str = None) -> AgentAuditLog:

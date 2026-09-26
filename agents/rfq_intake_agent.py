@@ -46,6 +46,7 @@ from agents.base_agent import BaseAgent, AgentMetadata, AgentResponse, Escalatio
 from models.db_models import RFQIntakeOutput
 from services.email_intelligence import extract_email_intelligence, is_valid_extracted_part_number
 from services.llm_provider import LLMRouter
+from services.operations_store import operations_store
 from services.agents.prompts import RFQ_INTAKE_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -441,7 +442,7 @@ class RFQIntakeAgent(BaseAgent):
             )
 
         # ── 1. Extract all fields ───────────────────────────────────────
-        rfq_id       = _generate_rfq_id()
+        rfq_id       = str(inputs.get("rfq_id") or _generate_rfq_id())
         customer_name, company, customer_email = _extract_customer_info(raw_text)
         customer_name = str(inputs.get("customer_name") or customer_name or "").strip() or None
         customer_email = str(inputs.get("customer_email") or customer_email or "").strip().lower() or None
@@ -595,6 +596,8 @@ class RFQIntakeAgent(BaseAgent):
         payload["extraction_telemetry"] = extraction_telemetry
         payload["customer_email"] = customer_email  # legacy key
         payload["items"] = items                    # legacy key
+        if pending_human_review and extraction_telemetry.get("review_queue_id"):
+            operations_store.link_operator_review_entity(extraction_telemetry["review_queue_id"], str(inputs.get("rfq_id") or rfq_id))
 
         # ── 8. Return ───────────────────────────────────────────────────
         if needs_clarification or pending_human_review:

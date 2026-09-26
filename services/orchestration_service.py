@@ -73,6 +73,7 @@ class OrchestrationService:
         if rfq.status == "Intake":
             db_service.add_audit_log(rfq_id, "Orchestrator", "transition", "Starting RFQ Intake processing stage.")
             res = await self.intake_agent.execute({
+                "rfq_id": rfq_id,
                 "raw_text": rfq.raw_text,
                 "customer_name": rfq.customer_name,
                 "customer_email": rfq.customer_email,

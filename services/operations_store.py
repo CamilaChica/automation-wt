@@ -276,5 +276,124 @@ class OperationsStore:
         finally:
             conn.close()
 
+    def enqueue_operator_review(
+        self,
+        *,
+        idempotency_key: str,
+        task: str,
+        source_text: str,
+        extraction: Dict[str, Any],
+        reason: str,
+        hold_flags: list[str] | None = None,
+        entity_id: str | None = None,
+    ) -> str:
+        now = datetime.now(timezone.utc).isoformat()
+        review_id = f"REV-{uuid.uuid4().hex[:12].upper()}"
+        with self.transaction() as conn:
+            existing = conn.execute(
+                "SELECT id FROM operator_review_queue WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE operator_review_queue SET entity_id = COALESCE(?, entity_id), "
+                    "source_text = ?, extraction_json = ?, reason = ?, hold_flags_json = ?, updated_at = ? "
+                    "WHERE id = ? AND status = 'PENDING'",
+                    (entity_id, source_text, json.dumps(extraction), reason, json.dumps(hold_flags or []), now, existing[0]),
+                )
+                return str(existing[0])
+            conn.execute(
+                "INSERT INTO operator_review_queue "
+                "(id, idempotency_key, task, entity_id, source_text, extraction_json, reason, hold_flags_json, status, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)",
+                (review_id, idempotency_key, task, entity_id, source_text, json.dumps(extraction), reason,
+                 json.dumps(hold_flags or []), now, now),
+            )
+        return review_id
+
+    def get_operator_review(self, review_id: str) -> dict[str, Any] | None:
+        conn = self._connect()
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT * FROM operator_review_queue WHERE id = ?", (review_id,)).fetchone()
+            return self._decode_operator_review(dict(row)) if row else None
+        finally:
+            conn.close()
+
+    def list_operator_reviews(self, *, status: str = "PENDING", limit: int = 100) -> list[dict[str, Any]]:
+        conn = self._connect()
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                "SELECT * FROM operator_review_queue WHERE status = ? ORDER BY created_at ASC LIMIT ?",
+                (status, min(max(limit, 1), 500)),
+            ).fetchall()
+            return [self._decode_operator_review(dict(row)) for row in rows]
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _decode_operator_review(row: dict[str, Any]) -> dict[str, Any]:
+        for column, key in (("extraction_json", "extraction"), ("hold_flags_json", "hold_flags"), ("decision_payload", "decision_payload")):
+            raw = row.pop(column, None)
+            row[key] = json.loads(raw) if raw else (None if key == "decision_payload" else {} if key == "extraction" else [])
+        return row
+
+    def link_operator_review_entity(self, review_id: str, entity_id: str) -> bool:
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE operator_review_queue SET entity_id = ?, updated_at = ? WHERE id = ? AND status = 'PENDING'",
+                (entity_id, datetime.now(timezone.utc).isoformat(), review_id),
+            )
+            return cursor.rowcount == 1
+
+    def add_operator_review_flags(
+        self,
+        review_id: str,
+        *,
+        hold_flags: list[str],
+        reason: str | None = None,
+        entity_id: str | None = None,
+    ) -> bool:
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT hold_flags_json, reason FROM operator_review_queue WHERE id = ? AND status = 'PENDING'",
+                (review_id,),
+            ).fetchone()
+            if not row:
+                return False
+            merged_flags = sorted(set(json.loads(row[0] or "[]")) | set(hold_flags))
+            merged_reason = "; ".join(dict.fromkeys(filter(None, [row[1], reason])))
+            cursor = conn.execute(
+                "UPDATE operator_review_queue SET hold_flags_json = ?, reason = ?, "
+                "entity_id = COALESCE(?, entity_id), updated_at = ? WHERE id = ? AND status = 'PENDING'",
+                (json.dumps(merged_flags), merged_reason, entity_id, datetime.now(timezone.utc).isoformat(), review_id),
+            )
+            return cursor.rowcount == 1
+
+    def claim_operator_review_decision(self, review_id: str, decision: str, operator: str, payload: Dict[str, Any]) -> bool:
+        if decision not in {"APPROVE", "REJECT"}:
+            raise ValueError("Review decision must be APPROVE or REJECT.")
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE operator_review_queue SET status = 'PROCESSING', decision = ?, decision_by = ?, "
+                "decision_payload = ?, updated_at = ? WHERE id = ? AND status = 'PENDING'",
+                (decision, operator, json.dumps(payload), datetime.now(timezone.utc).isoformat(), review_id),
+            )
+            return cursor.rowcount == 1
+
+    def complete_operator_review_decision(self, review_id: str, *, status: str, error: str | None = None) -> None:
+        if status not in {"APPROVED", "REJECTED", "PENDING"}:
+            raise ValueError("Invalid operator review status.")
+        with self.transaction() as conn:
+            conn.execute(
+                "UPDATE operator_review_queue SET status = ?, error = ?, "
+                "decision = CASE WHEN ? = 'PENDING' THEN NULL ELSE decision END, "
+                "decision_by = CASE WHEN ? = 'PENDING' THEN NULL ELSE decision_by END, "
+                "decision_payload = CASE WHEN ? = 'PENDING' THEN NULL ELSE decision_payload END, updated_at = ? "
+                "WHERE id = ? AND status IN ('PROCESSING', 'PENDING')",
+                (status, error, status, status, status, datetime.now(timezone.utc).isoformat(), review_id),
+            )
+
 
 operations_store = OperationsStore()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import time
@@ -13,6 +14,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 from schemas.extraction import ExtractedField, RFQExtractionResult
 from services.llm_provider import LLMRequest, LLMRouter, StructuredOutputError
 from services.document_parser import build_email_context
+from services.operations_store import operations_store
 
 
 class ExtractedEmailItem(RFQExtractionResult):
@@ -32,6 +34,8 @@ class EmailIntelligenceExtraction(BaseModel):
     items: List[ExtractedEmailItem] = Field(default_factory=list)
     missing_fields: List[str] = Field(default_factory=list)
     confidence_score: float = Field(0.0, ge=0, le=1)
+    needs_escalation: bool = False
+    escalation_reason: Optional[str] = None
     _telemetry: dict[str, Any] = PrivateAttr(default_factory=dict)
 
     @property
@@ -149,6 +153,13 @@ def _estimated_response_cost(response: Any) -> float:
     return (input_tokens * input_rate + output_tokens * output_rate) / 1_000_000
 
 
+def _response_token_counts(response: Any) -> tuple[int, int]:
+    usage = response.raw.get("usage", {}) if isinstance(response.raw, dict) else {}
+    input_tokens = int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
+    output_tokens = int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0)
+    return input_tokens, output_tokens
+
+
 def extract_email_intelligence(
     email_text: str,
     *,
@@ -188,6 +199,8 @@ def extract_email_intelligence(
     )
     started_at = time.perf_counter()
     response_cost = 0.0
+    input_tokens = 0
+    output_tokens = 0
     model_calls: list[str] = []
     escalation_reason = ""
     try:
@@ -199,10 +212,12 @@ def extract_email_intelligence(
         )
         model_calls.append(response.model)
         response_cost += _estimated_response_cost(response)
+        input_tokens, output_tokens = _response_token_counts(response)
     except StructuredOutputError as exc:
         if exc.response is not None:
             model_calls.append(exc.response.model)
             response_cost += _estimated_response_cost(exc.response)
+            input_tokens, output_tokens = _response_token_counts(exc.response)
         result = EmailIntelligenceExtraction(missing_fields=["structured extraction"], confidence_score=0.0)
         escalation_reason = "structured_output_invalid"
     except ValueError:
@@ -266,6 +281,9 @@ def extract_email_intelligence(
             )
             model_calls.append(response.model)
             response_cost += _estimated_response_cost(response)
+            escalation_input_tokens, escalation_output_tokens = _response_token_counts(response)
+            input_tokens += escalation_input_tokens
+            output_tokens += escalation_output_tokens
             escalated_required_missing = _validate_source_grounding(escalated, context, task)
             invalid_escalated_items = [
                 item for item in escalated.items
@@ -283,17 +301,49 @@ def extract_email_intelligence(
             if exc.response is not None:
                 model_calls.append(exc.response.model)
                 response_cost += _estimated_response_cost(exc.response)
+                escalation_input_tokens, escalation_output_tokens = _response_token_counts(exc.response)
+                input_tokens += escalation_input_tokens
+                output_tokens += escalation_output_tokens
             result.missing_fields = list(dict.fromkeys([*result.missing_fields, "human review required"]))
         except Exception:
             result.missing_fields = list(dict.fromkeys([*result.missing_fields, "human review required"]))
         if escalated_required_missing:
             result.missing_fields = sorted(set(result.missing_fields) | set(escalated_required_missing))
 
-    result._telemetry = {
+    non_usd_items = [
+        item for item in result.items
+        if task == "supplier_quote_extraction"
+        and item.currency.value
+        and item.currency.value.upper() != "USD"
+    ]
+    review_reason = escalation_reason or ("non_usd_currency" if non_usd_items else "")
+    result.needs_escalation = bool(review_reason)
+    result.escalation_reason = review_reason or None
+    if review_reason:
+        for item in result.items:
+            item.needs_escalation = True
+            item.escalation_reason = review_reason
+
+    telemetry = {
         "model_calls": model_calls,
         "latency_ms": round((time.perf_counter() - started_at) * 1000, 3),
         "estimated_cost_usd": response_cost,
-        "pending_human_review": bool(escalation_reason),
-        "escalation_reason": escalation_reason or None,
+        "token_usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+        "pending_human_review": bool(review_reason),
+        "escalation_reason": review_reason or None,
+        "model_escalation_reason": escalation_reason or None,
     }
+    if review_reason:
+        normalized_source = _normalize_source_text(context)
+        source_digest = hashlib.sha256(normalized_source.encode("utf-8")).hexdigest()
+        review_id = operations_store.enqueue_operator_review(
+            idempotency_key=f"extraction:{task}:{source_digest}",
+            task=task,
+            source_text=context,
+            extraction=result.model_dump(),
+            reason=review_reason,
+            hold_flags=result.missing_fields,
+        )
+        telemetry["review_queue_id"] = review_id
+    result._telemetry = telemetry
     return result

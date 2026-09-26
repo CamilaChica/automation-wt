@@ -158,6 +158,24 @@ CREATE TABLE IF NOT EXISTS automation_events (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS operator_review_queue (
+    id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    task TEXT NOT NULL,
+    entity_id TEXT,
+    source_text TEXT NOT NULL,
+    extraction_json TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    hold_flags_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    decision TEXT,
+    decision_by TEXT,
+    decision_payload TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS operations_state (
     state_key TEXT PRIMARY KEY,
     payload TEXT NOT NULL
@@ -175,3 +193,5 @@ CREATE INDEX IF NOT EXISTS idx_customer_quote_items_quote ON customer_quote_item
 CREATE INDEX IF NOT EXISTS idx_communications_entity ON communications(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_automation_events_entity ON automation_events(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_automation_events_status ON automation_events(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_operator_review_status ON operator_review_queue(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_operator_review_entity ON operator_review_queue(entity_id);
