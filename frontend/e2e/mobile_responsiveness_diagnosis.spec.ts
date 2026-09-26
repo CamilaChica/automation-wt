@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 import type { Page, TestInfo } from '@playwright/test';
 
 const internalTargets = [
@@ -106,6 +107,71 @@ test('cancelled quote and trace confirmations do not submit mutations', async ({
   expect(mutationRequests).toEqual([]);
 });
 
+test('cancelled sourcing, procurement, and fulfillment confirmations submit no mutations', async ({ page }) => {
+  const mutationRequests: string[] = [];
+  const confirmationMessages: string[] = [];
+  page.on('request', request => {
+    if (request.url().includes('/api/') && request.method() !== 'GET') mutationRequests.push(request.url());
+  });
+  page.on('dialog', async dialog => {
+    confirmationMessages.push(dialog.message());
+    await dialog.dismiss();
+  });
+
+  await installErrorCapture(page);
+  await installApiRoutes(page);
+  await page.goto('/internal', { waitUntil: 'networkidle' });
+
+  await selectTargetView(page, { path: '/sourcing', label: /Sourcing Matrix/i });
+  const quickAdd = page.getByRole('button', { name: /Quick-Add/i }).first();
+  await quickAdd.scrollIntoViewIfNeeded();
+  await quickAdd.click();
+
+  await selectTargetView(page, { path: '/procurement', label: /Proc Command/i });
+  await page.getByRole('button', { name: /GENERATE SMART QUOTE/i }).click();
+
+  await selectTargetView(page, { path: '/fulfillment', label: /Fulfillment/i });
+  await page.getByRole('button', { name: /PRINT ATA 300 CAT I TAGS/i }).click();
+
+  expect(confirmationMessages).toHaveLength(3);
+  expect(confirmationMessages[0]).toContain('Add part');
+  expect(confirmationMessages[1]).toContain('generate a quote');
+  expect(confirmationMessages[2]).toContain('print ATA 300 Category I tags');
+  expect(mutationRequests).toEqual([]);
+});
+
+test('confirmed procurement command stays pending until its mocked response', async ({ page }) => {
+  let commandRequests = 0;
+  let releaseCommand: (() => void) | undefined;
+  const mutationUrls: string[] = [];
+  await installErrorCapture(page);
+  await installApiRoutes(page);
+  page.on('request', request => {
+    if (request.method() !== 'GET' && request.url().includes('/api/')) mutationUrls.push(request.url());
+  });
+  await page.route('**/api/internal/commands', async route => {
+    commandRequests += 1;
+    await new Promise<void>(resolve => { releaseCommand = resolve; });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', message: 'Mock command accepted.' }) });
+  });
+  page.on('dialog', async dialog => await dialog.accept());
+  await page.goto('/internal', { waitUntil: 'networkidle' });
+  await selectTargetView(page, { path: '/procurement', label: /Proc Command/i });
+
+  const generateQuote = page.getByRole('button', { name: /GENERATE SMART QUOTE/i });
+  await expect(generateQuote).toBeEnabled();
+  await generateQuote.click();
+  await expect.poll(() => mutationUrls.length).toBe(1);
+  await expect.poll(() => commandRequests).toBe(1);
+  const pendingQuote = page.getByRole('button', { name: 'GENERATING...' });
+  await expect(pendingQuote).toBeDisabled();
+  await expect(pendingQuote).toHaveAttribute('aria-busy', 'true');
+  releaseCommand?.();
+  await expect(page.getByRole('button', { name: 'GENERATE SMART QUOTE' })).toBeEnabled();
+  await expect(page.getByRole('status').filter({ hasText: 'Mock command accepted.' })).toBeVisible();
+  expect(commandRequests).toBe(1);
+});
+
 test('shipment route displays the geographic map or its text fallback', async ({ page }) => {
   await installErrorCapture(page);
   await installApiRoutes(page);
@@ -118,6 +184,42 @@ test('shipment route displays the geographic map or its text fallback', async ({
   )).toBe(true);
   await expect(page.getByText(/Demo route geometry only; carrier locations are not live\./)).toBeAttached();
   await expect(page.getByRole('link', { name: 'Map data: OpenStreetMap contributors' })).toBeAttached();
+});
+
+test('internal views have no axe WCAG A/AA violations', async ({ page }) => {
+  await installErrorCapture(page);
+  await installApiRoutes(page);
+  await page.goto('/internal', { waitUntil: 'networkidle' });
+
+  for (const target of internalTargets) {
+    await selectTargetView(page, target);
+    const results = await new AxeBuilder({ page })
+      .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+      .analyze();
+    const violations = results.violations.map(violation => ({
+      id: violation.id,
+      impact: violation.impact,
+      description: violation.description,
+      nodes: violation.nodes.map(node => ({ target: node.target, summary: node.failureSummary })),
+    }));
+    expect(violations, `Accessibility violations on ${target.path}`).toEqual([]);
+  }
+});
+
+test('audit drawer traps keyboard focus and restores it on Escape', async ({ page }) => {
+  await installErrorCapture(page);
+  await installApiRoutes(page);
+  await page.goto('/internal', { waitUntil: 'networkidle' });
+
+  const opener = page.getByRole('button', { name: 'Open agent logs' });
+  await opener.focus();
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog', { name: /MULTI-AGENT REASONING TIMELINE/i });
+  await expect(dialog).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Close audit log' })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(opener).toBeFocused();
 });
 
 async function installErrorCapture(page: Page) {

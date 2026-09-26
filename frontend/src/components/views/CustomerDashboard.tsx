@@ -568,7 +568,7 @@ export const CustomerDashboard: React.FC = () => {
                   <button
                     onClick={() => setIsApproveModalOpen(true)}
                     disabled={loadingRfqs || usingFallbackData || selectedRfqFailed}
-                    className="w-full sm:flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-display font-bold py-2.5 px-4 rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 transition-all transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="w-full sm:flex-1 bg-emerald-700 hover:bg-emerald-600 text-white font-display font-bold py-2.5 px-4 rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 transition-all transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <CheckCircle2 className="w-4 h-4" />
                     <span>APPROVE & ISSUE PURCHASE ORDER</span>
@@ -620,7 +620,7 @@ export const CustomerDashboard: React.FC = () => {
                   onClick={() => applyPreset('aog-actuator')}
                   className="p-2.5 rounded-xl border border-red-200 dark:border-red-900/60 bg-red-50/50 dark:bg-red-950/20 hover:bg-red-100/60 text-left transition-all"
                 >
-                  <div className="font-bold text-aog-red font-mono text-[11px]">🔥 AOG Actuator</div>
+                  <div className="font-bold text-aog-red font-mono text-[11px]">AOG Actuator</div>
                   <div className="text-[10px] text-slate-500 font-mono">P/N 32-11-45-01 (B737)</div>
                 </button>
 
@@ -1207,7 +1207,7 @@ export const CustomerDashboard: React.FC = () => {
               <button
                 onClick={handleApproveQuote}
                 disabled={approving}
-                className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-display font-bold py-2.5 rounded-xl text-xs shadow-lg shadow-emerald-600/20"
+                className="flex-1 bg-emerald-700 hover:bg-emerald-600 text-white font-display font-bold py-2.5 rounded-xl text-xs shadow-lg shadow-emerald-600/20"
               >
                 {approving ? 'DISPATCHING...' : 'CONFIRM & DISPATCH ORDER'}
               </button>

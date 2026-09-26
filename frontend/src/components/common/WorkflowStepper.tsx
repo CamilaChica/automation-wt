@@ -25,6 +25,8 @@ export const WorkflowStepper: React.FC<WorkflowStepperProps> = ({
     <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 shadow-sm select-none">
       <div
         aria-label="RFQ workflow steps"
+        role="region"
+        tabIndex={0}
         className="flex w-full items-center overflow-x-auto font-mono text-[10px]"
       >
         <div className="flex w-max min-w-max flex-nowrap items-center gap-1">

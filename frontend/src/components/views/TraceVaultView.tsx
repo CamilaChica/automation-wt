@@ -198,19 +198,19 @@ export const TraceVaultView: React.FC = () => {
                   <div className="text-center">
                     AIRWORTHINESS APPROVAL TAG<br />FAA REPAIR STATION
                   </div>
-                  <div className="text-emerald-600 font-bold">CRS #WT-942-CRS</div>
+                  <div className="text-emerald-700 font-bold">CRS #WT-942-CRS</div>
                 </div>
 
                 {/* Form Fields with Bounding Box Highlights */}
                 <div className="grid grid-cols-4 gap-2 pt-1 text-[9px]">
                   <div className="border border-slate-200 p-1.5 rounded bg-slate-50">
-                    <div className="text-[7px] text-slate-500 uppercase">1. Serial Number</div>
+                    <div className="text-[7px] text-slate-600 uppercase">1. Serial Number</div>
                     <div className="font-bold text-slate-900">MLG-9840</div>
                   </div>
                   <div className="border border-emerald-500 bg-emerald-50 p-1.5 rounded relative">
                     <div className="text-[7px] text-emerald-700 font-bold uppercase">2. Part Number</div>
                     <div className="font-bold text-emerald-900">32-11-45-01</div>
-                    <span className="absolute -top-2 -right-1 bg-emerald-600 text-white text-[7px] px-1 rounded font-bold">MATCH</span>
+                    <span className="absolute -top-2 -right-1 bg-emerald-700 text-white text-[7px] px-1 rounded font-bold">MATCH</span>
                   </div>
                   <div className="border border-amber-500 bg-amber-50 p-1.5 rounded relative col-span-2">
                     <div className="text-[7px] text-amber-800 font-bold uppercase">3. Release Status</div>
@@ -258,7 +258,7 @@ export const TraceVaultView: React.FC = () => {
               type="button"
               disabled={actionsBlocked}
               onClick={() => void recordDecision('certify')}
-              className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 text-xs"
+              className="bg-emerald-700 hover:bg-emerald-600 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 text-xs"
             >
               <CheckCircle2 className="w-4 h-4" />
               <span>ACCEPT & CERTIFY</span>
@@ -267,7 +267,7 @@ export const TraceVaultView: React.FC = () => {
               type="button"
               disabled={actionsBlocked}
               onClick={() => void recordDecision('reject')}
-              className="bg-red-500 hover:bg-red-600 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-red-500/20 flex items-center justify-center space-x-2 text-xs"
+              className="bg-red-700 hover:bg-red-600 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-red-500/20 flex items-center justify-center space-x-2 text-xs"
             >
               <XCircle className="w-4 h-4" />
               <span>REJECT DOC</span>

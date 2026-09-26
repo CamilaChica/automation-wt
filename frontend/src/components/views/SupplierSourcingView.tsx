@@ -42,6 +42,7 @@ export const SupplierSourcingView: React.FC = () => {
     }
     if (rfqsResult.status === 'fulfilled') {
       setActiveRfqs(rfqsResult.value.rfqs);
+      setSelectedRfqId(currentId => rfqsResult.value.rfqs.some(rfq => rfq.id === currentId) ? currentId : rfqsResult.value.rfqs[0]?.id || null);
       setUsingFallbackData(rfqsResult.value.isFallback);
     } else {
       setActiveRfqs([]);
@@ -121,7 +122,7 @@ export const SupplierSourcingView: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
                 {activeRfqs.map((rfq, i) => (
-                  <tr key={i} tabIndex={0} role="button" aria-pressed={selectedRfqId === rfq.id} onClick={() => setSelectedRfqId(rfq.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedRfqId(rfq.id); } }} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors">
+                  <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
                     <td className="py-2.5 text-aero-blue font-bold">{rfq.id}</td>
                     <td className="py-2.5">
                       <div className="font-bold text-slate-900 dark:text-slate-200">{rfq.part_number || 'Pending extraction'}</div>
@@ -262,6 +263,7 @@ export const SupplierSourcingView: React.FC = () => {
             <div className="relative w-48">
               <Search className="w-3 h-3 absolute left-2.5 top-2 text-slate-400" />
               <input
+                aria-label="Search supplier inventory"
                 type="text"
                 value={selectedPn}
                 onChange={(e) => setSelectedPn(e.target.value)}

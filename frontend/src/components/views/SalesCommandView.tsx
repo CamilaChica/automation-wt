@@ -304,10 +304,11 @@ export const SalesCommandView: React.FC = () => {
               {/* Dynamic Interactive Unit Price & Margin Slider */}
               <div className="space-y-1.5 bg-slate-50 dark:bg-slate-900/90 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
                 <div className="flex items-center justify-between text-[10px] text-slate-600 dark:text-slate-300">
-                  <span>Adjust Unit Price / Margin:</span>
+                  <label htmlFor="unit-price-slider">Adjust Unit Price / Margin:</label>
                   <span className="font-bold text-aero-blue">${unitPrice.toLocaleString()}</span>
                 </div>
                 <input
+                  id="unit-price-slider"
                   type="range"
                   min="10000"
                   max="20000"
@@ -419,7 +420,7 @@ export const SalesCommandView: React.FC = () => {
                   <Mail className="w-3.5 h-3.5" />
                   <span>WT-31005 Trace Packet</span>
                 </div>
-                {attachmentIds[0] ? <button type="button" aria-label="Download WT-31005 trace packet" onClick={() => void handleDownloadAttachment(attachmentIds[0], 'WT-31005 trace packet')} className="text-slate-400 hover:text-slate-700 dark:hover:text-white"><Download className="w-3.5 h-3.5" /></button> : <span aria-label="WT-31005 trace packet unavailable" className="text-slate-500" title="No attachment is available"><Download className="w-3.5 h-3.5 opacity-40" /></span>}
+                {attachmentIds[0] ? <button type="button" aria-label="Download WT-31005 trace packet" onClick={() => void handleDownloadAttachment(attachmentIds[0], 'WT-31005 trace packet')} className="text-slate-400 hover:text-slate-700 dark:hover:text-white"><Download className="w-3.5 h-3.5" /></button> : <span role="img" aria-label="WT-31005 trace packet unavailable" className="text-slate-500" title="No attachment is available"><Download className="w-3.5 h-3.5 opacity-40" /></span>}
               </div>
 
               <div className="bg-slate-50 dark:bg-slate-900/60 p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center justify-between text-[10px]">
@@ -427,7 +428,7 @@ export const SalesCommandView: React.FC = () => {
                   <Mail className="w-3.5 h-3.5" />
                   <span>WT-31006 Invoice PDF</span>
                 </div>
-                {attachmentIds[1] ? <button type="button" aria-label="Download WT-31006 invoice PDF" onClick={() => void handleDownloadAttachment(attachmentIds[1], 'WT-31006 invoice PDF')} className="text-slate-400 hover:text-slate-700 dark:hover:text-white"><Download className="w-3.5 h-3.5" /></button> : <span aria-label="WT-31006 invoice PDF unavailable" className="text-slate-500" title="No attachment is available"><Download className="w-3.5 h-3.5 opacity-40" /></span>}
+                {attachmentIds[1] ? <button type="button" aria-label="Download WT-31006 invoice PDF" onClick={() => void handleDownloadAttachment(attachmentIds[1], 'WT-31006 invoice PDF')} className="text-slate-400 hover:text-slate-700 dark:hover:text-white"><Download className="w-3.5 h-3.5" /></button> : <span role="img" aria-label="WT-31006 invoice PDF unavailable" className="text-slate-500" title="No attachment is available"><Download className="w-3.5 h-3.5 opacity-40" /></span>}
               </div>
             </div>
           </div>

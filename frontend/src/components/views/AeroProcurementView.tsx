@@ -247,7 +247,7 @@ export const AeroProcurementView: React.FC = () => {
               <Split className="w-3.5 h-3.5" />
               <span>{commandPending === 'split_po' ? 'SPLITTING...' : 'SPLIT PO'}</span>
             </button>
-            <button type="button" disabled={actionsBlocked || Boolean(commandPending)} aria-busy={commandPending === 'escalate_aog'} onClick={() => void runCommand('escalate_aog', 'escalate this AOG')} className="bg-red-500 hover:bg-red-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow aog-pulse-badge disabled:cursor-not-allowed disabled:opacity-50">
+            <button type="button" disabled={actionsBlocked || Boolean(commandPending)} aria-busy={commandPending === 'escalate_aog'} onClick={() => void runCommand('escalate_aog', 'escalate this AOG')} className="bg-red-700 hover:bg-red-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow aog-pulse-badge disabled:cursor-not-allowed disabled:opacity-50">
               <Flame className="w-3.5 h-3.5" />
               <span>{commandPending === 'escalate_aog' ? 'ESCALATING...' : 'ESCALATE AOG'}</span>
             </button>

@@ -3,6 +3,24 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer utilities {
+  .dark .text-aero-blue {
+    color: #93c5fd;
+  }
+
+  .dark .text-slate-500 {
+    color: #a8b4c4;
+  }
+
+  .dark .text-red-500 {
+    color: #f87171;
+  }
+
+  .dark .text-aog-red {
+    color: #f87171;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

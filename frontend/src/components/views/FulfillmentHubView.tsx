@@ -140,7 +140,7 @@ export const FulfillmentHubView: React.FC = () => {
 
               {/* Bounding box target overlay */}
               <div className="absolute inset-3 border-2 border-emerald-500 rounded pointer-events-none flex items-start justify-end p-1">
-                <span className="bg-emerald-600 text-white text-[8px] font-bold font-mono px-1.5 py-0.5 rounded shadow">
+                <span className="bg-emerald-700 text-white text-[8px] font-bold font-mono px-1.5 py-0.5 rounded shadow">
                   CV MATCH 99.8%
                 </span>
               </div>
