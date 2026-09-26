@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import os
+import asyncio
+import socket
 import uuid
 from contextlib import asynccontextmanager
 from decimal import Decimal
 from typing import AsyncIterator
+from urllib.parse import urlsplit
 
 from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert
@@ -17,6 +20,14 @@ from models.async_models import AviationPart, Base, SupplierQuote
 
 def _database_url() -> str:
     value = os.getenv("DATABASE_URL", "").strip()
+    fallback = os.getenv("DATABASE_URL_FALLBACK", "").strip()
+    if value and fallback:
+        parsed_host = urlsplit(value.replace("postgresql+asyncpg://", "postgresql://", 1)).hostname
+        try:
+            if parsed_host:
+                socket.getaddrinfo(parsed_host, None)
+        except socket.gaierror:
+            value = fallback
     if value.startswith("postgresql://"):
         value = value.replace("postgresql://", "postgresql+asyncpg://", 1)
     return value
@@ -27,6 +38,34 @@ def create_engine_from_environment() -> AsyncEngine:
     if not url:
         raise RuntimeError("DATABASE_URL is required for the async PostgreSQL persistence layer.")
     return create_async_engine(url, pool_pre_ping=True, pool_recycle=1800)
+
+
+async def preflight_database(engine: AsyncEngine | None = None) -> None:
+    """Verify DNS and database readiness before accepting work, with bounded backoff."""
+    owns_engine = engine is None
+    engine = engine or create_engine_from_environment()
+    attempts = max(1, int(os.getenv("DATABASE_PREFLIGHT_ATTEMPTS", "5")))
+    delay = max(0.1, float(os.getenv("DATABASE_PREFLIGHT_INITIAL_DELAY_SECONDS", "0.5")))
+    maximum = max(delay, float(os.getenv("DATABASE_PREFLIGHT_MAX_DELAY_SECONDS", "8")))
+    last_error: Exception | None = None
+    try:
+        for attempt in range(attempts):
+            try:
+                async with engine.connect() as connection:
+                    await connection.exec_driver_sql("SELECT 1")
+                return
+            except Exception as exc:
+                last_error = exc
+                if attempt + 1 < attempts:
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, maximum)
+        raise RuntimeError(
+            f"PostgreSQL preflight failed after {attempts} attempts ({type(last_error).__name__}). "
+            "Check DATABASE_URL DNS/network access or configure DATABASE_URL_FALLBACK explicitly."
+        ) from last_error
+    finally:
+        if owns_engine:
+            await engine.dispose()
 
 
 @asynccontextmanager

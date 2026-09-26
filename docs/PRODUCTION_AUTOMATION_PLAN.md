@@ -1,173 +1,50 @@
-# Production Automation Plan
+# Production Release: Pending Items
 
-## 1. Shared PostgreSQL Operational State
+**Status: BLOCKED.** Do not enable `OPERATIONAL_POSTGRES_RUNTIME_ENABLED`, apply migrations to production, or declare RFQ delivery healthy until all applicable items below have evidence.
 
-- Route these entities through shared async PostgreSQL repositories:
-  - RFQs and RFQ items
-  - Supplier offers
-  - Quotes and quote items
-  - Communications
-  - Audit events
-  - Workflow state
-  - Communication tasks
-  - Inbound-message idempotency
-  - Agent handoffs
-- Use the same `DATABASE_URL` for:
-  - `backend`
-  - `winged-tycoons-email-worker`
-  - `winged-inventory-ingestion`
-- Complete Alembic migrations through `0003_shared_operational_state`.
-- Keep `0002_supplier_quote_inv_fields` at 32 characters or fewer.
-- Keep `version_table_column_length=255` in both Alembic modes.
-- Production must fail if PostgreSQL is missing or unreachable.
-- Production startup must also refuse the current SQLite `OperationsStore` until PostgreSQL repositories are wired into API and worker call sites. Deploying before that adapter is complete is expected to fail startup rather than run split state.
-- SQLite is allowed only for isolated local tests; never for production business state.
+## Immediate Security and Access
 
-## Runtime Caveats
+- [ ] Rotate the PostgreSQL password/connection string in Render and local secret storage. A test traceback exposed the configured connection string; do not reuse it.
+- [ ] Restore access to the intended PostgreSQL target from a secure test environment. Local DNS currently cannot resolve the configured Render hostname. Do not infer `localhost` or another host as a production fallback.
+- [ ] Verify the new target identity, deployed Render commit, and worker maintenance/pause procedure before any production write.
 
-- Current full-suite caveat: the opt-in live LLM verification test fails when enabled with OpenAI HTTP `401 Unauthorized`; this is a provider credential/configuration failure, not a deterministic local test failure. Run the offline suite without `RUN_LIVE_LLM=1`, and run live provider verification only with valid test credentials.
+## Backup and Reconciliation
 
-## 2. Render Configuration
+- [ ] Create and verify a PostgreSQL-native backup before changing production schema or data. `backups/20260926T202815Z` is a local SQLite archive, not a PostgreSQL backup.
+- [ ] Review the archived SQLite source mapping: customers 37, RFQs 439, RFQ items 1, quotes 255, quote items 242, suppliers 3, supplier offers 3, audit events 14, communications 377, scheduled tasks 1, and inventory/shipment records 10.
+- [ ] Review duplicate/conflicting records and the deterministic legacy audit-ID mapping in `scripts/reconcile_sqlite_to_postgres.py`.
+- [ ] Run the reconciliation dry-run against the verified target, review its report, then use `--apply` only after backup approval.
+- [ ] Verify source-key parity and row counts after reconciliation; retain the report and a post-migration backup.
 
-Set these variables on all applicable services:
+## PostgreSQL Runtime and Outbox
 
-```text
-DATABASE_URL=<Render managed PostgreSQL URL>
-ALLOWED_ORIGINS=https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com,http://localhost:5173,http://localhost:3000
-```
+- [ ] Apply Alembic head `0005_operations_store_contract` to a disposable PostgreSQL database first; verify migration, restart, rollback, and model/schema parity.
+- [ ] Exercise RFQ/customer/quote/supplier/task reads and writes against real PostgreSQL, including row locks, optimistic versions, inventory reservation concurrency, and transaction rollback.
+- [ ] Test inbound idempotency with two processes and prove claim plus business writes commit or roll back together.
+- [ ] Test outbox deduplication, concurrent claims, retry/backoff, terminal failure, stale-send recovery, and manual resolution of ambiguous delivery. Do not automatically resend when the external provider may already have accepted a message.
+- [ ] Verify that all production supplier, inbound email, and scheduled task paths use shared PostgreSQL, not the local SQLite fallback.
+- [ ] Verify quote/RFQ state stays pending while email is queued and advances to `Quote_Sent` only after the outbox confirms `SENT`.
+- [ ] Keep `OPERATIONAL_POSTGRES_RUNTIME_ENABLED=false` until these integration and concurrency checks pass.
 
-Set these worker variables:
+## Render and Mailboxes
 
-```text
-INVENTORY_INGESTION_POSTGRES_ENABLED=true
-GRAPH_MAILBOX_USER_SALES=sales@wingedtycoons.com
-GRAPH_MAILBOX_USER_PURCHASING=purchasing@wingedtycoons.com
-OPERATIONS_DB_PATH=/var/data/operations.db
-SUPPLIER_DATABASE_PATH=/var/data/supplier_email_store.db
-```
+- [ ] Confirm the deployed commit and inspect its readiness implementation. The live endpoint currently claims PostgreSQL-primary while reporting `/opt/render/project/src/data/operations.db`; do not accept this as ready.
+- [ ] After deploying the reviewed migration/code, verify `/ready` against the exact deployed commit: DB reachable, all required tables present, full runtime enabled, and no SQLite operational path.
+- [ ] Authenticate with an approved internal account and verify sales and purchasing mailbox health are both `ok`. Unauthenticated `401` is expected and does not pass this gate.
+- [ ] Confirm ownership remains isolated: email worker polls `sales`; inventory worker polls `purchasing`.
 
-Worker ownership:
+## Customer and Supplier Proof
 
-- `winged-tycoons-email-worker` polls only `sales`.
-- `winged-inventory-ingestion` polls only `purchasing`.
+- [ ] Submit one controlled RFQ from an authorized test customer and verify the record, quote, outbox, and communication rows in PostgreSQL.
+- [ ] Capture message ID, sender, RFQ ID, quote ID, outbox ID, communication ID, recipient, and final `transmission_status=SENT`.
+- [ ] Verify the customer mailbox actually receives the quote. The local Playwright test uses mocked APIs and proves UI behavior only.
+- [ ] Submit one supplier reply, replay the same Graph message, and verify only one business effect is committed.
+- [ ] Verify self-sent sales messages are ignored and unreadable supplier PDFs receive at most one same-thread clarification.
 
-## 3. Readiness and CORS
+## Validation and Release
 
-- `/ready` must perform a live PostgreSQL check.
-- In production, return HTTP `503` if PostgreSQL is missing, unreachable, or mirroring is disabled.
-- A successful production response must include:
-
-```json
-{
-  "status": "ready",
-  "postgresql_mirroring": true,
-  "storage_engine": "postgresql",
-  "postgres_primary_migration_required": false
-}
-```
-
-- Parse `ALLOWED_ORIGINS` dynamically.
-- Allow credentials, all required methods, all required headers, and `OPTIONS` preflight.
-- Verify local and production CORS preflight behavior.
-
-## 4. Supplier and Mailbox Safety
-
-- Initialize supplier storage lazily.
-- If an explicitly configured local/container path is unwritable, fall back to `/tmp/data` only outside production business-state paths.
-- Never use `/tmp` as production operational storage.
-- Ignore messages sent by `sales@wingedtycoons.com` to prevent self-reply loops.
-- Read only Inbox messages for RFQ ingestion.
-- Make workers claim message IDs through `IdempotencyRepository.claim()` using PostgreSQL atomic insert-on-conflict within the same transaction as business writes.
-- Process each Graph message ID once.
-- Reject supplier quote references as part numbers.
-- If a supplier PDF is unreadable, request quote details in the same email body thread.
-- Exclude supplier offers older than 30 days from automatic pricing and request threaded confirmation.
-
-## 5. UI and Workflow State
-
-- Keep loading and empty states mutually exclusive.
-- Add accessible labels, `role="status"`, `aria-busy`, keyboard interaction, and stable selectors.
-- Ensure RFQ metadata reaches intake as structured `customer_name` and `customer_email`.
-- Trace any `Intake_Failed` or `Pending extraction` RFQ through persistence, orchestration, API mapping, and dashboard views.
-- Keep destructive crawler actions disabled by default; test them only with disposable staging data.
-
-## 6. Verification
-
-Run locally:
-
-```text
-alembic heads
-alembic history
-alembic upgrade head
-python -m pytest -q
-npm --prefix frontend run test:unit
-npm --prefix frontend run lint
-npm --prefix frontend run build
-```
-
-Verify Render:
-
-```text
-GET /healthz -> 200
-GET /ready -> 200 with PostgreSQL-primary fields above
-GET /api/internal/mailboxes/health without auth -> 401
-GET /api/internal/mailboxes/health with an approved internal session -> sales and purchasing status=ok
-```
-
-Run one new RFQ from `camilachica1991@gmail.com` to `sales@wingedtycoons.com` and capture:
-
-```text
-message_id
-sender
-rfq_id
-pipeline_status=Quote_Sent
-quote_id=QTE-*
-communication_id
-transmission_status=SENT
-recipient=camilachica1991@gmail.com
-```
-
-## Release Gate
-
-Do not mark the application ready until:
-
-- All operational domains use shared PostgreSQL repositories.
-- `/ready` reports PostgreSQL as primary.
-- Both mailbox health checks pass with an authenticated internal session.
-- A new RFQ reaches `Quote_Sent`.
-- The communication record reports `transmission_status=SENT`.
-- The customer receives the response.
-
-## Runtime Cutover Progress
-
-- Completed: PostgreSQL models, Alembic migration `0003_shared_operational_state`, async RFQ/quote/communication/workflow/idempotency repositories, and fail-closed SQLite production guard.
-- Completed: idempotency claim changed to PostgreSQL `INSERT ... ON CONFLICT DO NOTHING RETURNING`, which is safe against concurrent claims.
-- Remaining: replace the SQLite-backed `OperationsStore` implementation for the API, communication services, review queue, automation events, and carrier webhook idempotency with PostgreSQL repositories.
-- Remaining: update `MockDatabaseService` runtime reads/writes to use PostgreSQL repositories instead of its serialized SQLite state snapshot.
-- Remaining: wire both inbound workers to claim message IDs and write RFQ/supplier/communication state in a shared PostgreSQL transaction.
-- Not yet proven: live PostgreSQL integration, dual-worker concurrency, Render migration success, and end-to-end sent-email trace.
-- Do not mark production ready or rely on PostgreSQL readiness until runtime repository call sites are migrated and migration/integration gates pass.
-
-## Runtime Migration Status
-
-- PostgreSQL operational models, Alembic migration, and repositories are present.
-- Idempotency claims use atomic PostgreSQL `INSERT ... ON CONFLICT DO NOTHING RETURNING` to prevent concurrent workers from both claiming a Graph message.
-- Production startup refuses SQLite `OperationsStore` until PostgreSQL repositories are wired into the runtime.
-- Remaining P0 work: migrate `db_service`, communication/audit persistence, workflow state, operator-review/tasks, API routes, and both workers to shared PostgreSQL repositories and transactions.
-- Local tests for schema coverage, fail-closed SQLite behavior, readiness, and idempotency pass. Live PostgreSQL integration and concurrent-worker tests require a test PostgreSQL instance and are not yet verified.
-
-### Latest continuation audit — 2026-09-26
-
-- Full-suite run reached 360 collected tests but failed the opt-in live LLM verification with OpenAI HTTP `401 Unauthorized`; this is a provider credential failure, not evidence of a PostgreSQL repository regression.
-- Focused PostgreSQL model/readiness/idempotency tests pass.
-- A read-only PostgreSQL `SELECT 1` attempt using the configured local `DATABASE_URL` failed during DNS resolution (`getaddrinfo failed`). No migration or database write was attempted.
-- Live `/ready` still claims `storage_engine=postgresql`, while also returning `/opt/render/project/src/data/operations.db`. Treat this as inconsistent readiness evidence until the deployed build’s actual operational repository and Render commit are confirmed.
-- The current working tree contains in-progress PostgreSQL changes in `services/operations_store.py`, `api/main.py`, `models/operational_models.py`, and `repositories/review_telemetry_repository.py`. These edits have not yet completed runtime wiring for RFQ/quote/communication/workflow/task/idempotency domains and must be reviewed/tested before deployment.
-
-## Render Readiness Mismatch Audit — 2026-09-26
-
-The live `/ready` response currently returns HTTP `200` and claims `storage_engine=postgresql`, `operational_store=postgresql`, mirroring enabled, and migration not required. However, the same response reports `operational_store_path=/opt/render/project/src/data/operations.db`.
-
-The committed source at `5bf319c` identifies the actual `OperationsStore.storage_engine` as `sqlite`, and `persistence_status()` only reports PostgreSQL-primary when that runtime store reports `postgresql`. Production initialization also refuses to start with the SQLite store. Therefore, the live payload is inconsistent with this source revision and cannot be accepted as proof that operational repositories are migrated. It indicates Render is serving a stale/different build or an outdated readiness implementation.
-
-Required action: redeploy the backend from the current `main` commit, verify the deployed revision, and inspect the deployed readiness implementation. Do not sign off until the API reads/writes RFQs, quotes, communications, workflow state, tasks, and idempotency through shared PostgreSQL repositories and the readiness path no longer identifies a SQLite file.
+- [ ] Run `alembic heads`, `alembic history`, and `alembic upgrade head` against disposable PostgreSQL; then run backend PostgreSQL integration and concurrency suites.
+- [ ] Run frontend unit tests, lint, build, and the customer RFQ Playwright flow.
+- [ ] Resolve or explicitly waive the unrelated full-suite failure `tests/agents/test_agent_harness.py::test_agent_schema_contract_and_metadata[RFQIntakeAgent]` (empty `permissions`).
+- [ ] Deploy a pinned reviewed commit, repeat readiness and authenticated mailbox checks, and retain evidence.
+- [ ] Resume workers gradually and monitor duplicate messages, outbox failures, stuck workflows, and actual delivery before signing off.

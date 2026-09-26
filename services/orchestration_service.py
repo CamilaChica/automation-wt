@@ -1,5 +1,6 @@
 import json
 import re
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 from services.db_service import db_service
@@ -331,20 +332,25 @@ class OrchestrationService:
                 price = float(re.sub(r"[^0-9.\-]", "", item.target_price.value or ""))
                 quantity = int(re.search(r"\d+", item.quantity.value or "").group())
                 lead_time_match = re.search(r"\d+", item.lead_time_days.value or "")
-                approved_offers.append(supplier_db.save_supplier_offer(
-                    supplier_name=extraction.supplier_name or "Supplier Pending Identification",
-                    supplier_email=extraction.supplier_email or sender,
-                    part_number=item.part_number.value or "",
-                    quantity_available=quantity,
-                    unit_cost=price,
-                    certificate_type=item.trace_documents[0],
-                    lead_time_days=int(lead_time_match.group()) if lead_time_match else None,
-                    approval_status="Pending",
-                    condition_code=item.condition_code.value,
-                    source_email_id=f"{source_id}:{index}" if index else str(source_id),
-                    confidence=extraction.confidence_score,
-                    trace_documents=item.trace_documents,
-                ))
+                offer = {
+                    "supplier_name": extraction.supplier_name or "Supplier Pending Identification",
+                    "supplier_email": extraction.supplier_email or sender,
+                    "part_number": item.part_number.value or "",
+                    "quantity_available": quantity,
+                    "unit_cost": price,
+                    "certificate_type": item.trace_documents[0],
+                    "lead_time_days": int(lead_time_match.group()) if lead_time_match else None,
+                    "approval_status": "Pending",
+                    "condition_code": item.condition_code.value,
+                    "source_email_id": f"{source_id}:{index}" if index else str(source_id),
+                    "confidence": extraction.confidence_score,
+                    "trace_documents": item.trace_documents,
+                }
+                approved_offers.append(
+                    operations_store.save_supplier_offer(**offer)
+                    if operations_store.storage_engine == "postgresql"
+                    else supplier_db.save_supplier_offer(**offer)
+                )
             operations_store.complete_operator_review_decision(review_id, status="APPROVED")
             return {"review_id": review_id, "status": "APPROVED", "offers": approved_offers}
         except Exception as exc:
@@ -464,19 +470,21 @@ class OrchestrationService:
                 if not res.success:
                     unknown_part = "unknown" in (res.error_message or "").lower() or "not found" in (res.error_message or "").lower()
                     if unknown_part:
-                        request_results = communication_service.request_part_quotes(
-                            item.requested_part_number,
-                            item.quantity,
-                            condition_requested=item.condition_preference or "NE",
-                            certification_requested=self._requested_certification(rfq.raw_text),
-                        )
-                        db_service.update_rfq_status(rfq_id, "Supplier_Sourcing")
-                        db_service.add_audit_log(
-                            rfq_id, "SupplierCommunicationAgent", "supplier_rfq_dispatch",
-                            f"Part '{item.requested_part_number}' is not in the catalog; requested supplier quotations from {len(request_results)} contact(s).",
-                            "SUCCESS" if request_results else "WARNING",
-                            json.dumps(request_results),
-                        )
+                        transaction = operations_store.transaction() if operations_store.storage_engine == "postgresql" else nullcontext()
+                        with transaction:
+                            db_service.update_rfq_status(rfq_id, "Supplier_Sourcing")
+                            request_results = communication_service.request_part_quotes(
+                                item.requested_part_number,
+                                item.quantity,
+                                condition_requested=item.condition_preference or "NE",
+                                certification_requested=self._requested_certification(rfq.raw_text),
+                            )
+                            db_service.add_audit_log(
+                                rfq_id, "SupplierCommunicationAgent", "supplier_rfq_dispatch",
+                                f"Part '{item.requested_part_number}' is not in the catalog; requested supplier quotations from {len(request_results)} contact(s).",
+                                "PENDING" if operations_store.storage_engine == "postgresql" else "SUCCESS" if request_results else "WARNING",
+                                json.dumps(request_results),
+                            )
                         return {
                             "status": "Supplier_Request_Sent",
                             "message": f"Part '{item.requested_part_number}' is not in the internal catalog. Supplier outreach was initiated.",
@@ -575,24 +583,26 @@ class OrchestrationService:
                                 "supplier_confirmation_count": len(confirmations),
                                 "supplier_confirmations": confirmations,
                             }
-                        request_results = communication_service.request_part_quotes(
-                            item.resolved_part_number,
-                            shortage_qty,
-                            condition_requested=item.condition_preference or "NE",
-                            certification_requested=self._requested_certification(rfq.raw_text),
-                        )
-                        db_service.update_rfq_status(rfq_id, "Sourcing_Failed")
-                        db_service.add_audit_log(
-                            rfq_id, "SupplierDiscoveryAgent", "supplier_search",
-                            f"Failed to source part '{item.resolved_part_number}': {sup_res.error_message}",
-                            "FAILURE", json.dumps(sup_res.dict())
-                        )
-                        db_service.add_audit_log(
-                            rfq_id, "SupplierCommunicationAgent", "supplier_rfq_dispatch",
-                            f"Requested quotations for unavailable part '{item.resolved_part_number}' from {len(request_results)} supplier contact(s).",
-                            "SUCCESS" if request_results else "WARNING",
-                            json.dumps(request_results),
-                        )
+                        transaction = operations_store.transaction() if operations_store.storage_engine == "postgresql" else nullcontext()
+                        with transaction:
+                            request_results = communication_service.request_part_quotes(
+                                item.resolved_part_number,
+                                shortage_qty,
+                                condition_requested=item.condition_preference or "NE",
+                                certification_requested=self._requested_certification(rfq.raw_text),
+                            )
+                            db_service.update_rfq_status(rfq_id, "Sourcing_Failed")
+                            db_service.add_audit_log(
+                                rfq_id, "SupplierDiscoveryAgent", "supplier_search",
+                                f"Failed to source part '{item.resolved_part_number}': {sup_res.error_message}",
+                                "FAILURE", json.dumps(sup_res.dict())
+                            )
+                            db_service.add_audit_log(
+                                rfq_id, "SupplierCommunicationAgent", "supplier_rfq_dispatch",
+                                f"Requested quotations for unavailable part '{item.resolved_part_number}' from {len(request_results)} supplier contact(s).",
+                                "PENDING" if operations_store.storage_engine == "postgresql" else "SUCCESS" if request_results else "WARNING",
+                                json.dumps(request_results),
+                            )
                         return {
                             "status": "Sourcing_Failed",
                             "error": f"Sourcing failed: {sup_res.error_message}",
@@ -816,9 +826,10 @@ class OrchestrationService:
                 "SUCCESS", json.dumps(q_data)
             )
             
-            # Customer quote dispatch is autonomous. Human review begins only when a PO arrives.
-            db_service.update_quote_status(quote.id, "Sent")
-            db_service.update_rfq_status(rfq_id, "Quote_Sent")
+            # A quote is not marked sent until the outbox confirms external delivery.
+            if operations_store.storage_engine != "postgresql":
+                db_service.update_quote_status(quote.id, "Pending_Dispatch")
+                db_service.update_rfq_status(rfq_id, "Quote_Dispatch_Pending")
             communication_result = await self._dispatch_customer_quote(rfq, quote)
             if not communication_result.success:
                 db_service.update_rfq_status(rfq_id, "Quote_Dispatch_Failed")
@@ -827,6 +838,23 @@ class OrchestrationService:
                     "quote_id": quote.id,
                     "error": communication_result.error_message,
                 }
+
+            transmission_status = communication_result.data.get("transmission_status", "UNKNOWN")
+            if transmission_status != "SENT":
+                db_service.add_audit_log(
+                    rfq_id, "CustomerCommunicationAgent", "email_dispatch_queued",
+                    f"Customer quote email delivery state: {transmission_status}.",
+                    "PENDING", json.dumps(communication_result.data),
+                )
+                return {
+                    "status": "Quote_Dispatch_Pending",
+                    "quote_id": quote.id,
+                    "transmission_status": transmission_status,
+                    "email_body": communication_result.data.get("formatted_body"),
+                }
+
+            db_service.update_quote_status(quote.id, "Sent")
+            db_service.update_rfq_status(rfq_id, "Quote_Sent")
 
             status = "Quote_Sent"
             if context["has_low_margin_escalation"]:
@@ -938,8 +966,18 @@ class OrchestrationService:
             quote.subtotal = round(new_subtotal, 2)
             quote.total_amount = round(quote.subtotal + quote.shipping_cost, 2)
             
-        db_service.update_quote_status(quote_id, "Approved", approved_by=operator_name)
-        db_service.update_rfq_status(rfq_id, "Quote_Sent")
+        db_service.update_quote_status(
+            quote_id,
+            "Approved" if operations_store.storage_engine == "postgresql" else "Pending_Dispatch",
+            approved_by=operator_name,
+        )
+        current_rfq = db_service.get_rfq(rfq_id)
+        if (
+            operations_store.storage_engine != "postgresql"
+            and current_rfq
+            and current_rfq.status != "Quote_Dispatch_Pending"
+        ):
+            db_service.update_rfq_status(rfq_id, "Quote_Dispatch_Pending")
         db_service.add_audit_log(
             rfq_id, "Orchestrator", "human_approval",
             f"Quote {quote_id} approved by commercial operator '{operator_name}'."
@@ -977,7 +1015,19 @@ class OrchestrationService:
             db_service.update_rfq_status(rfq_id, "Quote_Dispatch_Failed")
             return {"error": comm_res.error_message, "status": "Quote_Dispatch_Failed"}
 
+        transmission_status = comm_res.data.get("transmission_status", "UNKNOWN")
+        if transmission_status != "SENT":
+            db_service.add_audit_log(
+                rfq_id, "CustomerCommunicationAgent", "email_dispatch_queued",
+                f"Operator-approved quote email delivery state: {transmission_status}.",
+                "PENDING", json.dumps(comm_res.data),
+            )
+            return {"status": "Quote_Dispatch_Pending", "quote_id": quote_id,
+                    "transmission_status": transmission_status,
+                    "email_body": comm_res.data.get("formatted_body")}
+
         db_service.update_quote_status(quote_id, "Sent", comments=comments)
+        db_service.update_rfq_status(rfq_id, "Quote_Sent")
         
         db_service.add_audit_log(
             rfq_id, "CustomerCommunicationAgent", "email_dispatch",

@@ -12,6 +12,7 @@ class WorkflowState(StrEnum):
     SUPPLIER_QUOTE_RECEIVED = "SUPPLIER_QUOTE_RECEIVED"
     CUSTOMER_QUOTE_READY = "CUSTOMER_QUOTE_READY"
     QUOTE_SENT = "QUOTE_SENT"
+    QUOTE_DISPATCH_PENDING = "QUOTE_DISPATCH_PENDING"
     FOLLOW_UP_PENDING = "FOLLOW_UP_PENDING"
     PO_RECEIVED = "PO_RECEIVED"
     PO_VALIDATED = "PO_VALIDATED"
@@ -29,6 +30,8 @@ LEGACY_TO_CANONICAL = {
     "Pending_Approval": WorkflowState.CUSTOMER_QUOTE_READY,
     "Pending_Approval_Low_Margin": WorkflowState.CUSTOMER_QUOTE_READY,
     "Quote_Sent": WorkflowState.QUOTE_SENT,
+    "Quote_Dispatch_Pending": WorkflowState.QUOTE_DISPATCH_PENDING,
+    "Quote_Dispatch_Failed": WorkflowState.CUSTOMER_QUOTE_READY,
     "Pending_PO_Review": WorkflowState.PO_RECEIVED,
     "Purchase_Order_Received": WorkflowState.PO_RECEIVED,
 }
@@ -41,9 +44,10 @@ LEGACY_TRANSITIONS = {
     "Supplier_Sourcing": {"Sourcing_Failed", "Compliance_Check", "Supplier_Sourcing"},
     "Compliance_Check": {"Compliance_Blocked", "Compliance_Warning", "Pricing"},
     "Pricing": {"Quote_Generation"},
-    "Quote_Generation": {"Pending_Approval", "Quote_Sent"},
-    "Pending_Approval": {"Pending_Approval_Low_Margin", "Quote_Sent", "Rejected"},
-    "Pending_Approval_Low_Margin": {"Quote_Sent", "Rejected"},
+    "Quote_Generation": {"Pending_Approval", "Quote_Sent", "Quote_Dispatch_Pending", "Quote_Dispatch_Failed"},
+    "Quote_Dispatch_Pending": {"Quote_Sent", "Quote_Dispatch_Failed"},
+    "Pending_Approval": {"Pending_Approval_Low_Margin", "Quote_Sent", "Quote_Dispatch_Pending", "Rejected"},
+    "Pending_Approval_Low_Margin": {"Quote_Sent", "Quote_Dispatch_Pending", "Rejected"},
     "Quote_Sent": {"Pending_PO_Review", "Purchase_Order_Received", "Rejected"},
     "Pending_PO_Review": {"Purchase_Order_Received", "Rejected"},
     "Purchase_Order_Received": {"PO_Validated", "Rejected"},

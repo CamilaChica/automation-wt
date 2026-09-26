@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import uuid
+from collections.abc import MutableMapping
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from models.db_models import RFQ, RFQItem, InventoryItem, SupplierQuote, Quote, QuoteItem, AgentAuditLog, Supplier, Shipment, ShipmentEvent
@@ -11,8 +12,49 @@ from services.workflow_states import canonical_state, validate_transition
 
 _inventory_lock = threading.Lock()
 
+
+class _PostgresRecordMap(MutableMapping):
+    def __init__(self, domain: str, model_type):
+        self.domain = domain
+        self.model_type = model_type
+
+    def __getitem__(self, key):
+        payload = operations_store.get_operational_record(self.domain, str(key))
+        if payload is None:
+            raise KeyError(key)
+        return self.model_type.model_validate(payload)
+
+    def __setitem__(self, key, value):
+        operations_store.save_operational_record(self.domain, str(key), MockDatabaseService._model_data(value))
+
+    def __delitem__(self, key):
+        if operations_store.get_operational_record(self.domain, str(key)) is None:
+            raise KeyError(key)
+        operations_store.delete_operational_record(self.domain, str(key))
+
+    def __iter__(self):
+        return iter(operations_store.list_operational_records(self.domain))
+
+    def __len__(self):
+        return len(operations_store.list_operational_records(self.domain))
+
+    def values(self):
+        return [self.model_type.model_validate(value) for value in operations_store.list_operational_records(self.domain).values()]
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
 class MockDatabaseService:
+    def __getattr__(self, name):
+        if name == "_production":
+            return operations_store.storage_engine == "postgresql"
+        raise AttributeError(name)
+
     def __init__(self):
+        self._production = operations_store.storage_engine == "postgresql"
         self.rfqs: Dict[str, RFQ] = {}
         self.rfq_items: Dict[str, List[RFQItem]] = {}
         self.inventory: Dict[str, InventoryItem] = {}
@@ -28,7 +70,18 @@ class MockDatabaseService:
             os.getenv(name, "").strip().lower() == "production"
             for name in ("ENVIRONMENT", "WT_ENV", "WT_AUTH_ENV")
         ) or os.getenv("RENDER", "false").strip().lower() in {"1", "true", "yes", "on"}
-        if not self._restore_state() and not production:
+        if self._production:
+            self.rfqs = _PostgresRecordMap("rfqs", RFQ)
+            self.rfq_items = _PostgresRecordMap("rfq_items", RFQItem)
+            self.inventory = _PostgresRecordMap("inventory", InventoryItem)
+            self.suppliers = _PostgresRecordMap("suppliers", Supplier)
+            self.supplier_quotes = _PostgresRecordMap("supplier_quotes", SupplierQuote)
+            self.quotes = _PostgresRecordMap("quotes", Quote)
+            self.quote_items = _PostgresRecordMap("quote_items", QuoteItem)
+            self.audit_logs = _PostgresRecordMap("audit_logs", AgentAuditLog)
+            self.shipments = _PostgresRecordMap("shipments", Shipment)
+            self.shipment_events = _PostgresRecordMap("shipment_events", ShipmentEvent)
+        elif not self._restore_state() and not production:
             self.seed_mock_data()
         if not production:
             self.seed_supplier_records()
@@ -38,6 +91,8 @@ class MockDatabaseService:
         return model.model_dump(mode="json") if hasattr(model, "model_dump") else model.dict()
 
     def _persist_state(self) -> None:
+        if self._production:
+            raise RuntimeError("Whole-state snapshots are disabled for production PostgreSQL persistence.")
         operations_store.save({
             "rfqs": {key: self._model_data(value) for key, value in self.rfqs.items()},
             "rfq_items": {key: [self._model_data(value) for value in values] for key, values in self.rfq_items.items()},
@@ -49,6 +104,25 @@ class MockDatabaseService:
             "shipments": {key: self._model_data(value) for key, value in self.shipments.items()},
             "shipment_events": {key: [self._model_data(value) for value in values] for key, values in self.shipment_events.items()},
         })
+
+    def _pg_record(self, domain: str, record_id: str, model):
+        if model is None:
+            return None
+        operations_store.save_operational_record(domain, record_id, self._model_data(model))
+        return model
+
+    def _pg_get(self, domain: str, record_id: str, model_type):
+        payload = operations_store.get_operational_record(domain, record_id)
+        return model_type.model_validate(payload) if payload is not None else None
+
+    def _pg_list(self, domain: str, model_type):
+        return [model_type.model_validate(payload) for payload in operations_store.list_operational_records(domain).values()]
+
+    @staticmethod
+    def _customer_record_id(email: str) -> str:
+        normalized = email.strip().lower()
+        candidate = f"CUS-{normalized}"
+        return candidate if len(candidate) <= 64 else f"CUS-{uuid.uuid5(uuid.NAMESPACE_URL, normalized).hex[:32].upper()}"
 
     def _restore_state(self) -> bool:
         state = operations_store.load()
@@ -192,6 +266,8 @@ class MockDatabaseService:
     def reserve_inventory(self, part_number: str, quantity: int) -> bool:
         if quantity < 1:
             raise ValueError("Reservation quantity must be positive.")
+        if self._production:
+            return operations_store.reserve_inventory(part_number, quantity)
         with _inventory_lock:
             matching = sorted(
                 (item for item in self.inventory.values() if item.part_number.upper() == part_number.upper()),
@@ -221,16 +297,27 @@ class MockDatabaseService:
             thread_id=thread_id,
             created_at=datetime.now(timezone.utc)
         )
+        if self._production:
+            customer_id = self._customer_record_id(customer_email)
+            with operations_store.transaction():
+                operations_store.upsert_customer(customer_id, customer_name, customer_name, customer_email)
+                operations_store.insert_rfq(
+                    rfq_id=rfq_id, customer_id=customer_id, part_number=None, description=raw_text[:500],
+                    quantity=1, condition=None, certification=None, destination=None, status=rfq.status,
+                    raw_text=raw_text, thread_id=thread_id,
+                )
+                self._pg_record("rfqs", rfq_id, rfq)
+            return rfq
         self.rfqs[rfq_id] = rfq
         operations_store.upsert_customer(
-            customer_id=f"CUS-{customer_email.lower()}",
+            customer_id=self._customer_record_id(customer_email),
             company_name=customer_name,
             contact_name=customer_name,
             email=customer_email,
         )
         operations_store.insert_rfq(
             rfq_id=rfq_id,
-            customer_id=f"CUS-{customer_email.lower()}",
+            customer_id=self._customer_record_id(customer_email),
             part_number=None,
             description=raw_text[:500],
             quantity=1,
@@ -247,9 +334,18 @@ class MockDatabaseService:
         return rfq
 
     def get_rfq(self, rfq_id: str) -> Optional[RFQ]:
+        if self._production:
+            return self._pg_get("rfqs", rfq_id, RFQ)
         return self.rfqs.get(rfq_id)
 
     def set_rfq_automation_paused(self, rfq_id: str, paused: bool, reason: Optional[str] = None) -> Optional[RFQ]:
+        if self._production:
+            rfq = self.get_rfq(rfq_id)
+            if not rfq:
+                return None
+            rfq.automation_paused = paused
+            rfq.pause_reason = reason.strip() if paused and reason else None
+            return self._pg_record("rfqs", rfq_id, rfq)
         rfq = self.rfqs.get(rfq_id)
         if not rfq:
             return None
@@ -259,9 +355,25 @@ class MockDatabaseService:
         return rfq
 
     def list_rfqs(self) -> List[RFQ]:
+        if self._production:
+            return self._pg_list("rfqs", RFQ)
         return list(self.rfqs.values())
 
     def update_rfq_customer(self, rfq_id: str, customer_name: Optional[str], customer_email: Optional[str]) -> Optional[RFQ]:
+        if self._production:
+            rfq = self.get_rfq(rfq_id)
+            if not rfq:
+                return None
+            if customer_name:
+                rfq.customer_name = customer_name.strip()
+            if customer_email:
+                rfq.customer_email = customer_email.strip().lower()
+            with operations_store.transaction():
+                operations_store.upsert_customer(
+                    self._customer_record_id(rfq.customer_email), rfq.customer_name, rfq.customer_name, rfq.customer_email
+                )
+                self._pg_record("rfqs", rfq_id, rfq)
+            return rfq
         rfq = self.rfqs.get(rfq_id)
         if not rfq:
             return None
@@ -270,7 +382,7 @@ class MockDatabaseService:
         if customer_email:
             rfq.customer_email = customer_email.strip().lower()
         operations_store.upsert_customer(
-            customer_id=f"CUS-{rfq.customer_email.lower()}",
+            customer_id=self._customer_record_id(rfq.customer_email),
             company_name=rfq.customer_name,
             contact_name=rfq.customer_name,
             email=rfq.customer_email,
@@ -292,6 +404,15 @@ class MockDatabaseService:
         source_email_id: Optional[str] = None,
         confidence: float = 1.0,
     ) -> dict:
+        if self._production:
+            return operations_store.save_supplier_offer(
+                supplier_name=supplier_name, supplier_email=supplier_email,
+                part_number=part_number, quantity_available=quantity_available,
+                unit_cost=unit_cost, certificate_type=certificate_type,
+                lead_time_days=lead_time_days, approval_status=approval_status,
+                condition_code=condition_code, source_email_id=source_email_id,
+                confidence=confidence,
+            )
         return supplier_db.save_supplier_offer(
             supplier_name=supplier_name,
             supplier_email=supplier_email,
@@ -307,9 +428,26 @@ class MockDatabaseService:
         )
 
     def get_supplier_offers_for_part(self, part_number: str) -> List[dict]:
+        if self._production:
+            return operations_store.get_supplier_offers(part_number)
         return supplier_db.get_supplier_offers_for_part(part_number)
 
     def update_rfq_status(self, rfq_id: str, status: str, expected_version: Optional[int] = None) -> Optional[RFQ]:
+        if self._production:
+            with operations_store.transaction():
+                payload = operations_store.lock_operational_record("rfqs", rfq_id)
+                if payload is None:
+                    return None
+                rfq = RFQ.model_validate(payload)
+                if expected_version is not None and rfq.version != expected_version:
+                    raise ValueError(f"RFQ {rfq_id} was updated by another operation.")
+                validate_transition(rfq.status, status)
+                rfq.status = status
+                rfq.workflow_state = canonical_state(status)
+                rfq.version += 1
+                operations_store.update_rfq_status(rfq_id, status)
+                self._pg_record("rfqs", rfq_id, rfq)
+            return rfq
         if rfq_id in self.rfqs:
             if expected_version is not None and self.rfqs[rfq_id].version != expected_version:
                 raise ValueError(f"RFQ {rfq_id} was updated by another operation.")
@@ -335,12 +473,24 @@ class MockDatabaseService:
             aircraft_type=aircraft,
             condition_preference=condition
         )
+        if self._production:
+            if not self.get_rfq(rfq_id):
+                raise ValueError(f"RFQ {rfq_id} not found.")
+            self._pg_record("rfq_items", item.id, item)
+            rfq = self.get_rfq(rfq_id)
+            operations_store.insert_rfq(
+                rfq_id=rfq_id, customer_id=self._customer_record_id(rfq.customer_email),
+                part_number=requested_part, description=rfq.raw_text[:500], quantity=qty,
+                condition=condition, certification=None, destination=None, status=rfq.status,
+                raw_text=rfq.raw_text, thread_id=rfq.thread_id,
+            )
+            return item
         self.rfq_items[rfq_id].append(item)
         rfq = self.rfqs.get(rfq_id)
         if rfq:
             operations_store.insert_rfq(
                 rfq_id=rfq_id,
-                customer_id=f"CUS-{rfq.customer_email.lower()}",
+                customer_id=self._customer_record_id(rfq.customer_email),
                 part_number=requested_part,
                 description=rfq.raw_text[:500],
                 quantity=qty,
@@ -355,9 +505,25 @@ class MockDatabaseService:
         return item
 
     def get_rfq_items(self, rfq_id: str) -> List[RFQItem]:
+        if self._production:
+            return [item for item in self._pg_list("rfq_items", RFQItem) if item.rfq_id == rfq_id]
         return self.rfq_items.get(rfq_id, [])
 
     def replace_rfq_items(self, rfq_id: str, items: List[Dict[str, Any]]) -> List[RFQItem]:
+        if self._production:
+            if not self.get_rfq(rfq_id):
+                raise ValueError(f"RFQ {rfq_id} not found.")
+            with operations_store.transaction():
+                for existing_item in self.get_rfq_items(rfq_id):
+                    operations_store.delete_operational_record("rfq_items", existing_item.id)
+                return [
+                    self.add_rfq_item(
+                        rfq_id, str(item["part_number"]), int(item["quantity"]),
+                        uom=str(item.get("unit_of_measure") or "EA"),
+                        condition=str(item.get("condition_code") or "NE"),
+                    )
+                    for item in items
+                ]
         if rfq_id not in self.rfqs:
             raise ValueError(f"RFQ {rfq_id} not found.")
         self.rfq_items[rfq_id] = []
@@ -376,6 +542,15 @@ class MockDatabaseService:
 
     # Audit Log Operations
     def add_audit_log(self, rfq_id: str, agent_name: str, action: str, message: str, status: str = "SUCCESS", payload: str = None) -> AgentAuditLog:
+        if self._production:
+            with operations_store.transaction():
+                logs = self.get_audit_logs(rfq_id)
+                log = AgentAuditLog(
+                    id=len(logs) + 1, rfq_id=rfq_id, agent_name=agent_name, action_type=action,
+                    message=message, status=status, payload_json=payload, timestamp=datetime.now(timezone.utc),
+                )
+                self._pg_record("audit_logs", f"{rfq_id}:{log.id}", log)
+                return log
         log = AgentAuditLog(
             id=len(self.audit_logs.get(rfq_id, [])) + 1,
             rfq_id=rfq_id,
@@ -393,6 +568,9 @@ class MockDatabaseService:
         return log
 
     def get_audit_logs(self, rfq_id: str) -> List[AgentAuditLog]:
+        if self._production:
+            logs = [log for log in self._pg_list("audit_logs", AgentAuditLog) if log.rfq_id == rfq_id]
+            return sorted(logs, key=lambda log: log.id or 0)
         return self.audit_logs.get(rfq_id, [])
 
     # Quote Operations
@@ -416,6 +594,17 @@ class MockDatabaseService:
             valid_until=valid_until,
             status="Draft"
         )
+        if self._production:
+            if not self.get_rfq(rfq_id):
+                raise ValueError(f"RFQ {rfq_id} not found.")
+            with operations_store.transaction():
+                self._pg_record("quotes", quote_id, quote)
+                operations_store.insert_customer_quote(
+                    quote_id=quote_id, rfq_id=rfq_id, unit_price=0.0, quantity=1,
+                    total_price=total, lead_time=lead_time_days, condition=None,
+                    certification=None, valid_until=valid_until, status=quote.status,
+                )
+            return quote
         self.quotes[quote_id] = quote
         self.quote_items[quote_id] = []
         operations_store.insert_customer_quote(
@@ -453,6 +642,24 @@ class MockDatabaseService:
             compliance_status=comp_status,
             attachments=list(attachments or [])
         )
+        if self._production:
+            quote = self.get_quote(quote_id)
+            if not quote:
+                raise ValueError(f"Quote {quote_id} not found.")
+            with operations_store.transaction():
+                self._pg_record("quote_items", qi_id, item)
+                operations_store.insert_customer_quote(
+                    quote_id=quote_id, rfq_id=quote.rfq_id, unit_price=unit_price, quantity=qty,
+                    total_price=quote.total_amount, lead_time=lead_time_days, condition=condition,
+                    certification=cert, valid_until=quote.valid_until, status=quote.status,
+                )
+                operations_store.insert_customer_quote_item(
+                    item_id=qi_id, quote_id=quote_id, rfq_item_id=rfq_item_id, part_number=part_number,
+                    description=description or part_number, quantity=qty, condition=condition,
+                    certification=cert, unit_price=unit_price, lead_time=lead_time_days,
+                    attachments=json.dumps(list(attachments or [])),
+                )
+            return item
         if quote_id not in self.quote_items:
             self.quote_items[quote_id] = []
         self.quote_items[quote_id].append(item)
@@ -487,12 +694,24 @@ class MockDatabaseService:
         return item
 
     def get_quote_by_rfq(self, rfq_id: str) -> Optional[Quote]:
+        if self._production:
+            return next((quote for quote in self._pg_list("quotes", Quote) if quote.rfq_id == rfq_id), None)
         for quote in self.quotes.values():
             if quote.rfq_id == rfq_id:
                 return quote
         return None
 
     def get_quote(self, quote_id: str) -> Optional[Quote]:
+        if self._production:
+            quote = self._pg_get("quotes", quote_id, Quote)
+            if quote and quote.valid_until and quote.status in {"Sent", "Approved"}:
+                if quote.valid_until < datetime.now(timezone.utc).date().isoformat():
+                    quote.status = "Expired"
+                    with operations_store.transaction():
+                        self._pg_record("quotes", quote_id, quote)
+                        operations_store.update_customer_quote_status(quote_id, "Expired")
+                        operations_store.cancel_communication_task(f"customer-followup:{quote_id}")
+            return quote
         quote = self.quotes.get(quote_id)
         if quote and quote.valid_until and quote.status in {"Sent", "Approved"}:
             if quote.valid_until < datetime.now(timezone.utc).date().isoformat():
@@ -502,9 +721,29 @@ class MockDatabaseService:
         return quote
 
     def get_quote_items(self, quote_id: str) -> List[QuoteItem]:
+        if self._production:
+            return [item for item in self._pg_list("quote_items", QuoteItem) if item.quote_id == quote_id]
         return self.quote_items.get(quote_id, [])
 
     def update_quote_status(self, quote_id: str, status: str, approved_by: str = None, comments: str = None, expected_version: Optional[int] = None) -> Optional[Quote]:
+        if self._production:
+            with operations_store.transaction():
+                payload = operations_store.lock_operational_record("quotes", quote_id)
+                if payload is None:
+                    return None
+                quote = Quote.model_validate(payload)
+                if expected_version is not None and quote.version != expected_version:
+                    raise ValueError(f"Quote {quote_id} was updated by another operation.")
+                quote.status = status
+                if approved_by:
+                    quote.approved_by = approved_by
+                    quote.approved_at = datetime.now(timezone.utc)
+                if comments:
+                    quote.comments = comments
+                quote.version += 1
+                self._pg_record("quotes", quote_id, quote)
+                operations_store.update_customer_quote_status(quote_id, status)
+            return quote
         if quote_id in self.quotes:
             quote = self.quotes[quote_id]
             if expected_version is not None and quote.version != expected_version:
@@ -531,12 +770,31 @@ class MockDatabaseService:
             quantity=quantity,
             public_token=public_token,
         )
+        if self._production:
+            with operations_store.transaction():
+                self._pg_record("shipments", shipment_id, shipment)
+                self.add_shipment_event(shipment_id, "Preparing Shipment", None, "Order received and awaiting fulfillment processing.")
+            return self.get_shipment(shipment_id)
         self.shipments[shipment_id] = shipment
         self.shipment_events[shipment_id] = []
         self.add_shipment_event(shipment_id, "Preparing Shipment", None, "Order received and awaiting fulfillment processing.")
         return shipment
 
     def add_shipment_event(self, shipment_id: str, status: str, location: Optional[str], description: str) -> ShipmentEvent:
+        if self._production:
+            shipment = self.get_shipment(shipment_id)
+            if not shipment:
+                raise ValueError(f"Shipment {shipment_id} not found.")
+            event = ShipmentEvent(
+                id=f"SHE-{uuid.uuid4().hex[:8].upper()}", shipment_id=shipment_id,
+                status=status, location=location, description=description,
+            )
+            shipment.status = status
+            shipment.updated_at = datetime.now(timezone.utc)
+            with operations_store.transaction():
+                self._pg_record("shipments", shipment_id, shipment)
+                self._pg_record("shipment_events", event.id, event)
+            return event
         event = ShipmentEvent(
             id=f"SHE-{uuid.uuid4().hex[:8].upper()}",
             shipment_id=shipment_id,
@@ -552,13 +810,23 @@ class MockDatabaseService:
         return event
 
     def get_shipment(self, shipment_id: str) -> Optional[Shipment]:
+        if self._production:
+            return self._pg_get("shipments", shipment_id, Shipment)
         return self.shipments.get(shipment_id)
 
     def get_shipment_by_token(self, public_token: str) -> Optional[Shipment]:
+        if self._production:
+            return next((shipment for shipment in self._pg_list("shipments", Shipment) if shipment.public_token == public_token), None)
         return next((shipment for shipment in self.shipments.values() if shipment.public_token == public_token), None)
 
     def find_shipment_by_tracking(self, carrier: str, tracking_number: str) -> Optional[Shipment]:
         normalized_carrier = (carrier or "").lower()
+        if self._production:
+            return next((
+                shipment for shipment in self._pg_list("shipments", Shipment)
+                if (shipment.carrier or "").lower() == normalized_carrier
+                and shipment.tracking_number == tracking_number
+            ), None)
         return next(
             (
                 shipment for shipment in self.shipments.values()
@@ -569,12 +837,27 @@ class MockDatabaseService:
         )
 
     def get_shipment_events(self, shipment_id: str) -> List[ShipmentEvent]:
+        if self._production:
+            return sorted(
+                (event for event in self._pg_list("shipment_events", ShipmentEvent) if event.shipment_id == shipment_id),
+                key=lambda event: event.occurred_at,
+            )
         return self.shipment_events.get(shipment_id, [])
 
     def list_shipments(self) -> List[Shipment]:
+        if self._production:
+            return sorted(self._pg_list("shipments", Shipment), key=lambda shipment: shipment.updated_at, reverse=True)
         return sorted(self.shipments.values(), key=lambda shipment: shipment.updated_at, reverse=True)
 
     def update_shipment_tracking(self, shipment_id: str, carrier: str, tracking_number: str) -> Optional[Shipment]:
+        if self._production:
+            shipment = self.get_shipment(shipment_id)
+            if not shipment:
+                return None
+            shipment.carrier = carrier
+            shipment.tracking_number = tracking_number
+            shipment.updated_at = datetime.now(timezone.utc)
+            return self._pg_record("shipments", shipment_id, shipment)
         shipment = self.shipments.get(shipment_id)
         if not shipment:
             return None

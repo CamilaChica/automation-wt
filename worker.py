@@ -20,6 +20,8 @@ from services.db_service import db_service
 from services.orchestration_service import orchestration_service
 from services.document_parser import build_email_context
 from scripts.backup_sqlite import main as backup_sqlite
+from services.operations_store import operations_store
+from services.async_database import preflight_database
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("winged-tycoons-email-worker")
@@ -112,6 +114,8 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
 
 
 def run() -> None:
+    if operations_store.storage_engine == "postgresql":
+        asyncio.run(preflight_database())
     interval = int(os.getenv("MAILBOX_POLL_INTERVAL_SECONDS", "60"))
     fetch_limit = int(os.getenv("MAILBOX_FETCH_LIMIT", "100"))
     backup_interval = int(os.getenv("SQLITE_BACKUP_INTERVAL_SECONDS", "86400"))
@@ -127,16 +131,37 @@ def run() -> None:
             except Exception:
                 logger.exception("SQLite backup failed")
 
-        for task in supplier_db.list_due_communication_tasks():
+        if operations_store.storage_engine == "postgresql":
+            try:
+                outbox_result = communication_service.dispatch_outbox_once(limit=25)
+                if outbox_result["sent"] or outbox_result["failed"]:
+                    logger.info("Outbox dispatch sent=%s failed=%s", outbox_result["sent"], outbox_result["failed"])
+            except Exception:
+                logger.exception("Transactional outbox dispatch failed")
+
+        due_tasks = (
+            operations_store.list_due_communication_tasks()
+            if operations_store.storage_engine == "postgresql"
+            else supplier_db.list_due_communication_tasks()
+        )
+        for task in due_tasks:
             try:
                 result = communication_service.process_due_task(task)
                 if result["transmission_status"] == "SENT":
-                    supplier_db.mark_communication_task_sent(task["id"])
+                    if operations_store.storage_engine == "postgresql":
+                        operations_store.update_communication_task(task["id"], status="sent")
+                    else:
+                        supplier_db.mark_communication_task_sent(task["id"])
                     logger.info("Sent scheduled %s communication to %s", task["task_type"], task["recipient"])
+                elif result["transmission_status"] == "PENDING" and operations_store.storage_engine == "postgresql":
+                    logger.info("Queued scheduled %s communication to %s in transactional outbox", task["task_type"], task["recipient"])
                 else:
                     logger.info("Dry-run scheduled %s communication retained for delivery", task["task_type"])
             except Exception:
-                supplier_db.mark_communication_task_retry(task["id"], "scheduled communication dispatch failed")
+                if operations_store.storage_engine == "postgresql":
+                    operations_store.retry_communication_task(task["id"], "scheduled communication dispatch failed")
+                else:
+                    supplier_db.mark_communication_task_retry(task["id"], "scheduled communication dispatch failed")
                 logger.exception("Scheduled communication failed for task %s", task["id"])
 
         for mailbox in _mailboxes_to_poll():
@@ -145,7 +170,8 @@ def run() -> None:
                 logger.info("Mailbox %s: read %d message bodies", mailbox, len(messages))
                 for message in messages:
                     message_id = str(message.get("message_id") or "").strip()
-                    if message_id and supplier_db.is_email_processed(mailbox, message_id):
+                    postgres_mode = operations_store.storage_engine == "postgresql"
+                    if message_id and not postgres_mode and supplier_db.is_email_processed(mailbox, message_id):
                         logger.info(
                             "Mailbox %s skipped already processed message %s from=%s subject=%s",
                             mailbox,
@@ -163,11 +189,37 @@ def run() -> None:
                         f"{body}"
                     )
                     if mailbox == "sales":
-                        processed = asyncio.run(_ingest_sales_message(message))
-                        if message_id and processed:
+                        if postgres_mode and message_id:
+                            with operations_store.transaction():
+                                if not operations_store.claim_inbound_message(message_id, mailbox):
+                                    logger.info("Mailbox %s skipped PostgreSQL-claimed message %s", mailbox, message_id)
+                                    continue
+                                processed = asyncio.run(_ingest_sales_message(message))
+                                if processed:
+                                    operations_store.mark_inbound_message_processed(message_id)
+                                else:
+                                    operations_store.release_inbound_message(message_id)
+                        else:
+                            processed = asyncio.run(_ingest_sales_message(message))
+                        if message_id and processed and not postgres_mode:
                             supplier_db.save_email(mailbox, message_id, message.get("from", ""), message.get("subject", ""), body)
                         continue
-                    result = loader.load_raw_email_text(email_text, mailbox=mailbox, message_id=message_id or None, attachments=message.get("attachments"))
+                    if postgres_mode and message_id:
+                        with operations_store.transaction():
+                            if not operations_store.claim_inbound_message(message_id, mailbox):
+                                logger.info("Mailbox %s skipped PostgreSQL-claimed message %s", mailbox, message_id)
+                                continue
+                            result = loader.load_raw_email_text(email_text, mailbox=mailbox, message_id=message_id, attachments=message.get("attachments"))
+                            if (
+                                result.get("success")
+                                or result.get("status") == "Pending_Human_Review"
+                                or "No part number detected" in str(result.get("error", ""))
+                            ):
+                                operations_store.mark_inbound_message_processed(message_id)
+                            else:
+                                operations_store.release_inbound_message(message_id)
+                    else:
+                        result = loader.load_raw_email_text(email_text, mailbox=mailbox, message_id=message_id or None, attachments=message.get("attachments"))
                     if (
                         not result.get("success")
                         and "No part number detected" in str(result.get("error"))
@@ -183,7 +235,7 @@ def run() -> None:
                             part_reference=str(message.get("subject") or "supplier quotation"),
                             reply_to=message_id or None,
                         )
-                        if message_id:
+                        if message_id and not postgres_mode:
                             supplier_db.save_email(mailbox, message_id, message.get("from", ""), message.get("subject", ""), body)
                         result = {**result, "status": "Unreadable_PDF_Clarification_Sent", "clarification": clarification}
                     logger.info("Mailbox %s processed message %s -> %s", mailbox, message_id, result)

@@ -205,7 +205,11 @@ class TestMultiAgentSalesOrchestration(unittest.TestCase):
             pipeline = await orchestrator.process_rfq_pipeline(rfq.id)
             persisted = db_service.get_rfq(rfq.id)
             self.assertIsNotNone(persisted)
-            self.assertIn(persisted.status, {"Quote_Sent", "Pending_Internal_Review"}, f"{case['name']}: {pipeline}")
+            self.assertIn(
+                persisted.status,
+                {"Quote_Sent", "Quote_Dispatch_Pending", "Pending_Internal_Review"},
+                f"{case['name']}: {pipeline}",
+            )
             self.assertNotEqual(persisted.status, "Intake_Failed")
             results.append(pipeline)
 

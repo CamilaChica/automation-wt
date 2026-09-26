@@ -18,8 +18,8 @@ class TestUXAccessibilityAndOfflineStates(unittest.TestCase):
     def test_portal_actions_have_loading_state_text(self):
         portal_source = (ROOT / "frontend" / "src" / "components" / "views" / "CustomerPortal.tsx").read_text(encoding="utf-8")
 
-        self.assertIn("Sending request...", portal_source)
-        self.assertIn("Sending purchase order...", portal_source)
+        self.assertIn("t('sendingRequest')", portal_source)
+        self.assertIn("t('sendingPo')", portal_source)
         self.assertIn("disabled={isSubmitting}", portal_source)
         self.assertIn("disabled={isSubmittingPo}", portal_source)
 

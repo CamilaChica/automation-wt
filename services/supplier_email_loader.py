@@ -2,7 +2,6 @@ from email import policy
 from email.parser import BytesParser
 from typing import Any, Dict, List
 
-from services.supplier_database import supplier_db
 from services.supplier_ingestion_service import SupplierEmailIngestionService
 
 

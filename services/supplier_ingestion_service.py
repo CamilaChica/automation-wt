@@ -26,6 +26,22 @@ def _price_field_value(value: Optional[str]) -> Optional[float]:
         return None
 
 
+def _save_inbound_email(*, mailbox: str, message_id: str, sender: str, subject: str, body: str) -> None:
+    if operations_store.storage_engine == "postgresql":
+        operations_store.save_inbound_email(
+            mailbox=mailbox, message_id=message_id, sender=sender,
+            subject=subject, body=body, processing_status="processed",
+        )
+        return
+    supplier_db.save_email(mailbox=mailbox, message_id=message_id, sender=sender, subject=subject, body=body)
+
+
+def _save_supplier_offer(**offer: Any) -> dict[str, Any]:
+    if operations_store.storage_engine == "postgresql":
+        return operations_store.save_supplier_offer(**offer)
+    return supplier_db.save_supplier_offer(**offer)
+
+
 class SupplierEmailIngestionService:
     def __init__(self):
         self.extractor = SupplierEmailExtractor()
@@ -61,7 +77,7 @@ class SupplierEmailIngestionService:
                     elif line.lower().startswith("subject:"):
                         subject = line.split(":", 1)[1].strip()
                 source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
-                supplier_db.save_email(
+                _save_inbound_email(
                     mailbox=mailbox,
                     message_id=source_email_id,
                     sender=sender,
@@ -164,7 +180,7 @@ class SupplierEmailIngestionService:
             condition = extracted.get("condition_code") or "NE"
             source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
 
-            supplier_db.save_email(
+            _save_inbound_email(
                 mailbox=mailbox,
                 message_id=source_email_id,
                 sender=supplier_email,
@@ -189,7 +205,7 @@ class SupplierEmailIngestionService:
                 item_price = float(item.get("unit_price") if item.get("unit_price") is not None else unit_cost or 0.0)
                 item_certificate = (item.get("trace_documents") or [certificate])[0] if (item.get("trace_documents") or [certificate]) else certificate
                 item_source_id = source_email_id if index == 0 else f"{source_email_id}:{index}"
-                supplier_db.save_supplier_offer(
+                _save_supplier_offer(
                     supplier_name=supplier_name,
                     supplier_email=supplier_email,
                     part_number=item_part_number,

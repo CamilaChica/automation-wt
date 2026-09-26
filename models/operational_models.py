@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Float, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, Float, Integer, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from models.async_models import Base
@@ -15,7 +15,14 @@ class RFQRecord(Base):
     __tablename__ = "rfqs"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     customer_email: Mapped[str] = mapped_column(String(320), index=True)
+    customer_id: Mapped[str | None] = mapped_column(String(64), index=True)
     customer_name: Mapped[str] = mapped_column(String(255), default="")
+    part_number: Mapped[str | None] = mapped_column(String(80))
+    description: Mapped[str | None] = mapped_column(Text)
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    condition_requested: Mapped[str | None] = mapped_column(String(32))
+    certification_requested: Mapped[str | None] = mapped_column(String(255))
+    destination: Mapped[str | None] = mapped_column(String(512))
     raw_text: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(64), index=True, default="Intake")
     thread_id: Mapped[str | None] = mapped_column(String(512))
@@ -70,12 +77,17 @@ class QuoteItemRecord(Base):
 class CommunicationRecord(Base):
     __tablename__ = "communications"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    entity_type: Mapped[str | None] = mapped_column(String(64))
     entity_id: Mapped[str] = mapped_column(String(64), index=True)
     recipient: Mapped[str] = mapped_column(String(320))
     sender: Mapped[str] = mapped_column(String(320))
-    subject: Mapped[str] = mapped_column(String(255))
-    message: Mapped[str] = mapped_column(Text)
+    channel: Mapped[str | None] = mapped_column(String(32))
+    subject: Mapped[str] = mapped_column(String(255), default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    message_type: Mapped[str | None] = mapped_column(String(32))
     status: Mapped[str] = mapped_column(String(32), index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    response_received: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -105,8 +117,15 @@ class CommunicationTaskRecord(Base):
     recipient: Mapped[str] = mapped_column(String(320))
     subject: Mapped[str] = mapped_column(String(255))
     body: Mapped[str] = mapped_column(Text)
+    task_type: Mapped[str] = mapped_column(String(64), default="email")
+    mailbox: Mapped[str] = mapped_column(String(128), default="sales")
+    reply_to: Mapped[str | None] = mapped_column(String(512))
     status: Mapped[str] = mapped_column(String(32), index=True, default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=5)
+    last_error: Mapped[str | None] = mapped_column(Text)
     due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -116,6 +135,19 @@ class InboundMessageIdempotencyRecord(Base):
     mailbox: Mapped[str] = mapped_column(String(128), index=True)
     processed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     status: Mapped[str] = mapped_column(String(32), default="processed")
+
+
+class InboundEmailRecord(Base):
+    __tablename__ = "inbound_emails"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    mailbox: Mapped[str] = mapped_column(String(128), index=True)
+    message_id: Mapped[str] = mapped_column(String(512), unique=True, index=True)
+    sender: Mapped[str | None] = mapped_column(String(320))
+    subject: Mapped[str | None] = mapped_column(Text)
+    body: Mapped[str] = mapped_column(Text)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    processing_status: Mapped[str] = mapped_column(String(32), default="received")
+    extraction_error: Mapped[str | None] = mapped_column(Text)
 
 
 class AgentHandoffRecord(Base):
@@ -191,3 +223,112 @@ class OperationsStateRecord(Base):
     __tablename__ = "operations_state"
     state_key: Mapped[str] = mapped_column(String(64), primary_key=True)
     payload: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class CustomerRecord(Base):
+    __tablename__ = "customers"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    company_name: Mapped[str] = mapped_column(String(255))
+    contact_name: Mapped[str | None] = mapped_column(String(255))
+    email: Mapped[str] = mapped_column(String(320), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class CustomerQuoteRecord(Base):
+    __tablename__ = "customer_quotes"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    rfq_id: Mapped[str] = mapped_column(String(64), index=True)
+    quote_number: Mapped[str] = mapped_column(String(64), unique=True)
+    unit_price: Mapped[float] = mapped_column(Float)
+    quantity: Mapped[int] = mapped_column(Integer)
+    total_price: Mapped[float] = mapped_column(Float)
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    lead_time: Mapped[int | None] = mapped_column(Integer)
+    condition: Mapped[str | None] = mapped_column(String(32))
+    certification: Mapped[str | None] = mapped_column(String(255))
+    valid_until: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class CustomerQuoteItemRecord(Base):
+    __tablename__ = "customer_quote_items"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    quote_id: Mapped[str] = mapped_column(String(64), index=True)
+    rfq_item_id: Mapped[str | None] = mapped_column(String(64))
+    part_number: Mapped[str] = mapped_column(String(80))
+    description: Mapped[str | None] = mapped_column(Text)
+    quantity: Mapped[int] = mapped_column(Integer)
+    condition: Mapped[str | None] = mapped_column(String(32))
+    certification: Mapped[str] = mapped_column(String(255))
+    unit_price: Mapped[float] = mapped_column(Float)
+    lead_time: Mapped[int | None] = mapped_column(Integer)
+    attachments: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class OperationalRecord(Base):
+    __tablename__ = "operational_records"
+    domain: Mapped[str] = mapped_column(String(64), primary_key=True)
+    record_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class SupplierRecord(Base):
+    __tablename__ = "suppliers"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    company_name: Mapped[str] = mapped_column(String(255), index=True)
+    email: Mapped[str | None] = mapped_column(String(320), index=True)
+    phone: Mapped[str | None] = mapped_column(String(64))
+    approval_status: Mapped[str] = mapped_column(String(32), default="Pending")
+    itar_certified: Mapped[bool] = mapped_column(default=False)
+    source: Mapped[str] = mapped_column(String(32), default="email")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class SupplierPartRecord(Base):
+    __tablename__ = "supplier_parts"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    supplier_id: Mapped[str] = mapped_column(String(64), index=True)
+    part_number: Mapped[str] = mapped_column(String(80), index=True)
+    condition_code: Mapped[str | None] = mapped_column(String(8))
+    description: Mapped[str | None] = mapped_column(Text)
+    quantity_available: Mapped[int | None] = mapped_column(Integer)
+    unit_cost: Mapped[float | None] = mapped_column(Float)
+    currency: Mapped[str] = mapped_column(String(3), default="USD")
+    certificate_type: Mapped[str | None] = mapped_column(String(128))
+    lead_time_days: Mapped[int | None] = mapped_column(Integer)
+    availability_location: Mapped[str | None] = mapped_column(String(255))
+    warranty_terms: Mapped[str | None] = mapped_column(Text)
+    trace_documents: Mapped[str | None] = mapped_column(Text)
+    source_email_id: Mapped[str | None] = mapped_column(String(512), unique=True)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    approval_status: Mapped[str] = mapped_column(String(32), default="Pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class OutboxMessageRecord(Base):
+    __tablename__ = "outbox_messages"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    deduplication_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    entity_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    mailbox: Mapped[str] = mapped_column(String(128))
+    recipient: Mapped[str] = mapped_column(String(320))
+    subject: Mapped[str] = mapped_column(String(512))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    reply_to: Mapped[str | None] = mapped_column(String(512))
+    communication_task_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16), index=True, default="PENDING")
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_retries: Mapped[int] = mapped_column(Integer, default=5)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    sending_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

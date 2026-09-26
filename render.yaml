@@ -39,6 +39,8 @@ services:
         value: "purchasing@wingedtycoons.com"
       - key: DATABASE_URL
         sync: false
+      - key: OPERATIONAL_POSTGRES_RUNTIME_ENABLED
+        value: "false"
       - key: ALLOWED_ORIGINS
         value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com,http://localhost:5173,http://localhost:3000"
       - key: GRAPH_TENANT_ID
@@ -193,6 +195,8 @@ services:
         value: "purchasing@wingedtycoons.com"
       - key: DATABASE_URL
         sync: false
+      - key: OPERATIONAL_POSTGRES_RUNTIME_ENABLED
+        value: "false"
       - key: ALLOWED_ORIGINS
         value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com,http://localhost:5173,http://localhost:3000"
       - key: EMAIL_SEND_ENABLED

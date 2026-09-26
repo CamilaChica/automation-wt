@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import os
 import unittest
+from contextlib import contextmanager
 from unittest.mock import patch
 
 from services.communication_service import CommunicationService
@@ -62,6 +63,57 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
         self.assertIn("Subject: Quote 060-1234-00", loader.email_text)
         self.assertIn("Attachment inventory.csv:", loader.email_text)
         self.assertIn("060-1234-00,12,NE", loader.email_text)
+
+    def test_inventory_worker_claim_and_business_processing_share_transaction(self):
+        events = []
+
+        class SharedStoreStub:
+            storage_engine = "postgresql"
+
+            @contextmanager
+            def transaction(self):
+                events.append("begin")
+                try:
+                    yield
+                finally:
+                    events.append("commit")
+
+            def claim_inbound_message(self, message_id, mailbox):
+                events.append(("claim", message_id, mailbox))
+                return True
+
+            def mark_inbound_message_processed(self, message_id):
+                events.append(("processed", message_id))
+
+        class RecordingLoader(CapturingLoader):
+            def load_raw_email_text(self, email_text, **kwargs):
+                events.append(("ingest", kwargs["message_id"]))
+                return super().load_raw_email_text(email_text, **kwargs)
+
+        worker = InventoryIngestionWorker(
+            fetch_messages=lambda mailbox, limit: [],
+            loader=RecordingLoader(),
+        )
+        worker.postgres_enabled = False
+        worker._resume_waiting_rfqs = lambda _part_number: None
+        message = {
+            "message_id": "supplier-shared-1",
+            "from": "quotes@aero.example",
+            "subject": "Quote for 060-1234-00",
+            "body": "Quantity 12, unit price $1100, FAA 8130-3, lead time 3 days",
+        }
+        with (
+            patch("services.inventory_ingestion_worker.operations_store", SharedStoreStub()),
+            patch("services.inventory_ingestion_worker.supplier_db.is_email_processed", return_value=False),
+            patch("services.inventory_ingestion_worker.communication_service.schedule_supplier_discount_request"),
+        ):
+            result = worker.process_message(message)
+
+        self.assertTrue(result["success"])
+        self.assertLess(events.index("begin"), events.index(("claim", "supplier-shared-1", "purchasing")))
+        self.assertLess(events.index(("claim", "supplier-shared-1", "purchasing")), events.index(("ingest", "supplier-shared-1")))
+        self.assertLess(events.index(("ingest", "supplier-shared-1")), events.index(("processed", "supplier-shared-1")))
+        self.assertLess(events.index(("processed", "supplier-shared-1")), events.index("commit"))
 
     def test_real_supplier_loader_parses_subject_part_number(self):
         loader = SupplierEmailLoader()

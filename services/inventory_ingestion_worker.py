@@ -14,12 +14,13 @@ import os
 import time
 from typing import Any, Callable
 
-from services.async_database import create_engine_from_environment, session_scope, upsert_aviation_part, upsert_supplier_quote
+from services.async_database import create_engine_from_environment, preflight_database, session_scope, upsert_aviation_part, upsert_supplier_quote
 from services.document_parser import build_email_context
 from services.mailbox_service import fetch_inbox_messages
 from services.supplier_database import supplier_db
 from services.supplier_email_loader import SupplierEmailLoader
 from services.communication_service import communication_service
+from services.operations_store import operations_store
 
 logger = logging.getLogger("winged-tycoons-inventory-ingestion")
 
@@ -103,18 +104,38 @@ class InventoryIngestionWorker:
 
     def process_message(self, message: dict[str, Any]) -> dict[str, Any]:
         message_id = str(message.get("message_id") or "").strip()
-        if message_id and supplier_db.is_email_processed(self.mailbox, message_id):
+        postgres_mode = operations_store.storage_engine == "postgresql"
+        if message_id and not postgres_mode and supplier_db.is_email_processed(self.mailbox, message_id):
             return {"success": True, "skipped": True, "message_id": message_id}
         body = str(message.get("body") or "").strip()
         if not body and not message.get("attachments"):
             return {"success": False, "skipped": True, "error": "Message has no body or attachments."}
 
-        result = self.loader.load_raw_email_text(
-            self._email_text(message),
-            mailbox=self.mailbox,
-            message_id=message_id or None,
-            attachments=message.get("attachments") or [],
-        )
+        if postgres_mode and message_id:
+            with operations_store.transaction():
+                if not operations_store.claim_inbound_message(message_id, self.mailbox):
+                    return {"success": True, "skipped": True, "message_id": message_id}
+                result = self.loader.load_raw_email_text(
+                    self._email_text(message),
+                    mailbox=self.mailbox,
+                    message_id=message_id,
+                    attachments=message.get("attachments") or [],
+                )
+                if (
+                    result.get("success")
+                    or result.get("status") == "Pending_Human_Review"
+                    or "No part number detected" in str(result.get("error", ""))
+                ):
+                    operations_store.mark_inbound_message_processed(message_id)
+                else:
+                    operations_store.release_inbound_message(message_id)
+        else:
+            result = self.loader.load_raw_email_text(
+                self._email_text(message),
+                mailbox=self.mailbox,
+                message_id=message_id or None,
+                attachments=message.get("attachments") or [],
+            )
         if not result.get("success") and "No part number detected" in str(result.get("error")):
             pdf_attachments = [
                 attachment for attachment in message.get("attachments") or []
@@ -128,13 +149,24 @@ class InventoryIngestionWorker:
                     part_reference=str(message.get("subject") or "supplier quotation"),
                     reply_to=message_id or None,
                 )
-                supplier_db.save_email(
-                    mailbox=self.mailbox,
-                    message_id=message_id or f"unreadable-pdf-{time.time_ns()}",
-                    sender=sender,
-                    subject=str(message.get("subject") or ""),
-                    body=body,
-                )
+                if postgres_mode:
+                    operations_store.save_operational_record("inbound_emails", message_id or f"unreadable-pdf-{time.time_ns()}", {
+                        "id": message_id,
+                        "mailbox": self.mailbox,
+                        "message_id": message_id,
+                        "sender": sender,
+                        "subject": str(message.get("subject") or ""),
+                        "body": body,
+                        "processing_status": "clarification_sent",
+                    })
+                else:
+                    supplier_db.save_email(
+                        mailbox=self.mailbox,
+                        message_id=message_id or f"unreadable-pdf-{time.time_ns()}",
+                        sender=sender,
+                        subject=str(message.get("subject") or ""),
+                        body=body,
+                    )
                 result = {
                     **result,
                     "success": False,
@@ -178,6 +210,8 @@ class InventoryIngestionWorker:
         return results
 
     def run_forever(self) -> None:
+        if operations_store.storage_engine == "postgresql":
+            asyncio.run(preflight_database())
         while True:
             started = time.monotonic()
             self.poll_once()

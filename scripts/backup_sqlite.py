@@ -16,7 +16,7 @@ except ImportError:  # pragma: no cover - optional until external backups are en
 
 
 ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(ROOT / ".env", override=True)
+load_dotenv(ROOT / ".env", override=False)
 BACKUP_DIR = Path(os.getenv("SQLITE_BACKUP_DIR", str(ROOT / "backups")))
 DATABASES = {
     "operations": Path(os.getenv("OPERATIONS_DB_PATH", str(ROOT / "data" / "operations.db"))),

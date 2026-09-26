@@ -29,6 +29,7 @@ from services.db_service import db_service
 from services.mailbox_service import fetch_inbox_messages
 from services.orchestration_service import orchestration_service
 from services.supplier_database import supplier_db
+from services.operations_store import operations_store
 from services.supplier_email_loader import SupplierEmailLoader
 
 
@@ -101,15 +102,26 @@ def run_purchasing(args: argparse.Namespace) -> dict[str, Any]:
     loader = SupplierEmailLoader()
     processed = []
     followups = []
+    postgres_mode = operations_store.storage_engine == "postgresql"
     for message in messages:
         if _received_at(message) < cutoff:
             continue
         message_id = str(message.get("message_id") or "")
-        if message_id and supplier_db.is_email_processed("purchasing", message_id):
+        if message_id and not postgres_mode and supplier_db.is_email_processed("purchasing", message_id):
             continue
         body = str(message.get("body") or "")
         email_text = f"From: {message.get('from', '')}\nSubject: {message.get('subject', '')}\n\n{body}"
-        result = loader.load_raw_email_text(email_text, mailbox="purchasing", message_id=message_id or None, attachments=message.get("attachments"))
+        if postgres_mode and message_id:
+            with operations_store.transaction():
+                if not operations_store.claim_inbound_message(message_id, "purchasing"):
+                    continue
+                result = loader.load_raw_email_text(email_text, mailbox="purchasing", message_id=message_id, attachments=message.get("attachments"))
+                if result.get("success") or result.get("status") == "Pending_Human_Review" or "No part number detected" in str(result.get("error", "")):
+                    operations_store.mark_inbound_message_processed(message_id)
+                else:
+                    operations_store.release_inbound_message(message_id)
+        else:
+            result = loader.load_raw_email_text(email_text, mailbox="purchasing", message_id=message_id or None, attachments=message.get("attachments"))
         record = {"message_id": message_id, "sender": message.get("from", ""), "subject": message.get("subject", ""), "result": result}
         processed.append(record)
         if result.get("success"):
@@ -131,6 +143,7 @@ def run_purchasing(args: argparse.Namespace) -> dict[str, Any]:
 def run_sales(args: argparse.Namespace) -> dict[str, Any]:
     messages = fetch_inbox_messages("sales", limit=max(args.limit * 5, 25))
     results = []
+    postgres_mode = operations_store.storage_engine == "postgresql"
     original_email_send_enabled = os.getenv("EMAIL_SEND_ENABLED")
     if not args.send_live or not args.confirm_live_dispatch:
         os.environ["EMAIL_SEND_ENABLED"] = "false"
@@ -139,20 +152,33 @@ def run_sales(args: argparse.Namespace) -> dict[str, Any]:
             if len(results) >= args.limit:
                 break
             message_id = str(message.get("message_id") or "")
-            if message_id and supplier_db.is_email_processed("sales", message_id):
+            if message_id and not postgres_mode and supplier_db.is_email_processed("sales", message_id):
                 continue
             sender = str(message.get("from") or "")
             body = str(message.get("body") or "").strip()
             if "@" not in sender or not body:
                 continue
-            rfq = db_service.create_rfq(
-                customer_name=sender.split("@", 1)[0].replace(".", " ").title(),
-                customer_email=sender,
-                raw_text=build_email_context(f"From: {sender}\nSubject: {message.get('subject', '')}\n\n{body}", message.get("attachments")),
-                thread_id=message_id or None,
-            )
-            pipeline_result = asyncio.run(orchestration_service.process_rfq_pipeline(rfq.id))
-            if message_id:
+            if postgres_mode and message_id:
+                with operations_store.transaction():
+                    if not operations_store.claim_inbound_message(message_id, "sales"):
+                        continue
+                    rfq = db_service.create_rfq(
+                        customer_name=sender.split("@", 1)[0].replace(".", " ").title(),
+                        customer_email=sender,
+                        raw_text=build_email_context(f"From: {sender}\nSubject: {message.get('subject', '')}\n\n{body}", message.get("attachments")),
+                        thread_id=message_id,
+                    )
+                    pipeline_result = asyncio.run(orchestration_service.process_rfq_pipeline(rfq.id))
+                    operations_store.mark_inbound_message_processed(message_id)
+            else:
+                rfq = db_service.create_rfq(
+                    customer_name=sender.split("@", 1)[0].replace(".", " ").title(),
+                    customer_email=sender,
+                    raw_text=build_email_context(f"From: {sender}\nSubject: {message.get('subject', '')}\n\n{body}", message.get("attachments")),
+                    thread_id=message_id or None,
+                )
+                pipeline_result = asyncio.run(orchestration_service.process_rfq_pipeline(rfq.id))
+            if message_id and not postgres_mode:
                 supplier_db.save_email("sales", message_id, sender, str(message.get("subject") or ""), body)
             results.append({"message_id": message_id, "sender": sender, "rfq_id": rfq.id, "pipeline": pipeline_result})
     finally:

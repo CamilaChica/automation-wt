@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 from agents.base_agent import BaseAgent, AgentMetadata, AgentResponse, EscalationRule
 from services.supplier_database import supplier_db
+from services.operations_store import operations_store
 from services.agents.prompts import SUPPLIER_COMMUNICATION_PROMPT
 
 
@@ -159,7 +160,11 @@ class SupplierDiscoveryAgent(BaseAgent):
         if not part_number:
             return []
 
-        records = supplier_db.find_supplier_offers(part_number, quantity_needed=quantity)
+        records = (
+            operations_store.get_supplier_offers(part_number, quantity)
+            if operations_store.storage_engine == "postgresql"
+            else supplier_db.find_supplier_offers(part_number, quantity_needed=quantity)
+        )
         cutoff = datetime.now(timezone.utc) - timedelta(days=self.OFFER_FRESHNESS_DAYS)
         fresh_records: List[Dict[str, Any]] = []
         self.last_stale_offers = []

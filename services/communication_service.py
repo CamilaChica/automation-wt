@@ -3,6 +3,7 @@
 import os
 import re
 import json
+import hashlib
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -173,7 +174,12 @@ class CommunicationService:
         condition_requested: str = "NE",
         certification_requested: str = "FAA 8130-3",
     ) -> List[Dict[str, Any]]:
-        recipients = [supplier.get("email") for supplier in supplier_db.list_suppliers() if supplier.get("email")]
+        suppliers = (
+            operations_store.list_suppliers()
+            if operations_store.storage_engine == "postgresql"
+            else supplier_db.list_suppliers()
+        )
+        recipients = [supplier.get("email") for supplier in suppliers if supplier.get("email")]
         configured = os.getenv("SUPPLIER_REQUEST_RECIPIENTS", "")
         recipients.extend(address.strip() for address in configured.split(",") if address.strip())
         recipients = [
@@ -186,7 +192,7 @@ class CommunicationService:
         results = []
         for recipient in recipients:
             supplier_contact = next(
-                (row.get("company_name") for row in supplier_db.list_suppliers() if row.get("email") == recipient),
+                (row.get("company_name") for row in suppliers if row.get("email") == recipient),
                 "Supplier Team",
             )
             template = compose_supplier_rfq(SupplierRFQData(
@@ -457,13 +463,33 @@ class CommunicationService:
             body = body_override.strip()
             if not body:
                 raise ValueError("Generated customer email body is empty. Email dispatch aborted.")
-        result = self._send("sales", recipient, subject, body, reply_to=reply_to)
-        self.schedule_customer_followup(
-            recipient=recipient,
-            customer_name=customer_name,
-            quote_id=quote_id,
-            reply_to=reply_to,
-        )
+        if operations_store.storage_engine == "postgresql" and quote_details:
+            with operations_store.transaction():
+                db_service.update_quote_status(quote_id, "Pending_Dispatch")
+                current_rfq = db_service.get_rfq(quote_details.rfq_id)
+                if current_rfq and current_rfq.status != "Quote_Dispatch_Pending":
+                    db_service.update_rfq_status(current_rfq.id, "Quote_Dispatch_Pending")
+                result = self._send(
+                    "sales", recipient, subject, body, reply_to=reply_to,
+                    entity_id=quote_id, deduplication_key=f"customer-quote:{quote_id}",
+                )
+                self.schedule_customer_followup(
+                    recipient=recipient,
+                    customer_name=customer_name,
+                    quote_id=quote_id,
+                    reply_to=reply_to,
+                )
+        else:
+            result = self._send(
+                "sales", recipient, subject, body, reply_to=reply_to,
+                entity_id=quote_id, deduplication_key=f"customer-quote:{quote_id}",
+            )
+            self.schedule_customer_followup(
+                recipient=recipient,
+                customer_name=customer_name,
+                quote_id=quote_id,
+                reply_to=reply_to,
+            )
         return result
 
     def send_customer_information_response(
@@ -531,7 +557,7 @@ class CommunicationService:
             part_number=part_number,
             quote_number=quote_id,
         ))
-        return supplier_db.schedule_communication_task(
+        return self._schedule_communication_task(
             task_key=f"customer-followup:{quote_id}",
             task_type="customer_followup",
             mailbox="sales",
@@ -563,7 +589,7 @@ class CommunicationService:
             quantity=quantity,
             quoted_price=unit_cost,
         ))
-        return supplier_db.schedule_communication_task(
+        return self._schedule_communication_task(
             task_key=f"supplier-discount:{source_email_id}:{round_number}",
             task_type="supplier_discount_request",
             mailbox="purchasing",
@@ -574,6 +600,16 @@ class CommunicationService:
             reply_to=reply_to,
         )
 
+    @staticmethod
+    def _schedule_communication_task(**task: Any) -> Dict[str, Any]:
+        if operations_store.storage_engine != "postgresql":
+            return supplier_db.schedule_communication_task(**task)
+        due_at = task["due_at"]
+        due = datetime.fromisoformat(due_at) if isinstance(due_at, str) else due_at
+        return operations_store.schedule_communication_task(
+            **{**task, "due_at": due}
+        )
+
     def process_due_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
         result = self._send(
             task["mailbox"],
@@ -581,10 +617,45 @@ class CommunicationService:
             task["subject"],
             task["body"],
             reply_to=task.get("reply_to"),
+            communication_task_id=task.get("id"),
         )
         return result
 
-    def _send(self, mailbox: str, recipient: str, subject: str, body: str, reply_to: Optional[str]) -> Dict[str, Any]:
+    def _send(
+        self,
+        mailbox: str,
+        recipient: str,
+        subject: str,
+        body: str,
+        reply_to: Optional[str],
+        communication_task_id: str | None = None,
+        entity_id: str | None = None,
+        deduplication_key: str | None = None,
+    ) -> Dict[str, Any]:
+        if operations_store.storage_engine == "postgresql":
+            dedupe_material = "\0".join((mailbox, recipient.lower(), subject, body, reply_to or "", communication_task_id or "", entity_id or ""))
+            deduplication_key = deduplication_key or hashlib.sha256(dedupe_material.encode("utf-8")).hexdigest()
+            if not self._is_valid_email(recipient):
+                raise ValueError("Recipient email is invalid. Email dispatch aborted.")
+            queued = operations_store.enqueue_outbox_message(
+                deduplication_key=deduplication_key,
+                mailbox=mailbox,
+                recipient=recipient,
+                subject=subject,
+                body=body,
+                reply_to=reply_to,
+                communication_task_id=communication_task_id,
+                entity_id=entity_id,
+            )
+            return {
+                "mailbox": mailbox,
+                "recipient": recipient,
+                "subject": subject,
+                "reply_to": reply_to,
+                "transmission_status": queued["status"],
+                "communication_id": queued["id"],
+                "outbox_id": queued["id"],
+            }
         result = {
             "mailbox": mailbox,
             "recipient": recipient,
@@ -618,6 +689,74 @@ class CommunicationService:
         )
         result["communication_id"] = communication_id
         return result
+
+    def dispatch_outbox_once(self, *, limit: int = 25) -> dict[str, int]:
+        if operations_store.storage_engine != "postgresql":
+            return {"sent": 0, "failed": 0}
+        operations_store.recover_stale_outbox_messages()
+        sent = 0
+        failed = 0
+        for message in operations_store.claim_outbox_messages(limit=limit):
+            payload = message.get("payload") or {}
+            body = payload.get("body", "") if isinstance(payload, dict) else str(payload)
+            try:
+                send_message(
+                    message["mailbox"],
+                    message["recipient"],
+                    message["subject"],
+                    body,
+                    reply_to=message.get("reply_to"),
+                )
+            except Exception as exc:
+                response = getattr(exc, "response", None)
+                status_code = getattr(response, "status_code", None)
+                retryable = bool(status_code and 400 <= status_code < 500 and status_code not in {408, 409})
+                delivery_state = operations_store.fail_outbox_message(
+                    message["id"], f"{type(exc).__name__}: {exc}", retryable=retryable
+                )
+                if delivery_state == "FAILED" and message.get("entity_id"):
+                    quote = db_service.get_quote(str(message["entity_id"]))
+                    if quote and quote.status == "Pending_Dispatch":
+                        db_service.update_quote_status(quote.id, "Dispatch_Failed")
+                        operations_store.update_customer_quote_status(quote.id, "Dispatch_Failed")
+                        rfq = db_service.get_rfq(quote.rfq_id)
+                        if rfq and rfq.status == "Quote_Dispatch_Pending":
+                            db_service.update_rfq_status(rfq.id, "Quote_Dispatch_Failed")
+                        operations_store.cancel_communication_task(f"customer-followup:{quote.id}")
+                failed += 1
+                continue
+
+            try:
+                with operations_store.transaction():
+                    operations_store.record_communication(
+                        entity_type="email",
+                        entity_id=message["id"],
+                        recipient=message["recipient"],
+                        sender=MAILBOXES[message["mailbox"]].address,
+                        channel="email",
+                        subject=message["subject"],
+                        message=body,
+                        message_type="outbound",
+                        status="SENT",
+                    )
+                    operations_store.mark_outbox_sent(message["id"])
+                    if message.get("entity_id"):
+                        quote = db_service.get_quote(str(message["entity_id"]))
+                        if quote and quote.status == "Pending_Dispatch":
+                            db_service.update_quote_status(quote.id, "Sent")
+                            operations_store.update_customer_quote_status(quote.id, "Sent")
+                            rfq = db_service.get_rfq(quote.rfq_id)
+                            if rfq and rfq.status == "Quote_Dispatch_Pending":
+                                db_service.update_rfq_status(rfq.id, "Quote_Sent")
+                sent += 1
+            except Exception as exc:
+                operations_store.fail_outbox_message(
+                    message["id"],
+                    f"Delivery accepted but database finalization failed: {type(exc).__name__}: {exc}",
+                    retryable=False,
+                )
+                failed += 1
+        return {"sent": sent, "failed": failed}
 
     def _supplier_quote_request(self, part_number: str, quantity: int) -> str:
         fields = "\n".join(f"- {field}" for field in SUPPLIER_QUOTE_FIELDS)

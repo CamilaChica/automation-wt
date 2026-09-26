@@ -16,6 +16,7 @@ from services.document_parser import extract_attachment_text
 from services.email_intelligence import (
     EmailIntelligenceExtraction,
     ExtractedEmailItem,
+    _has_explicit_non_usd_currency,
     extract_email_intelligence,
     is_valid_extracted_part_number,
 )
@@ -382,6 +383,25 @@ def test_non_usd_quotes_are_written_to_operator_queue(monkeypatch):
     save_offer.assert_not_called()
     enqueue.assert_called_once()
     assert "non-USD currency: EUR" in enqueue.call_args.kwargs["hold_flags"]
+
+
+def test_explicit_non_usd_currency_skips_escalation_model(monkeypatch):
+    monkeypatch.setenv("LLM_LIVE_ENABLED", "true")
+    source = _body("non_usd_quote.eml")
+    router, _provider = _router(_extraction_payload(source, confidence=0.2, currency="EUR"))
+    with patch("services.email_intelligence.operations_store.enqueue_operator_review", return_value="REV-EUR"):
+        result = extract_email_intelligence(source, task="supplier_quote_extraction", router=router)
+
+    assert result.pending_human_review is True
+    assert result.escalation_reason == "non_usd_currency"
+    assert result.telemetry["model_calls"] == ["gpt-4o-mini"]
+    assert result.telemetry["model_escalation_reason"] is None
+
+
+def test_currency_detector_ignores_price_units():
+    assert _has_explicit_non_usd_currency("Currency: EUR\nUnit price: EUR 115.00") is True
+    assert _has_explicit_non_usd_currency("Unit price: $115.00 per item") is False
+    assert _has_explicit_non_usd_currency("Unit price: $115.00 USD") is False
 
 
 def test_calibration_metrics_and_threshold_report(monkeypatch):

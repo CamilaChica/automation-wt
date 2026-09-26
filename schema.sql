@@ -24,6 +24,77 @@ CREATE TABLE IF NOT EXISTS suppliers (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS supplier_parts (
+    id TEXT PRIMARY KEY,
+    supplier_id TEXT NOT NULL REFERENCES suppliers(id),
+    part_number TEXT NOT NULL,
+    condition_code TEXT,
+    description TEXT,
+    quantity_available INTEGER,
+    unit_cost REAL,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    certificate_type TEXT,
+    lead_time_days INTEGER,
+    availability_location TEXT,
+    warranty_terms TEXT,
+    trace_documents TEXT,
+    source_email_id TEXT UNIQUE,
+    confidence REAL,
+    approval_status TEXT NOT NULL DEFAULT 'Pending',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS inbound_emails (
+    id TEXT PRIMARY KEY,
+    mailbox TEXT NOT NULL,
+    message_id TEXT NOT NULL UNIQUE,
+    sender TEXT,
+    subject TEXT,
+    body TEXT NOT NULL,
+    received_at TEXT NOT NULL,
+    processing_status TEXT NOT NULL DEFAULT 'received',
+    extraction_error TEXT
+);
+
+CREATE TABLE IF NOT EXISTS communication_tasks (
+    id TEXT PRIMARY KEY,
+    task_key TEXT NOT NULL UNIQUE,
+    task_type TEXT NOT NULL DEFAULT 'email',
+    mailbox TEXT NOT NULL DEFAULT 'sales',
+    recipient TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    reply_to TEXT,
+    due_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 5,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    sent_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS outbox_messages (
+    id TEXT PRIMARY KEY,
+    deduplication_key TEXT NOT NULL UNIQUE,
+    entity_id TEXT,
+    mailbox TEXT NOT NULL,
+    recipient TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    reply_to TEXT,
+    communication_task_id TEXT,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    max_retries INTEGER NOT NULL DEFAULT 5,
+    error_message TEXT,
+    available_at TEXT NOT NULL,
+    sending_started_at TEXT,
+    created_at TEXT NOT NULL,
+    sent_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS parts (
     id TEXT PRIMARY KEY,
     part_number TEXT NOT NULL UNIQUE,
@@ -196,6 +267,13 @@ CREATE TABLE IF NOT EXISTS llm_telemetry (
 CREATE TABLE IF NOT EXISTS operations_state (
     state_key TEXT PRIMARY KEY,
     payload TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS inbound_message_idempotency (
+    message_id TEXT PRIMARY KEY,
+    mailbox TEXT NOT NULL,
+    processed_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'processed'
 );
 
 CREATE TABLE IF NOT EXISTS carrier_webhook_events (

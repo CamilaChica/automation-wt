@@ -4,12 +4,12 @@ import { seedCustomerSession } from '../fixtures/session';
 
 test('submits a customer RFQ through the supported external portal', async ({ page }) => {
   await page.route('**/api/catalog/search**', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
-  await page.route('**/api/rfqs/intake', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ rfq_id: 'RFQ-EXT-001', status: 'Pending_Approval', message: 'RFQ received' }) }));
+  await page.route('**/api/rfqs/intake', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ rfq_id: 'RFQ-EXT-001', status: 'Quote_Dispatch_Pending', message: 'RFQ RFQ-EXT-001 was processed. The quote email is queued for delivery to buyer@example.com.' }) }));
   await seedCustomerSession(page);
   const portal = new ExternalRFQPage(page);
   await portal.open();
   await portal.submitRfq();
-  await expect(page.getByText(/RFQ-EXT-001 received/)).toBeVisible();
+  await expect(page.getByText(/RFQ RFQ-EXT-001 was processed\. The quote email is queued for delivery/)).toBeVisible();
 });
 
 test('blocks malformed customer input before submission', async ({ page }) => {

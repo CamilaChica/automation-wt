@@ -10,11 +10,11 @@ export class ExternalRFQPage {
   }
 
   quoteForm() {
-    return this.page.getByRole('form', { name: 'Request a quote form' });
+    return this.page.getByRole('form', { name: 'Request a quote' });
   }
 
   purchaseOrderForm() {
-    return this.page.getByRole('form', { name: 'Purchase order form' });
+    return this.page.getByRole('form', { name: 'Send a purchasing order' });
   }
 
   async submitRfq() {

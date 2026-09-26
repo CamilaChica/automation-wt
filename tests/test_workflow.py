@@ -16,7 +16,7 @@ class TestRFQQuoteWorkflow(unittest.TestCase):
     def test_scenario_a_clean_flow(self):
         """
         Scenario A: Request a part that exists in internal inventory with correct traces.
-        Expects a straight-through automated run resulting in Quote_Sent.
+        Expects a quote to be prepared and delivery state to remain pending in dry-run mode.
         """
         async def run_scenario():
             # Submit raw RFQ text
@@ -34,13 +34,13 @@ class TestRFQQuoteWorkflow(unittest.TestCase):
             pipeline_res = await orchestration_service.process_rfq_pipeline(rfq.id)
             
             # Assertions
-            self.assertEqual(pipeline_res["status"], "Quote_Sent")
+            self.assertEqual(pipeline_res["status"], "Quote_Dispatch_Pending")
             quote_id = pipeline_res["quote_id"]
             
             # Verify quote sums (Unit cost = 1000, 20% margin -> Retail = 1250 each. Qty = 2 -> 2500 total)
             quote = db_service.get_quote(quote_id)
             self.assertEqual(quote.subtotal, 2500.0)
-            self.assertEqual(quote.status, "Sent")
+            self.assertEqual(quote.status, "Pending_Dispatch")
             
             # Verify logs contain appropriate agent transitions
             logs = db_service.get_audit_logs(rfq.id)
@@ -51,20 +51,15 @@ class TestRFQQuoteWorkflow(unittest.TestCase):
             self.assertIn("ComplianceAgent", agents_ran)
             self.assertIn("PricingAgent", agents_ran)
             
-            # 3. Legacy approval is idempotent after autonomous dispatch.
-            approval_res = await orchestration_service.approve_and_send_quote(quote_id, "John Doe Operator")
-            self.assertEqual(approval_res["status"], "Quote_Sent")
-            self.assertIn("QTE-", approval_res["quote_id"])
-            
-            # State transitions complete
-            self.assertEqual(db_service.get_rfq(rfq.id).status, "Quote_Sent")
+            self.assertEqual(pipeline_res["transmission_status"], "DRY_RUN")
+            self.assertEqual(db_service.get_rfq(rfq.id).status, "Quote_Dispatch_Pending")
             
         asyncio.run(run_scenario())
 
     def test_scenario_b_sourcing_fallback(self):
         """
         Scenario B: Request quantities larger than available inventory.
-        Expects InventoryAgent stockout escalation -> SupplierDiscoveryAgent activation -> Pricing -> Quote_Sent.
+        Expects inventory stockout -> supplier sourcing -> pricing -> queued quote delivery in dry-run mode.
         """
         async def run_scenario():
             # Internal stock has 2 items of 060-1234-00. Let's request 5 items.
@@ -74,7 +69,7 @@ class TestRFQQuoteWorkflow(unittest.TestCase):
             pipeline_res = await orchestration_service.process_rfq_pipeline(rfq.id)
             
             # Sourcing lookup succeeds and maps supplier spares
-            self.assertEqual(pipeline_res["status"], "Quote_Sent")
+            self.assertEqual(pipeline_res["status"], "Quote_Dispatch_Pending")
             quote_id = pipeline_res["quote_id"]
             quote_items = db_service.get_quote_items(quote_id)
             

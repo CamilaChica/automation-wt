@@ -14,6 +14,59 @@ from repositories.review_telemetry_repository import PostgresReviewTelemetryRepo
 
 DEFAULT_PATH = Path(__file__).resolve().parent.parent / "data" / "operations.db"
 SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema.sql"
+POSTGRES_STORE_METHODS = (
+    "load_operations_state",
+    "save_operations_state",
+    "clear_operations_state",
+    "claim_inbound_message",
+    "mark_inbound_message_processed",
+    "save_inbound_email",
+    "release_inbound_message",
+    "get_operational_record",
+    "lock_operational_record",
+    "list_operational_records",
+    "save_operational_record",
+    "delete_operational_record",
+    "reserve_inventory",
+    "check_operational_schema",
+    "transaction",
+    "record_communication",
+    "upsert_customer",
+    "insert_rfq",
+    "update_rfq_status",
+    "insert_customer_quote",
+    "insert_customer_quote_item",
+    "update_customer_quote_status",
+    "record_automation_event",
+    "update_automation_event",
+    "claim_carrier_webhook_event",
+    "list_automation_events",
+    "get_automation_event",
+    "enqueue_operator_review",
+    "get_operator_review",
+    "list_operator_reviews",
+    "link_operator_review_entity",
+    "add_operator_review_flags",
+    "claim_operator_review_decision",
+    "complete_operator_review_decision",
+    "record_llm_telemetry",
+    "list_llm_telemetry",
+    "enqueue_outbox_message",
+    "claim_outbox_messages",
+    "mark_outbox_sent",
+    "fail_outbox_message",
+    "recover_stale_outbox_messages",
+    "upsert_supplier",
+    "list_suppliers",
+    "save_supplier_offer",
+    "get_supplier_offers",
+    "search_supplier_offers",
+    "schedule_communication_task",
+    "list_due_communication_tasks",
+    "update_communication_task",
+    "retry_communication_task",
+    "cancel_communication_task",
+)
 
 
 class OperationsStore:
@@ -27,6 +80,14 @@ class OperationsStore:
         if production:
             self.path = None
             self._postgres = PostgresReviewTelemetryRepository()
+            missing_methods = [
+                method for method in POSTGRES_STORE_METHODS
+                if not callable(getattr(self._postgres, method, None))
+            ]
+            if missing_methods:
+                raise RuntimeError(
+                    "PostgreSQL operational adapter is incomplete: " + ", ".join(missing_methods)
+                )
             return
         self._postgres = None
         configured = path or os.getenv("OPERATIONS_DB_PATH")
@@ -65,9 +126,9 @@ class OperationsStore:
     @contextmanager
     def transaction(self):
         if self._postgres:
-            raise RuntimeError(
-                "This operation is not wired to the production PostgreSQL repository; refusing SQLite fallback."
-            )
+            with self._postgres.transaction() as connection:
+                yield connection
+            return
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -114,6 +175,174 @@ class OperationsStore:
         finally:
             conn.close()
 
+    def claim_inbound_message(self, message_id: str, mailbox: str) -> bool:
+        if self._postgres:
+            return self._postgres.claim_inbound_message(message_id, mailbox)
+        now = datetime.now(timezone.utc).isoformat()
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO inbound_message_idempotency (message_id, mailbox, processed_at, status) "
+                "VALUES (?, ?, ?, 'processing')",
+                (message_id, mailbox, now),
+            )
+            conn.commit()
+            return cursor.rowcount == 1
+        finally:
+            conn.close()
+
+    def mark_inbound_message_processed(self, message_id: str) -> None:
+        if self._postgres:
+            self._postgres.mark_inbound_message_processed(message_id)
+            return
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE inbound_message_idempotency SET status = 'processed', processed_at = ? WHERE message_id = ?",
+                (datetime.now(timezone.utc).isoformat(), message_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def save_inbound_email(self, *, mailbox: str, message_id: str, sender: str, subject: str, body: str, processing_status: str = "processed") -> str:
+        if self._postgres:
+            return self._postgres.save_inbound_email(
+                mailbox=mailbox, message_id=message_id, sender=sender, subject=subject,
+                body=body, processing_status=processing_status,
+            )
+        raise RuntimeError("Shared inbound email persistence requires PostgreSQL mode.")
+
+    def release_inbound_message(self, message_id: str) -> None:
+        if self._postgres:
+            self._postgres.release_inbound_message(message_id)
+            return
+        conn = self._connect()
+        try:
+            conn.execute(
+                "DELETE FROM inbound_message_idempotency WHERE message_id = ? AND status = 'processing'",
+                (message_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_operational_record(self, domain: str, record_id: str) -> dict[str, Any] | None:
+        if not self._postgres:
+            raise RuntimeError("Per-record shared persistence is only available in PostgreSQL mode.")
+        return self._postgres.get_operational_record(domain, record_id)
+
+    def lock_operational_record(self, domain: str, record_id: str) -> dict[str, Any] | None:
+        if not self._postgres:
+            raise RuntimeError("Operational row locking requires PostgreSQL mode.")
+        return self._postgres.lock_operational_record(domain, record_id)
+
+    def list_operational_records(self, domain: str) -> dict[str, dict[str, Any]]:
+        if not self._postgres:
+            raise RuntimeError("Per-record shared persistence is only available in PostgreSQL mode.")
+        return self._postgres.list_operational_records(domain)
+
+    def save_operational_record(self, domain: str, record_id: str, payload: dict[str, Any]) -> None:
+        if not self._postgres:
+            raise RuntimeError("Per-record shared persistence is only available in PostgreSQL mode.")
+        self._postgres.save_operational_record(domain, record_id, payload)
+
+    def delete_operational_record(self, domain: str, record_id: str) -> None:
+        if not self._postgres:
+            raise RuntimeError("Per-record shared persistence is only available in PostgreSQL mode.")
+        self._postgres.delete_operational_record(domain, record_id)
+
+    def reserve_inventory(self, part_number: str, quantity: int) -> bool:
+        if not self._postgres:
+            raise RuntimeError("Atomic shared inventory reservation requires PostgreSQL mode.")
+        return self._postgres.reserve_inventory(part_number, quantity)
+
+    def check_operational_schema(self) -> dict[str, Any]:
+        if not self._postgres:
+            return {"ready": False, "missing_tables": ["postgresql operational schema"]}
+        return self._postgres.check_operational_schema()
+
+    def enqueue_outbox_message(self, **message: Any) -> dict[str, Any]:
+        if not self._postgres:
+            raise RuntimeError("Transactional outbox requires PostgreSQL mode.")
+        return self._postgres.enqueue_outbox_message(**message)
+
+    def claim_outbox_messages(self, *, limit: int = 25) -> list[dict[str, Any]]:
+        if not self._postgres:
+            return []
+        return self._postgres.claim_outbox_messages(limit=limit)
+
+    def mark_outbox_sent(self, message_id: str) -> None:
+        if not self._postgres:
+            raise RuntimeError("Transactional outbox requires PostgreSQL mode.")
+        self._postgres.mark_outbox_sent(message_id)
+
+    def fail_outbox_message(self, message_id: str, error: str, *, retryable: bool = False) -> str:
+        if not self._postgres:
+            raise RuntimeError("Transactional outbox requires PostgreSQL mode.")
+        return self._postgres.fail_outbox_message(message_id, error, retryable=retryable)
+
+    def recover_stale_outbox_messages(self, *, sending_timeout_seconds: int = 300) -> int:
+        if not self._postgres:
+            return 0
+        return self._postgres.recover_stale_outbox_messages(sending_timeout_seconds=sending_timeout_seconds)
+
+    def upsert_supplier(self, supplier_name: str, supplier_email: str | None = None, phone: str | None = None, approval_status: str = "Pending") -> str:
+        if not self._postgres:
+            raise RuntimeError("Shared supplier registry requires PostgreSQL mode.")
+        return self._postgres.upsert_supplier(supplier_name, supplier_email, phone, approval_status)
+
+    def list_suppliers(self) -> list[dict[str, Any]]:
+        if not self._postgres:
+            raise RuntimeError("Shared supplier registry requires PostgreSQL mode.")
+        return self._postgres.list_suppliers()
+
+    def save_supplier_offer(self, **offer: Any) -> dict[str, Any]:
+        if not self._postgres:
+            raise RuntimeError("Shared supplier offers require PostgreSQL mode.")
+        return self._postgres.save_supplier_offer(**offer)
+
+    def get_supplier_offers(self, part_number: str, quantity_needed: int = 1) -> list[dict[str, Any]]:
+        if not self._postgres:
+            raise RuntimeError("Shared supplier offers require PostgreSQL mode.")
+        return self._postgres.get_supplier_offers(part_number, quantity_needed)
+
+    def search_supplier_offers(self, query: str, condition: str | None = None) -> list[dict[str, Any]]:
+        if not self._postgres:
+            raise RuntimeError("Shared supplier offers require PostgreSQL mode.")
+        return self._postgres.search_supplier_offers(query, condition)
+
+    def schedule_communication_task(self, **task: Any) -> dict[str, Any]:
+        if not self._postgres:
+            raise RuntimeError("Shared communication tasks require PostgreSQL mode.")
+        return self._postgres.schedule_communication_task(**task)
+
+    def list_due_communication_tasks(self, now: datetime | None = None) -> list[dict[str, Any]]:
+        if not self._postgres:
+            raise RuntimeError("Shared communication tasks require PostgreSQL mode.")
+        return self._postgres.list_due_communication_tasks(now)
+
+    def update_communication_task(self, task_id: str, *, status: str, error: str | None = None) -> None:
+        if not self._postgres:
+            raise RuntimeError("Shared communication tasks require PostgreSQL mode.")
+        self._postgres.update_communication_task(task_id, status=status, error=error)
+
+    def retry_communication_task(self, task_id: str, error: str) -> None:
+        if not self._postgres:
+            raise RuntimeError("Shared communication tasks require PostgreSQL mode.")
+        self._postgres.retry_communication_task(task_id, error)
+
+    def cancel_communication_task(self, task_key: str) -> None:
+        if self._postgres:
+            self._postgres.cancel_communication_task(task_key)
+            return
+        conn = self._connect()
+        try:
+            conn.execute("UPDATE communication_tasks SET status = 'cancelled' WHERE task_key = ? AND status = 'pending'", (task_key,))
+            conn.commit()
+        finally:
+            conn.close()
+
     def record_communication(
         self,
         *,
@@ -128,6 +357,19 @@ class OperationsStore:
         status: str,
         response_received: str | None = None,
     ) -> str:
+        if self._postgres:
+            return self._postgres.record_communication(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                recipient=recipient,
+                sender=sender,
+                channel=channel,
+                subject=subject,
+                message=message,
+                message_type=message_type,
+                status=status,
+                response_received=response_received,
+            )
         communication_id = f"COM-{uuid.uuid4().hex[:12].upper()}"
         now = datetime.now(timezone.utc).isoformat()
         conn = self._connect()
@@ -159,6 +401,9 @@ class OperationsStore:
         return communication_id
 
     def upsert_customer(self, customer_id: str, company_name: str, contact_name: str, email: str) -> None:
+        if self._postgres:
+            self._postgres.upsert_customer(customer_id, company_name, contact_name, email)
+            return
         now = datetime.now(timezone.utc).isoformat()
         conn = self._connect()
         try:
@@ -173,6 +418,21 @@ class OperationsStore:
             conn.close()
 
     def insert_rfq(self, *, rfq_id: str, customer_id: str, part_number: str | None, description: str, quantity: int, condition: str | None, certification: str | None, destination: str | None, status: str, raw_text: str, thread_id: str | None) -> None:
+        if self._postgres:
+            self._postgres.insert_rfq(
+                rfq_id=rfq_id,
+                customer_id=customer_id,
+                part_number=part_number,
+                description=description,
+                quantity=quantity,
+                condition=condition,
+                certification=certification,
+                destination=destination,
+                status=status,
+                raw_text=raw_text,
+                thread_id=thread_id,
+            )
+            return
         now = datetime.now(timezone.utc).isoformat()
         conn = self._connect()
         try:
@@ -187,6 +447,9 @@ class OperationsStore:
             conn.close()
 
     def update_rfq_status(self, rfq_id: str, status: str) -> None:
+        if self._postgres:
+            self._postgres.update_rfq_status(rfq_id, status)
+            return
         now = datetime.now(timezone.utc).isoformat()
         conn = self._connect()
         try:
@@ -199,6 +462,20 @@ class OperationsStore:
             conn.close()
 
     def insert_customer_quote(self, *, quote_id: str, rfq_id: str, unit_price: float, quantity: int, total_price: float, lead_time: int | None, condition: str | None, certification: str | None, valid_until: str | None, status: str) -> None:
+        if self._postgres:
+            self._postgres.insert_customer_quote(
+                quote_id=quote_id,
+                rfq_id=rfq_id,
+                unit_price=unit_price,
+                quantity=quantity,
+                total_price=total_price,
+                lead_time=lead_time,
+                condition=condition,
+                certification=certification,
+                valid_until=valid_until,
+                status=status,
+            )
+            return
         now = datetime.now(timezone.utc).isoformat()
         conn = self._connect()
         try:
@@ -213,6 +490,21 @@ class OperationsStore:
             conn.close()
 
     def insert_customer_quote_item(self, *, item_id: str, quote_id: str, rfq_item_id: str, part_number: str, description: str, quantity: int, condition: str | None, certification: str, unit_price: float, lead_time: int | None, attachments: str = "") -> None:
+        if self._postgres:
+            self._postgres.insert_customer_quote_item(
+                item_id=item_id,
+                quote_id=quote_id,
+                rfq_item_id=rfq_item_id,
+                part_number=part_number,
+                description=description,
+                quantity=quantity,
+                condition=condition,
+                certification=certification,
+                unit_price=unit_price,
+                lead_time=lead_time,
+                attachments=attachments,
+            )
+            return
         now = datetime.now(timezone.utc).isoformat()
         conn = self._connect()
         try:
@@ -221,6 +513,20 @@ class OperationsStore:
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET description=excluded.description, quantity=excluded.quantity, condition=excluded.condition, certification=excluded.certification, unit_price=excluded.unit_price, lead_time=excluded.lead_time, attachments=excluded.attachments, updated_at=excluded.updated_at",
                 (item_id, quote_id, rfq_item_id, part_number, description, quantity, condition, certification, unit_price, lead_time, attachments, now, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def update_customer_quote_status(self, quote_id: str, status: str) -> None:
+        if self._postgres:
+            self._postgres.update_customer_quote_status(quote_id, status)
+            return
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE customer_quotes SET status = ?, updated_at = ? WHERE id = ?",
+                (status, datetime.now(timezone.utc).isoformat(), quote_id),
             )
             conn.commit()
         finally:

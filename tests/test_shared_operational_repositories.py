@@ -17,9 +17,13 @@ from models.operational_models import (
     RFQRecord,
     SupplierOfferRecord,
     WorkflowStateRecord,
+    CustomerRecord,
+    CustomerQuoteRecord,
+    CustomerQuoteItemRecord,
 )
 from models.db_models import AgentAuditLog, RFQ, Shipment, ShipmentEvent
 from services.persistence_status import persistence_status
+from models.db_models import RFQ
 
 
 def test_shared_operational_models_cover_all_required_domains():
@@ -31,11 +35,14 @@ def test_shared_operational_models_cover_all_required_domains():
         AgentHandoffRecord.__tablename__, OperatorReviewRecord.__tablename__,
         LLMTelemetryRecord.__tablename__, AutomationEventRecord.__tablename__,
         CarrierWebhookEventRecord.__tablename__, OperationsStateRecord.__tablename__,
+        CustomerRecord.__tablename__, CustomerQuoteRecord.__tablename__,
+        CustomerQuoteItemRecord.__tablename__,
     } == {
         "rfqs", "rfq_items", "supplier_offers", "quotes", "quote_items", "communications",
         "audit_events", "workflow_state", "communication_tasks", "inbound_message_idempotency",
         "agent_handoffs", "operator_review_queue", "llm_telemetry", "automation_events",
-        "carrier_webhook_events", "operations_state",
+        "carrier_webhook_events", "operations_state", "customers", "customer_quotes",
+        "customer_quote_items",
     }
 
 
@@ -103,6 +110,31 @@ def test_review_telemetry_postgres_does_not_claim_full_production_readiness(monk
     status = persistence_status(postgres_healthy=True)
 
     assert status["storage_engine"] == "postgresql"
-    assert status["operational_store"] == "postgresql_review_telemetry_only"
+    assert status["operational_store"] == "postgresql_store_adapter_runtime_incomplete"
+    assert status["postgres_store_adapter_complete"] is True
     assert status["postgres_primary_migration_required"] is True
     assert status["full_operational_persistence_ready"] is False
+
+
+def test_production_db_service_reads_shared_rfq_records(monkeypatch):
+    from services.db_service import MockDatabaseService
+
+    rfq = RFQ(
+        id="RFQ-SHARED", customer_name="Buyer", customer_email="buyer@example.test",
+        raw_text="Need part", status="Intake",
+    )
+    store = type("SharedStoreStub", (), {
+        "storage_engine": "postgresql",
+        "list_operational_records": lambda self, domain: {rfq.id: rfq.model_dump(mode="json")},
+    })()
+    monkeypatch.setattr("services.db_service.operations_store", store)
+    service = MockDatabaseService.__new__(MockDatabaseService)
+    service._production = True
+
+    assert [item.id for item in service.list_rfqs()] == ["RFQ-SHARED"]
+    try:
+        service._persist_state()
+    except RuntimeError as exc:
+        assert "Whole-state snapshots are disabled" in str(exc)
+    else:
+        raise AssertionError("Production must not save whole-state snapshots")

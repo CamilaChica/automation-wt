@@ -130,6 +130,19 @@ def _has_ambiguous_text(email_text: str) -> bool:
     return any(len(quantities) > 1 for quantities in quantities_by_part.values())
 
 
+def _has_explicit_non_usd_currency(email_text: str) -> bool:
+    patterns = (
+        r"(?im)^\s*currency\s*:\s*([A-Z]{3})\s*$",
+        r"(?im)^\s*unit\s+price\s*:\s*([A-Z]{3})(?=\s*[$]?\s*\d)",
+        r"(?im)^\s*unit\s+price\s*:\s*[$]?\s*[\d,]+(?:\.\d+)?\s*([A-Z]{3})\s*$",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, email_text):
+            if match.group(1).upper() != "USD":
+                return True
+    return False
+
+
 def _normalize_source_text(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip().casefold()
 
@@ -222,6 +235,10 @@ def extract_email_intelligence(
     contract = EXTRACTION_CONTRACTS.get(task)
     if contract is None:
         raise ValueError(f"No versioned extraction contract is registered for task '{task}'.")
+    deterministic_currency_hold = (
+        task == "supplier_quote_extraction"
+        and _has_explicit_non_usd_currency(context)
+    )
 
     request = LLMRequest(
         task=task,
@@ -291,7 +308,8 @@ def extract_email_intelligence(
     if result.confidence_score < EXTRACTION_CONFIDENCE_THRESHOLD:
         escalation_reason = escalation_reason or "low_extraction_confidence"
 
-    if escalation_reason:
+    model_escalation_reason = escalation_reason if escalation_reason and not deterministic_currency_hold else None
+    if escalation_reason and not deterministic_currency_hold:
         escalation_model = os.getenv("EMAIL_EXTRACTION_ESCALATION_MODEL", contract.escalation_models[0])
         if escalation_model not in contract.escalation_models or not contract.can_escalate:
             raise ValueError(f"Escalation model '{escalation_model}' is not allowed by {contract.contract_id}.")
@@ -357,7 +375,11 @@ def extract_email_intelligence(
         and item.currency.value
         and item.currency.value.upper() != "USD"
     ]
-    review_reason = escalation_reason or ("non_usd_currency" if non_usd_items else "")
+    review_reason = (
+        "non_usd_currency"
+        if deterministic_currency_hold or non_usd_items
+        else escalation_reason
+    )
     result.needs_escalation = bool(review_reason)
     result.escalation_reason = review_reason or None
     if review_reason:
@@ -375,7 +397,7 @@ def extract_email_intelligence(
         "token_usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
         "pending_human_review": bool(review_reason),
         "escalation_reason": review_reason or None,
-        "model_escalation_reason": escalation_reason or None,
+        "model_escalation_reason": model_escalation_reason,
     }
     if review_reason:
         normalized_source = _normalize_source_text(context)

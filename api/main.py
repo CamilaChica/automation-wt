@@ -36,7 +36,7 @@ from services.twilio_service import twilio_service
 from services.freight_service import FreightRequest, freight_rate_service
 from services.operations_store import operations_store
 from services.persistence_status import persistence_status
-from services.async_database import create_engine_from_environment, search_supplier_inventory, session_scope
+from services.async_database import create_engine_from_environment, preflight_database, search_supplier_inventory, session_scope
 from services.export_control_service import export_control_service
 from services.attachment_service import AttachmentService
 from services.swarm_runtime import swarm_runtime
@@ -444,8 +444,7 @@ async def ready():
         engine = None
         try:
             engine = create_engine_from_environment()
-            async with engine.connect() as connection:
-                await connection.exec_driver_sql("SELECT 1")
+            await preflight_database(engine)
             postgres_healthy = True
         except Exception as exc:
             if production:
@@ -723,7 +722,15 @@ async def submit_rfq(request: IntakeRequest, user: dict = Depends(current_user))
     status = pipeline_res.get("status", rfq.status)
     error = pipeline_res.get("error", "")
     
-    msg = f"RFQ received and processed successfully. Quote response sent to {customer_email}."
+    if status == "Quote_Sent":
+        msg = f"RFQ {rfq.id} was processed and the quote email was sent to {customer_email}."
+    elif status == "Quote_Dispatch_Pending":
+        if pipeline_res.get("transmission_status") == "DRY_RUN":
+            msg = f"RFQ {rfq.id} was processed and the quote is prepared. Email was not sent in this environment."
+        else:
+            msg = f"RFQ {rfq.id} was processed. The quote email is queued for delivery to {customer_email}."
+    else:
+        msg = f"RFQ {rfq.id} was received and processed with status {status}."
     if "Failed" in status or "Halted" in status or "Warning" in status:
         msg = f"RFQ pipeline halted or failed: {error}"
         
@@ -1018,7 +1025,11 @@ async def submit_purchase_order(request: PurchaseOrderRequest, user: dict = Depe
     internal_items = []
     supplier_groups: Dict[str, Dict[str, Any]] = {}
     for item in quote_items:
-        offers = supplier_db.find_supplier_offers(item.part_number, quantity_needed=item.quantity)
+        offers = (
+            operations_store.get_supplier_offers(item.part_number, item.quantity)
+            if operations_store.storage_engine == "postgresql"
+            else supplier_db.find_supplier_offers(item.part_number, quantity_needed=item.quantity)
+        )
         selected = next(
             (offer for offer in offers if abs(float(offer.get("unit_cost") or 0) - float(item.unit_cost or 0)) < 0.01),
             offers[0] if offers else None,
@@ -1269,7 +1280,12 @@ async def search_catalog(query: str = "", condition: Optional[str] = None, _user
                 ))
         except Exception:
             logger.exception("postgres_catalog_search_failed")
-    for offer in supplier_db.search_supplier_offers(query, normalized_condition or None):
+    supplier_offers = (
+        operations_store.search_supplier_offers(query, normalized_condition or None)
+        if operations_store.storage_engine == "postgresql"
+        else supplier_db.search_supplier_offers(query, normalized_condition or None)
+    )
+    for offer in supplier_offers:
         key = (str(offer.get("part_number", "")).upper(), str(offer.get("condition_code") or "NE").upper())
         if key in seen_parts:
             continue
@@ -1294,7 +1310,11 @@ async def list_suppliers(_user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE
     """
     Returns the full supplier directory with contact information.
     """
-    rows = supplier_db.list_suppliers()
+    rows = (
+        operations_store.list_suppliers()
+        if operations_store.storage_engine == "postgresql"
+        else supplier_db.list_suppliers()
+    )
     return [
         Supplier(
             id=row["id"],
@@ -1316,7 +1336,11 @@ async def list_supplier_offers(
 ):
     if not part_number.strip():
         return []
-    return supplier_db.find_supplier_offers(part_number.strip().upper(), quantity_needed=1)
+    return (
+        operations_store.get_supplier_offers(part_number.strip().upper(), quantity_needed=1)
+        if operations_store.storage_engine == "postgresql"
+        else supplier_db.find_supplier_offers(part_number.strip().upper(), quantity_needed=1)
+    )
 
 @app.get("/api/suppliers/{supplier_id}", response_model=Supplier)
 async def get_supplier(supplier_id: str, _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING"))):
