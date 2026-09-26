@@ -447,15 +447,43 @@ test('audit drawer traps keyboard focus and restores it on Escape', async ({ pag
   await installApiRoutes(page);
   await page.goto('/internal', { waitUntil: 'networkidle' });
 
-  const opener = page.getByRole('button', { name: 'Open agent logs' });
+  const opener = page.getByRole('button', { name: 'Open agent activity log' });
   await opener.focus();
   await page.keyboard.press('Enter');
-  const dialog = page.getByRole('dialog', { name: /MULTI-AGENT REASONING TIMELINE/i });
+  const dialog = page.getByRole('dialog', { name: /AGENT ACTIVITY LOG/i });
   await expect(dialog).toBeVisible();
   await expect(page.getByRole('button', { name: 'Close audit log' })).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
   await expect(opener).toBeFocused();
+});
+
+test('top-bar activity log is the only agent-log action and overlays map panes', async ({ page }) => {
+  await installErrorCapture(page);
+  await installApiRoutes(page);
+  await page.goto('/internal', { waitUntil: 'networkidle' });
+  await selectTargetView(page, { path: '/sourcing', label: /Sourcing Matrix/i });
+  await expect(page.locator('.leaflet-container')).toBeVisible();
+
+  await expect(page.getByRole('button', { name: 'Open agent activity log' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open operational notifications' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Open agent activity log' }).click();
+
+  const drawer = page.getByRole('dialog', { name: 'AGENT ACTIVITY LOG' });
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByText('Milo')).toBeVisible();
+  await expect(drawer.getByText('Nova')).toBeVisible();
+  await expect(drawer.getByText('Orin')).toBeVisible();
+  await expect(drawer.getByText('Luna')).toBeVisible();
+  await expect(drawer.getByText('Kael')).toBeVisible();
+  await expect(drawer.getByText('Aria')).toBeVisible();
+
+  const layers = await page.evaluate(() => ({
+    drawer: Number.parseInt(getComputedStyle(document.querySelector('[aria-labelledby="audit-log-title"]')!).zIndex, 10),
+    map: Number.parseInt(getComputedStyle(document.querySelector('.leaflet-pane')!).zIndex, 10),
+  }));
+  expect(layers.drawer).toBeGreaterThan(layers.map);
+  await expect(page.getByRole('button', { name: 'Close audit log' })).toBeVisible();
 });
 
 async function installErrorCapture(page: Page) {

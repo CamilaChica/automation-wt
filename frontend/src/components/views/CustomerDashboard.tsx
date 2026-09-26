@@ -6,6 +6,7 @@ import { SimulatedDataBanner } from '../common/SimulatedDataBanner';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { RFQ } from '../../types';
 import { isFailedRfq } from '../../utils/rfqState';
+import { getAgentIdentity } from '../../services/agentIdentity';
 import { 
   Send, 
   CheckCircle, 
@@ -878,7 +879,7 @@ export const CustomerDashboard: React.FC = () => {
                 <div className="flex items-start space-x-2.5">
                   <div className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-950 text-aero-blue flex items-center justify-center text-[10px] font-bold shrink-0">1</div>
                   <div>
-                    <span className="font-bold text-slate-800 dark:text-slate-200">PartsIntelligenceAgent</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">{getAgentIdentity('PartsIntelligenceAgent').name} · {getAgentIdentity('PartsIntelligenceAgent').role}</span>
                     <p className="text-slate-500 text-[10px]">Validates ATA chapters, IPC superseded part numbers, and OEM compatibility.</p>
                   </div>
                 </div>
@@ -886,7 +887,7 @@ export const CustomerDashboard: React.FC = () => {
                 <div className="flex items-start space-x-2.5">
                   <div className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-950 text-aero-blue flex items-center justify-center text-[10px] font-bold shrink-0">2</div>
                   <div>
-                    <span className="font-bold text-slate-800 dark:text-slate-200">ComplianceAgent</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">{getAgentIdentity('ComplianceAgent').name} · {getAgentIdentity('ComplianceAgent').role}</span>
                     <p className="text-slate-500 text-[10px]">Scans FAA 8130-3 release tags, 121 air carrier pedigree, and non-incident statements.</p>
                   </div>
                 </div>
@@ -894,7 +895,7 @@ export const CustomerDashboard: React.FC = () => {
                 <div className="flex items-start space-x-2.5">
                   <div className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-950 text-aero-blue flex items-center justify-center text-[10px] font-bold shrink-0">3</div>
                   <div>
-                    <span className="font-bold text-slate-800 dark:text-slate-200">DynamicPricingAgent</span>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">{getAgentIdentity('DynamicPricingAgent').name} · {getAgentIdentity('DynamicPricingAgent').role}</span>
                     <p className="text-slate-500 text-[10px]">Calculates wholesale margin, core charges, and hot-shot freight premiums.</p>
                   </div>
                 </div>

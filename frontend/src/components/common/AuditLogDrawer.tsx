@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { AgentAuditLog } from '../../types';
 import { X, CheckCircle, AlertTriangle, XCircle, Bot, Cpu, ShieldCheck, DollarSign, Send, Search } from 'lucide-react';
+import { getAgentIdentity } from '../../services/agentIdentity';
 
 interface AuditLogDrawerProps {
   isOpen: boolean;
@@ -91,14 +92,14 @@ export const AuditLogDrawer: React.FC<AuditLogDrawerProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-sm animate-fade-in" role="dialog" aria-modal="true" aria-labelledby="audit-log-title" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="fixed inset-0 z-[1000] flex justify-end bg-black/40 backdrop-blur-sm animate-fade-in" role="dialog" aria-modal="true" aria-labelledby="audit-log-title" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
       <div ref={dialogRef} className="w-full max-w-md bg-white dark:bg-card-dark border-l border-slate-200 dark:border-slate-800 h-full flex flex-col justify-between shadow-2xl font-sans">
         {/* Header */}
         <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-900/90">
           <div>
             <h3 id="audit-log-title" className="font-display font-bold text-sm text-slate-900 dark:text-slate-100 uppercase flex items-center space-x-2">
               <Bot className="w-4 h-4 text-aero-blue" />
-              <span>MULTI-AGENT REASONING TIMELINE</span>
+              <span>AGENT ACTIVITY LOG</span>
             </h3>
             <p className="text-[10px] font-mono text-slate-500 dark:text-slate-400">Target RFQ: {rfqId}</p>
           </div>
@@ -133,7 +134,7 @@ export const AuditLogDrawer: React.FC<AuditLogDrawerProps> = ({
               <div className="flex items-center justify-between mb-1.5">
                 <div className="flex items-center space-x-2 font-bold">
                   {getAgentIcon(log.agent_name)}
-                  <span className="text-slate-900 dark:text-slate-100">{log.agent_name}</span>
+                  <span className="text-slate-900 dark:text-slate-100">{getAgentIdentity(log.agent_name).name} <span className="font-normal text-slate-500 dark:text-slate-400">· {getAgentIdentity(log.agent_name).role}</span></span>
                 </div>
                 {getStatusBadge(log.status)}
               </div>

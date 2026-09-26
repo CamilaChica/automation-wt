@@ -20,12 +20,14 @@ Target: `https://winged-tycoons-frontend.onrender.com/internal`
 - [ ] Decide whether intake operations should expose a retry/reprocess API. No such endpoint is currently available; failed RFQs remain blocked from mutations and show escalation guidance.
 - [ ] Connect the customer UI's remaining live RFQ, quote, catalog, shipment, sourcing, compliance, and KPI values to verified production API data; keep sample values labeled and do not present them as live.
 - [ ] Confirm whether carrier map tiles and external shipment sources are approved for production use, including attribution, availability, and rate limits.
+- [ ] Decide whether the header activity indicator should be backed by a real unread-notification count and dedicated notification feed; the duplicate bell control was removed because it opened the same audit drawer.
 
 ## Verification Gaps
 
 - [ ] Exercise slow-network, timeout, and API-failure behavior against staging services with representative authenticated records.
 - [ ] Verify mailbox health and a controlled RFQ-to-quote-to-email lifecycle in the approved staging environment; record message, RFQ, quote, communication, and delivery evidence.
 - [ ] Run the latest local slow-network/API-failure regressions against the approved staging build after deployment and record its commit identifier.
+- [ ] Verify Q&A answers and role-specific activity names with customer-support and operations owners before production release.
 
 ## Current Blocker
 
