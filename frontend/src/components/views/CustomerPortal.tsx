@@ -3,6 +3,7 @@ import { ArrowRight, CheckCircle2, ChevronDown, Clock3, FileSearch, Globe2, Head
 import { apiService } from '../../services/api';
 import { BrandMark } from '../common/BrandMark';
 import { CustomerVoiceContact } from './CustomerVoiceContact';
+import { FloatingQa } from '../common/FloatingQa';
 import { normalizeQuantityInput } from '../../utils/quantity';
 import { customerLanguages, CustomerLanguage, getCustomerLanguagePreference, setCustomerLanguagePreference, translateCustomerPortal } from '../../i18n/customerPortal';
 
@@ -52,8 +53,8 @@ export const CustomerPortal: React.FC = () => {
     try {
       setResults(await apiService.searchCatalog(value, condition || undefined));
       setNotice(null);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : t('catalogSearchFailed'));
+    } catch {
+      setNotice(t('catalogSearchFailed'));
     } finally {
       setIsSearching(false);
     }
@@ -81,8 +82,8 @@ export const CustomerPortal: React.FC = () => {
       );
       setNotice(response.message || `Request ${response.rfq_id} received.`);
       setTrackingStatus(t('processingFulfillment'));
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : t('rfqSubmissionFailed'));
+    } catch {
+      setNotice(t('rfqSubmissionFailed'));
     } finally {
       setIsSubmitting(false);
     }
@@ -104,8 +105,8 @@ export const CustomerPortal: React.FC = () => {
       setExportCertificate(null);
       setKycForm(null);
       setPoDocument(null);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : t('purchaseOrderFailed'));
+    } catch {
+      setNotice(t('purchaseOrderFailed'));
     } finally {
       setIsSubmittingPo(false);
     }
@@ -117,8 +118,8 @@ export const CustomerPortal: React.FC = () => {
     try {
       setShipment(await apiService.trackShipment(trackingToken));
       setNotice(null);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : t('trackingFailed'));
+    } catch {
+      setNotice(t('trackingFailed'));
     } finally {
       setIsTracking(false);
     }
@@ -344,6 +345,7 @@ export const CustomerPortal: React.FC = () => {
         </footer>
       </main>
       <CustomerVoiceContact uiLanguage={language} isOpen={isVoiceContactOpen} onClose={() => setIsVoiceContactOpen(false)} />
+      <FloatingQa audience="client" language={language} />
     </div>
   );
 };

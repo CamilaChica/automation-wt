@@ -172,6 +172,56 @@ test('confirmed procurement command stays pending until its mocked response', as
   expect(commandRequests).toBe(1);
 });
 
+test('slow shipment API exposes loading then empty state without layout failure', async ({ page }) => {
+  let releaseShipments: (() => void) | undefined;
+  await installErrorCapture(page);
+  await installApiRoutes(page);
+  await page.route('**/api/internal/shipments', async route => {
+    await new Promise<void>(resolve => { releaseShipments = resolve; });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+  });
+  await page.goto('/internal', { waitUntil: 'networkidle' });
+  await selectTargetView(page, { path: '/fulfillment', label: /Fulfillment/i });
+
+  await expect(page.getByRole('status').filter({ hasText: 'Loading shipments...' })).toBeVisible();
+  releaseShipments?.();
+  await expect(page.getByRole('status').filter({ hasText: 'No shipments are currently registered.' })).toBeVisible();
+});
+
+test('API failures surface retryable states across dynamic customer and internal views', async ({ page }) => {
+  let catalogSearchFailed = false;
+  await installErrorCapture(page);
+  await installApiRoutes(page);
+  await page.route('**/api/**', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'Diagnostic API unavailable.' }) }));
+  await page.route('**/api/catalog/search**', async route => {
+    catalogSearchFailed = true;
+    await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'Diagnostic catalog unavailable.' }) });
+  });
+  await page.goto('/internal', { waitUntil: 'networkidle' });
+
+  const internalFailureViews = [
+    { path: '/sales', label: /Sales Command/i, expected: 'Request failed with status code 503' },
+    { path: '/sourcing', label: /Sourcing Matrix/i, expected: 'Request failed with status code 503' },
+    { path: '/procurement', label: /Proc Command/i, expected: 'Request failed with status code 503' },
+    { path: '/trace', label: /Trace Vault/i, expected: 'Request failed with status code 503' },
+    { path: '/fulfillment', label: /Fulfillment/i, expected: 'Request failed with status code 503' },
+  ];
+
+  for (const view of internalFailureViews) {
+    await selectTargetView(page, view);
+    const feedback = page.getByRole(view.path === '/sales' ? 'status' : 'alert').filter({ hasText: view.expected }).first();
+    await expect(feedback, `Expected recoverable API error on ${view.path}`).toBeVisible();
+    if (view.path !== '/sales') await expect(feedback.getByRole('button', { name: 'Retry' })).toBeVisible();
+  }
+
+  await page.addInitScript(() => localStorage.setItem('wt_role', 'ROLE_CUSTOMER'));
+  await page.goto('/customer-portal', { waitUntil: 'networkidle' });
+  await page.getByRole('textbox', { name: 'Search aircraft parts' }).fill('32-11-45-01');
+  await page.getByRole('button', { name: 'Search parts' }).click();
+  await expect.poll(() => catalogSearchFailed).toBe(true);
+  await expect(page.getByRole('status').filter({ hasText: 'Catalog search failed. Please retry.' })).toBeVisible();
+});
+
 test('RFQ, fulfillment, and trace labels retain Montserrat and align on mobile', async ({ page }) => {
   await installErrorCapture(page);
   await installApiRoutes(page);
@@ -280,6 +330,39 @@ test('voice support uses the portal language while keeping call language selecta
   await expect(dialog.getByText('Transcription de la conversation')).toBeVisible();
   const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
   expect(results.violations.map(violation => ({ id: violation.id, nodes: violation.nodes.map(node => node.target) }))).toEqual([]);
+});
+
+test('floating Q&A shows localized customer help and separate internal guidance', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('wt_access_token', 'qa-audience-test');
+    localStorage.setItem('wt_role', 'ROLE_CUSTOMER');
+  });
+  await installApiRoutes(page);
+  await page.goto('/customer-portal', { waitUntil: 'networkidle' });
+  await page.locator('#customer-language').selectOption('es');
+
+  const customerLauncher = page.getByRole('button', { name: 'Preguntas del cliente' });
+  await expect(customerLauncher).toHaveCSS('position', 'fixed');
+  await customerLauncher.click();
+  const customerDialog = page.getByRole('dialog', { name: 'Preguntas de clientes' });
+  await expect(customerDialog.getByText('¿Cómo rastreo un envío?')).toBeVisible();
+  await expect(customerDialog.getByText('¿Cómo solicito una cotización?')).toBeVisible();
+  const clientQaAxe = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+  expect(clientQaAxe.violations.map(violation => violation.id)).toEqual([]);
+  await page.keyboard.press('Escape');
+  await expect(customerDialog).toBeHidden();
+
+  await page.addInitScript(() => localStorage.setItem('wt_role', 'ROLE_ADMIN'));
+  await page.goto('/internal', { waitUntil: 'networkidle' });
+  const internalLauncher = page.getByRole('button', { name: 'Internal Q&A' });
+  await internalLauncher.click();
+  const internalDialog = page.getByRole('dialog', { name: 'Internal operations Q&A' });
+  await expect(internalDialog.getByText('What should I do with an Intake_Failed RFQ?')).toBeVisible();
+  await expect(internalDialog.getByText('Are DEMO ROUTE and SAMPLE values live?')).toBeVisible();
+  const internalQaAxe = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+  expect(internalQaAxe.violations.map(violation => violation.id)).toEqual([]);
+  await page.keyboard.press('Escape');
+  await expect(internalDialog).toBeHidden();
 });
 
 test('customer language selector is accessible and usable on mobile and desktop', async ({ page }) => {
