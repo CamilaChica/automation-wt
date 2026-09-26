@@ -301,40 +301,37 @@ export const TraceVaultView: React.FC = () => {
           </h2>
 
           {/* Milestone Stepper Timeline */}
-          <div className="flex items-center justify-between font-mono text-[10px] pt-2">
-            <div className="flex flex-col items-center">
-              <div className="w-8 h-8 rounded-full bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-500 flex items-center justify-center font-bold">
+          <div className="grid grid-cols-2 gap-x-2 gap-y-4 pt-2 text-center font-mono text-[10px] sm:grid-cols-4">
+            <div className="flex min-w-0 flex-col items-center">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 font-bold text-emerald-700 dark:border-emerald-500 dark:bg-emerald-500/20 dark:text-emerald-300">
                 ✓
               </div>
-              <span className="mt-1 font-bold text-slate-900 dark:text-slate-200">Receipt</span>
-              <span className="text-[9px] text-slate-500">32-11-45-01</span>
+              <span className="mt-2 w-full break-words text-center font-bold leading-tight text-slate-900 dark:text-slate-200">Receipt</span>
+              <span className="mt-1 w-full break-all text-center text-[9px] leading-tight text-slate-500">32-11-45-01</span>
             </div>
-            <div className="h-0.5 flex-1 bg-emerald-400 mx-2" />
 
-            <div className="flex flex-col items-center">
-              <div className="w-8 h-8 rounded-full bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-500 flex items-center justify-center font-bold">
+            <div className="flex min-w-0 flex-col items-center">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 font-bold text-emerald-700 dark:border-emerald-500 dark:bg-emerald-500/20 dark:text-emerald-300">
                 ✓
               </div>
-              <span className="mt-1 font-bold text-slate-900 dark:text-slate-200">8130-3 Verified</span>
-              <span className="text-[9px] text-slate-500">CRS Pass</span>
+              <span className="mt-2 w-full break-words text-center font-bold leading-tight text-slate-900 dark:text-slate-200">8130-3 Verified</span>
+              <span className="mt-1 w-full break-words text-center text-[9px] leading-tight text-slate-500">CRS Pass</span>
             </div>
-            <div className="h-0.5 flex-1 bg-emerald-400 mx-2" />
 
-            <div className="flex flex-col items-center">
-              <div className="w-8 h-8 rounded-full bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-500 flex items-center justify-center font-bold">
+            <div className="flex min-w-0 flex-col items-center">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 font-bold text-emerald-700 dark:border-emerald-500 dark:bg-emerald-500/20 dark:text-emerald-300">
                 ✓
               </div>
-              <span className="mt-1 font-bold text-slate-900 dark:text-slate-200">QA Bench</span>
-              <span className="text-[9px] text-slate-500">Dimensional</span>
+              <span className="mt-2 w-full break-words text-center font-bold leading-tight text-slate-900 dark:text-slate-200">QA Bench</span>
+              <span className="mt-1 w-full break-words text-center text-[9px] leading-tight text-slate-500">Dimensional</span>
             </div>
-            <div className="h-0.5 flex-1 bg-slate-200 dark:bg-slate-800 mx-2" />
 
-            <div className="flex flex-col items-center">
-              <div className="w-8 h-8 rounded-full bg-blue-50 dark:bg-slate-800 text-aero-blue border border-blue-200 dark:border-slate-700 flex items-center justify-center font-bold">
+            <div className="flex min-w-0 flex-col items-center">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-blue-200 bg-blue-50 font-bold text-blue-700 dark:border-slate-700 dark:bg-slate-800 dark:text-blue-300">
                 4
               </div>
-              <span className="mt-1 text-slate-600 dark:text-slate-400 font-semibold">Final Release</span>
-              <span className="text-[9px] text-slate-500">Dispatch</span>
+              <span className="mt-2 w-full break-words text-center font-semibold leading-tight text-slate-700 dark:text-slate-300">Final Release</span>
+              <span className="mt-1 w-full break-words text-center text-[9px] leading-tight text-slate-500">Dispatch</span>
             </div>
           </div>
         </div>

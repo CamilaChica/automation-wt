@@ -172,6 +172,43 @@ test('confirmed procurement command stays pending until its mocked response', as
   expect(commandRequests).toBe(1);
 });
 
+test('RFQ, fulfillment, and trace labels retain Montserrat and align on mobile', async ({ page }) => {
+  await installErrorCapture(page);
+  await installApiRoutes(page);
+  await page.setViewportSize({ width: 393, height: 852 });
+  await page.goto('/internal', { waitUntil: 'networkidle' });
+
+  const proposalHeading = page.getByRole('heading', { name: /RFQ RFQ-E2E-001 P\/N 32-11-45-01/i });
+  await expect(proposalHeading).toBeVisible();
+  const partNumber = proposalHeading.getByText('P/N 32-11-45-01', { exact: true });
+  await expect(partNumber).toHaveCSS('white-space', 'nowrap');
+  await expect(page.getByText('Main Landing Gear Actuator • Aircraft Type: Boeing 737-800')).toBeVisible();
+  await expect(page.getByText('Included (FREE)')).toHaveCSS('white-space', 'nowrap');
+
+  const fontFamilies = await page.locator('h1, h2, h3, p, button, .font-mono').evaluateAll(elements =>
+    Array.from(new Set(elements.map(element => getComputedStyle(element).fontFamily))),
+  );
+  expect(fontFamilies.every(family => /Montserrat/i.test(family))).toBe(true);
+
+  await selectTargetView(page, { path: '/fulfillment', label: /Fulfillment/i });
+  await expect(page.getByText('ORDER INGEST', { exact: true })).toBeVisible();
+  await expect(page.getByText('1. ORDER INGEST', { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/MIA \(Miami International\) to DFW \(Dallas Fort Worth\)/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Toggle verified airworthiness' })).toHaveCount(0);
+
+  await selectTargetView(page, { path: '/procurement', label: /Proc Command/i });
+  await expect(page.getByRole('columnheader', { name: /Requested by/i })).toBeVisible();
+
+  await selectTargetView(page, { path: '/trace', label: /Trace Vault/i });
+  const milestone = page.getByText('Receipt', { exact: true });
+  await expect(milestone).toBeVisible();
+  await expect(milestone).toHaveCSS('text-align', 'center');
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(page.getByText('AOG ALERTS: 3 ACTIVE', { exact: true })).toBeVisible();
+  await expect(page.getByText('AOG ALERTS: 3 ACTIVE', { exact: true })).toHaveCSS('white-space', 'nowrap');
+});
+
 test('shipment route displays the geographic map or its text fallback', async ({ page }) => {
   await installErrorCapture(page);
   await installApiRoutes(page);

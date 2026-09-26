@@ -88,11 +88,11 @@ export const TopBar: React.FC<TopBarProps> = ({
       </div>
 
       {/* Center Search & AOG Badge */}
-      <div className="hidden lg:flex items-center space-x-4">
+      <div className="hidden xl:flex shrink-0 items-center space-x-4">
         {/* AOG Priority Badge */}
-        <div className="flex items-center space-x-2 bg-red-50 dark:bg-aog-red/10 border border-red-200 dark:border-aog-red/40 text-aog-red px-3 py-1 rounded-full font-mono text-[11px] font-semibold aog-pulse-badge">
+        <div className="flex shrink-0 items-center space-x-2 whitespace-nowrap bg-red-50 dark:bg-aog-red/10 border border-red-200 dark:border-aog-red/40 text-aog-red px-3 py-1 rounded-full font-mono text-[11px] font-semibold aog-pulse-badge">
           <AlertTriangle className="w-3.5 h-3.5 animate-bounce" />
-          <span>AOG ALERTS: 3 ACTIVE</span>
+          <span className="whitespace-nowrap">AOG ALERTS: 3 ACTIVE</span>
         </div>
 
         {/* Global Omnibar */}

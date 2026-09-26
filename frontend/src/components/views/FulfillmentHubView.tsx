@@ -17,7 +17,6 @@ export const FulfillmentHubView: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [airworthinessVerified, setAirworthinessVerified] = useState(true);
   const [commandPending, setCommandPending] = useState<InternalCommand | null>(null);
 
   const runCommand = async (command: InternalCommand, description: string) => {
@@ -54,34 +53,30 @@ export const FulfillmentHubView: React.FC = () => {
       {notice && <div role="status" aria-live="polite" className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
       {/* Stage Progress Breadcrumb Tracker */}
       <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between font-mono text-[11px] gap-2">
-          <div className="flex items-center space-x-2 text-emerald-600 dark:text-emerald-400 font-bold">
-            <span className="w-6 h-6 rounded-full bg-emerald-50 dark:bg-emerald-500/20 flex items-center justify-center border border-emerald-300 dark:border-emerald-500/40">1</span>
-            <span>1. ORDER INGEST</span>
+        <div className="grid grid-cols-1 gap-2 font-mono text-[11px] sm:grid-cols-2 lg:grid-cols-5">
+          <div className="flex min-w-0 items-center gap-2 text-emerald-600 dark:text-emerald-400 font-bold">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 dark:border-emerald-500/40 dark:bg-emerald-500/20">1</span>
+            <span className="min-w-0 leading-tight">ORDER INGEST</span>
           </div>
-          <div className="hidden sm:block h-0.5 w-12 bg-emerald-300 dark:bg-emerald-500/40" />
 
-          <div className="flex items-center space-x-2 text-emerald-600 dark:text-emerald-400 font-bold">
-            <span className="w-6 h-6 rounded-full bg-emerald-50 dark:bg-emerald-500/20 flex items-center justify-center border border-emerald-300 dark:border-emerald-500/40">2</span>
-            <span>2. INBOUND RECEIVING</span>
+          <div className="flex min-w-0 items-center gap-2 text-emerald-600 dark:text-emerald-400 font-bold">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 dark:border-emerald-500/40 dark:bg-emerald-500/20">2</span>
+            <span className="min-w-0 leading-tight">INBOUND RECEIVING</span>
           </div>
-          <div className="hidden sm:block h-0.5 w-12 bg-emerald-300 dark:bg-emerald-500/40" />
 
-          <div className="flex items-center space-x-2 text-aero-blue font-bold">
-            <span className="w-6 h-6 rounded-full bg-aero-blue text-white flex items-center justify-center shadow-sm">3</span>
-            <span className="bg-blue-50 dark:bg-aero-blue/20 px-2 py-0.5 rounded border border-blue-200 dark:border-aero-blue/40">3. DIGITAL QA</span>
+          <div className="flex min-w-0 items-center gap-2 text-aero-blue font-bold dark:text-blue-300">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-aero-blue text-white shadow-sm">3</span>
+            <span className="min-w-0 leading-tight">DIGITAL QA</span>
           </div>
-          <div className="hidden sm:block h-0.5 w-12 bg-slate-200 dark:bg-slate-800" />
 
-          <div className="flex items-center space-x-2 text-slate-400 dark:text-slate-500">
-            <span className="w-6 h-6 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center font-bold">4</span>
-            <span>4. AERO-PACKAGING</span>
+          <div className="flex min-w-0 items-center gap-2 text-slate-500 dark:text-slate-300">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 font-bold dark:bg-slate-800">4</span>
+            <span className="min-w-0 leading-tight">AERO-PACKAGING</span>
           </div>
-          <div className="hidden sm:block h-0.5 w-12 bg-slate-200 dark:bg-slate-800" />
 
-          <div className="flex items-center space-x-2 text-slate-400 dark:text-slate-500">
-            <span className="w-6 h-6 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center font-bold">5</span>
-            <span>5. CARRIER TELEMETRY</span>
+          <div className="flex min-w-0 items-center gap-2 text-slate-500 dark:text-slate-300">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 font-bold dark:bg-slate-800">5</span>
+            <span className="min-w-0 leading-tight">CARRIER TELEMETRY</span>
           </div>
         </div>
       </div>
@@ -110,7 +105,7 @@ export const FulfillmentHubView: React.FC = () => {
           <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
             <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase flex items-center space-x-2">
               <span className="w-2 h-2 rounded-full bg-aero-blue" />
-              <span>3. DIGITAL QA WORKBENCH</span>
+              <span>DIGITAL QA WORKBENCH</span>
             </h2>
           </div>
 
@@ -162,7 +157,7 @@ export const FulfillmentHubView: React.FC = () => {
           {/* Aero-Packaging Protocol */}
           <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
             <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase border-b border-slate-100 dark:border-slate-800 pb-3">
-              4. AERO-PACKAGING PROTOCOL (ATA 300)
+              AERO-PACKAGING PROTOCOL (ATA 300)
             </h2>
 
             <div className="font-mono text-[11px] space-y-0.5">
@@ -188,7 +183,7 @@ export const FulfillmentHubView: React.FC = () => {
           </div>
 
           {/* Carrier Telemetry Tracking */}
-          <WorldMapTelemetry title="5. CARRIER ROUTE DEMO" subtitle="Example route from Miami International to Dallas Fort Worth. Not live carrier telemetry." />
+          <WorldMapTelemetry title="CARRIER ROUTE DEMO" subtitle="Example route: MIA (Miami International) to DFW (Dallas Fort Worth). Not live carrier telemetry." />
         </div>
 
         {/* Right Column (4 cols): COMPLIANCE PACKET COMPILER DRAWER */}
@@ -201,11 +196,9 @@ export const FulfillmentHubView: React.FC = () => {
           </div>
 
           <div className="space-y-3 font-mono text-[11px]">
-            <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-900/80 p-3 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200">
-              <span className="font-semibold">Verified Airworthiness</span>
-              <button type="button" aria-label="Toggle verified airworthiness" aria-pressed={airworthinessVerified} onClick={() => setAirworthinessVerified(value => !value)} className={`w-9 h-5 rounded-full flex items-center p-0.5 cursor-pointer transition-colors ${airworthinessVerified ? 'bg-emerald-500 justify-end' : 'bg-slate-400 justify-start'}`}>
-                <div className="w-4 h-4 rounded-full bg-white shadow" />
-              </button>
+            <div className="flex items-center justify-between gap-3 bg-slate-50 p-3 text-slate-800 dark:bg-slate-900/80 dark:text-slate-200">
+              <span className="min-w-0 font-semibold">Airworthiness verification</span>
+              <span className="shrink-0 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">SAMPLE</span>
             </div>
 
             <div className="bg-slate-50 dark:bg-slate-900/80 p-3 rounded-xl border border-slate-200 dark:border-slate-800 space-y-1">

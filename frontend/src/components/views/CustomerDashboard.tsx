@@ -191,8 +191,8 @@ export const CustomerDashboard: React.FC = () => {
       {/* 1. Client Header & Profile Card */}
       <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm transition-all">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center space-x-3.5">
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-tr from-blue-600 to-sky-400 flex items-center justify-center text-white font-display font-bold text-lg shadow-md shadow-blue-500/20">
+          <div className="flex min-w-0 items-center space-x-3.5">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-blue-600 to-sky-400 text-lg font-display font-bold text-white shadow-md shadow-blue-500/20">
               GA
             </div>
             <div>
@@ -331,14 +331,14 @@ export const CustomerDashboard: React.FC = () => {
             {/* Left Column (5 Cols): Quotation Inbox List */}
             <div className="lg:col-span-5 bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm flex flex-col justify-between">
               <div>
-                <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 mb-4">
-                  <div>
+                <div className="mb-4 flex min-w-0 flex-col gap-2 border-b border-slate-100 pb-3 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0 flex-1">
                     <h2 className="font-display font-bold text-sm text-slate-900 dark:text-white">
                       ACTIVE QUOTES & RFQS
                     </h2>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400">Select an item to view sourcing comparison & approve.</p>
                   </div>
-                  <span className="text-[10px] font-mono text-slate-400 bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-full font-semibold">
+                  <span className="inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold leading-none text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                     {activeRfqs.length} Total
                   </span>
                 </div>
@@ -404,22 +404,23 @@ export const CustomerDashboard: React.FC = () => {
 
             {/* Right Column (7 Cols): Detailed Quotation Review & Approval Panel */}
             <div className="lg:col-span-7 bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-5">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-                <div>
-                  <div className="flex items-center space-x-2">
-                    <span className="text-xs font-mono text-slate-400">PROPOSAL REVIEW:</span>
-                    <h2 className="font-display font-bold text-sm text-slate-900 dark:text-white">
-                      RFQ {selectedRfq.id} — P/N {selectedRfq.part_number || '32-11-45-01'}
+              <div className="flex min-w-0 flex-col gap-3 border-b border-slate-100 pb-3 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 flex-col gap-1 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-2">
+                    <span className="text-xs text-slate-500 dark:text-slate-400">PROPOSAL REVIEW</span>
+                    <h2 className="flex min-w-0 flex-wrap items-baseline gap-x-2 font-display text-sm font-bold leading-tight text-slate-900 dark:text-white sm:text-base">
+                      <span>RFQ {selectedRfq.id}</span>
+                      <span className="whitespace-nowrap">P/N {selectedRfq.part_number || '32-11-45-01'}</span>
                     </h2>
                   </div>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  <p className="mt-1 break-words text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
                     Main Landing Gear Actuator • Aircraft Type: Boeing 737-800
                   </p>
                 </div>
 
                 <button 
                   onClick={() => openDocViewer('8130-3-2026-99', selectedRfq.part_number || '32-11-45-01', 'MLG-9840', 'FAA 8130-3 Airworthiness Release', '2026-08-28')}
-                  className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-200 font-mono text-[11px] px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 flex items-center space-x-1.5 transition-colors"
+                  className="inline-flex min-h-11 shrink-0 items-center justify-center space-x-1.5 rounded-lg border border-slate-200 bg-slate-100 px-3 text-[11px] text-slate-700 transition-colors hover:bg-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
                 >
                   <Eye className="w-3.5 h-3.5 text-aero-blue" />
                   <span>Preview FAA 8130-3</span>
@@ -537,29 +538,29 @@ export const CustomerDashboard: React.FC = () => {
 
               {/* Price Breakdown Summary & 1-Click Action */}
               <div className="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
-                <div className="flex items-center justify-between text-xs font-mono mb-2">
-                  <span className="text-slate-500">Selected Option:</span>
-                  <span className="font-bold text-slate-900 dark:text-white">
+                <div className="mb-2 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 text-xs">
+                  <span className="min-w-0 break-words text-slate-500">Selected Option:</span>
+                  <span className="whitespace-nowrap text-right font-bold text-slate-900 dark:text-white">
                     Option {selectedOption} ({selectedOption === 'A' ? 'Internal Miami Stock' : selectedOption === 'B' ? 'Frankfurt Hub' : 'Texas Aviation'})
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-xs font-mono mb-2">
-                  <span className="text-slate-500">Unit Base Price:</span>
-                  <span className="font-semibold text-slate-900 dark:text-white">
+                <div className="mb-2 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 text-xs">
+                  <span className="min-w-0 break-words text-slate-500">Unit Base Price:</span>
+                  <span className="whitespace-nowrap text-right font-semibold text-slate-900 dark:text-white">
                     ${selectedOption === 'A' ? '14,200.00' : selectedOption === 'B' ? '11,800.00' : '12,500.00'}
                   </span>
                 </div>
-                <div className="flex items-center justify-between text-xs font-mono mb-2">
-                  <span className="text-slate-500">AOG Hot-Shot Logistics:</span>
-                  <span className="font-semibold text-slate-900 dark:text-white">$250.00</span>
+                <div className="mb-2 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 text-xs">
+                  <span className="min-w-0 break-words text-slate-500">AOG Hot-Shot Logistics:</span>
+                  <span className="whitespace-nowrap text-right font-semibold text-slate-900 dark:text-white">$250.00</span>
                 </div>
-                <div className="flex items-center justify-between text-xs font-mono mb-2">
-                  <span className="text-slate-500">FAA 8130-3 Digital Cert Packet:</span>
-                  <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Included (FREE)</span>
+                <div className="mb-2 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 text-xs">
+                  <span className="min-w-0 break-words text-slate-500">FAA 8130-3 Digital Cert Packet:</span>
+                  <span className="whitespace-nowrap text-right font-semibold text-emerald-600 dark:text-emerald-400">Included (FREE)</span>
                 </div>
-                <div className="pt-2 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between text-sm font-mono font-bold">
-                  <span className="text-slate-900 dark:text-white">TOTAL DELIVERED COST:</span>
-                  <span className="text-emerald-600 dark:text-emerald-400 text-base">
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 border-t border-slate-200 pt-2 text-sm font-bold dark:border-slate-700">
+                  <span className="min-w-0 break-words text-slate-900 dark:text-white">TOTAL DELIVERED COST:</span>
+                  <span className="whitespace-nowrap text-right text-base text-emerald-600 dark:text-emerald-400">
                     ${selectedOption === 'A' ? '14,450.00' : selectedOption === 'B' ? '12,050.00' : '12,750.00'}
                   </span>
                 </div>

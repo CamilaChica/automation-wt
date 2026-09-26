@@ -45,7 +45,7 @@ export default {
       fontFamily: {
         display: ['Montserrat', 'sans-serif'],
         sans: ['Montserrat', 'sans-serif'],
-        mono: ['"JetBrains Mono"', 'monospace']
+        mono: ['Montserrat', 'sans-serif']
       },
       animation: {
         'pulse-fast': 'pulse 1.2s cubic-bezier(0.4, 0, 0.6, 1) infinite',

@@ -7,6 +7,14 @@ Target: `https://winged-tycoons-frontend.onrender.com/internal`
 - Workflow stepper uses an internally scrollable, non-shrinking track.
 - Customer dashboard tabs and account badges no longer compress their labels.
 - Top-bar groups preserve essential controls and titles without clipping.
+- The former `font-mono` utility now uses Montserrat as requested; UI labels and numeric values share the same family.
+- Proposal review header now gives RFQ identity its own responsive row and keeps the P/N token unbroken. Aircraft details receive full width on narrow screens.
+- Proposal price rows use a flexible description column and a single-line, right-aligned value column; the `Included (FREE)` value no longer wraps.
+- Short count badges use centered inline-flex geometry and stay on one line.
+- Fulfillment stages use a responsive five-column grid, keep each numeral inside its circle, remove duplicate numeral prefixes, and no longer render decorative connector bars that displaced stage items.
+- The local-only airworthiness toggle was removed and replaced by a clearly labeled `SAMPLE` status; airport route copy includes IATA codes (`MIA`, `DFW`).
+- Trace history milestones use equal-width grid columns with centered circles, captions, and sublabels.
+- The RFQ queue's requestor heading is split into a deliberate two-line `Requested by` label.
 - Base interactive hit targets are at least 44px at all viewport sizes.
 - Shipment map now uses Leaflet with MIA, DFW, and FRA coordinates, OpenStreetMap attribution, non-overlapping hover labels, and a text fallback when tiles fail.
 - Hard-coded shipment routes and statuses are labeled as sample/demo data, not live telemetry.
@@ -22,13 +30,14 @@ Target: `https://winged-tycoons-frontend.onrender.com/internal`
 - `npm --prefix frontend run build`: passed.
 - `npm --prefix frontend run lint`: passed.
 - `npm --prefix frontend audit`: 0 vulnerabilities after updating Playwright, Vite, and Vitest and adding axe tooling.
-- `npm --prefix frontend run test:e2e -- --project=ui-gadgets e2e/mobile_responsiveness_diagnosis.spec.ts`: 42 passed across the viewport matrix, axe, keyboard, failed-RFQ, map-render, and cancellation checks; the additional confirmed-pending mutation case passed separately (43 total checks).
+- `npm --prefix frontend run test:e2e -- --project=ui-gadgets e2e/mobile_responsiveness_diagnosis.spec.ts`: 44 passed across the viewport matrix, axe, keyboard, failed-RFQ, map-render, cancellation, confirmed-pending, and attached-DOM regression checks.
 - Viewport matrix: `375x667`, `393x852`, `412x915`, `768x1024`, `1440x900`, and `2560x1440`, across six internal views. Checks include horizontal overflow, visible text clipping, interactive dimensions, and browser runtime errors.
 - axe WCAG 2.0/2.1 A/AA scan: no violations across all six internal views.
 - Keyboard test: audit drawer traps focus and restores focus to its opener after Escape.
 - Mocked failed-intake case verified quote, procurement, and trace actions are disabled.
 - Mocked cancellation cases verified quote, trace, sourcing, procurement, and fulfillment confirmations submit no mutation request.
 - Mocked confirmed procurement case verified one request, pending/disabled/`aria-busy` state, and success feedback after the response.
+- Mobile DOM regression verified Montserrat, intact P/N text, readable aircraft detail, right-aligned pricing, duplicate-free stages, airport codes, no inert verification toggle, and centered trace milestone text.
 - `python -m unittest discover -s tests -p "test_*.py"`: 208 passed, 18 skipped, 1 expected failure.
 - `git diff --check`: passed after updating this report.
 

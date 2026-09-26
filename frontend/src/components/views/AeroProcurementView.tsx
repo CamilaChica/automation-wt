@@ -95,7 +95,7 @@ export const AeroProcurementView: React.FC = () => {
                 <tr className="text-slate-400 border-b border-slate-100 dark:border-slate-800 text-[10px]">
                   <th className="pb-2">RFQ ID</th>
                   <th className="pb-2">Part Number</th>
-                  <th className="pb-2">Requestor</th>
+                  <th className="max-w-12 whitespace-normal pb-2 leading-tight">Requested<br />by</th>
                   <th className="pb-2">Urgency</th>
                   <th className="pb-2">SLA Status</th>
                   <th className="pb-2 text-right">Status</th>
