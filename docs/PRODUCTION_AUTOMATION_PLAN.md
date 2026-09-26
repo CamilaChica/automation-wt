@@ -23,6 +23,10 @@
 - Production startup must also refuse the current SQLite `OperationsStore` until PostgreSQL repositories are wired into API and worker call sites. Deploying before that adapter is complete is expected to fail startup rather than run split state.
 - SQLite is allowed only for isolated local tests; never for production business state.
 
+## Runtime Caveats
+
+- Current full-suite caveat: the opt-in live LLM verification test fails when enabled with OpenAI HTTP `401 Unauthorized`; this is a provider credential/configuration failure, not a deterministic local test failure. Run the offline suite without `RUN_LIVE_LLM=1`, and run live provider verification only with valid test credentials.
+
 ## 2. Render Configuration
 
 Set these variables on all applicable services:
