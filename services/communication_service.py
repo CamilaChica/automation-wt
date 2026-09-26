@@ -714,14 +714,14 @@ class CommunicationService:
                 delivery_state = operations_store.fail_outbox_message(
                     message["id"], f"{type(exc).__name__}: {exc}", retryable=retryable
                 )
-                if delivery_state == "FAILED" and message.get("entity_id"):
+                if delivery_state == "MANUAL_REVIEW_REQUIRED" and message.get("entity_id"):
                     quote = db_service.get_quote(str(message["entity_id"]))
                     if quote and quote.status == "Pending_Dispatch":
-                        db_service.update_quote_status(quote.id, "Dispatch_Failed")
-                        operations_store.update_customer_quote_status(quote.id, "Dispatch_Failed")
+                        db_service.update_quote_status(quote.id, "Pending_Internal_Review")
+                        operations_store.update_customer_quote_status(quote.id, "Pending_Internal_Review")
                         rfq = db_service.get_rfq(quote.rfq_id)
                         if rfq and rfq.status == "Quote_Dispatch_Pending":
-                            db_service.update_rfq_status(rfq.id, "Quote_Dispatch_Failed")
+                            db_service.update_rfq_status(rfq.id, "Pending_Internal_Review")
                         operations_store.cancel_communication_task(f"customer-followup:{quote.id}")
                 failed += 1
                 continue

@@ -11,20 +11,20 @@
 ## Backup and Reconciliation
 
 - [ ] Create and verify a PostgreSQL-native backup before changing production schema or data. The local SQLite snapshot and ZIP at `backups/20260926T202815Z` passed SQLite/ZIP integrity checks but are not a PostgreSQL backup.
-- [ ] Review the archived SQLite source mapping: customers 37, RFQs 439, RFQ items 1, quotes 255, quote items 242, suppliers 3, supplier offers 3, audit events 14, communications 377, scheduled tasks 1, inventory/shipment records 10, and 966 runtime operational records.
+- [ ] Review the archived SQLite source mapping: customers 37, RFQs 439, RFQ items 1, quotes 255, quote items 242, suppliers 3, supplier offers 3, audit events 14, communications 377, scheduled tasks 1, inventory/shipment records 10, and 725 usable runtime operational records after excluding incomplete quote-item payloads.
 - [ ] Resolve duplicate/conflicting records and review the deterministic legacy audit-ID mapping in `scripts/reconcile_sqlite_to_postgres.py`. `ON CONFLICT DO NOTHING` preserves target rows; target-side conflicts cannot be compared until PostgreSQL is reachable.
-- [ ] Recover complete quote-item source data or approve an explicit manual-review reconciliation policy. The plan identifies 241/242 normalized quote items missing source, acquisition cost, margin, and compliance fields; `--apply` refuses to run while this blocker exists.
-- [ ] Enrich/review 3 supplier rows missing full legacy contact/address profiles before enabling profile-dependent actions.
+- [ ] Review/approve the implemented manual-review reconciliation policy for 241/242 normalized quote items missing source, acquisition cost, margin, and compliance fields. Their original normalized rows are preserved, they are queued for review, omitted from usable runtime items, and affected quotes/RFQs are quarantined.
+- [ ] Review/approve 3 supplier-profile queue entries for records missing legacy contact/address fields; their suppliers/offers are held from approved sourcing pending review.
 - [ ] Run the reconciliation dry-run against the verified target, review its conflict and data-quality report, then use `--apply` only after backup approval and all blocking source gaps are resolved.
 - [ ] Verify source-key parity and row counts after reconciliation; retain the report and a post-migration backup.
 
 ## PostgreSQL Runtime and Outbox
 
 - [ ] Obtain rotated credentials for a disposable PostgreSQL database. The local PostgreSQL 16 service is running, but default local authentication is rejected; do not use the exposed Render credential.
-- [ ] Apply Alembic head `0005_operations_store_contract` to that disposable PostgreSQL database; offline SQL generation, migration history, and the single-head check pass, but real upgrade/restart/rollback/model parity remain unverified.
+- [ ] Apply Alembic head `0006_outbox_manual_review_status` to that disposable PostgreSQL database; migration history, the single-head check, and offline SQL generation pass, but real upgrade/restart/rollback/model parity remain unverified.
 - [ ] Exercise RFQ/customer/quote/supplier/task reads and writes against real PostgreSQL, including row locks, optimistic versions, inventory reservation concurrency, and transaction rollback.
 - [ ] Test inbound idempotency with two processes and prove claim plus business writes commit or roll back together.
-- [ ] Test outbox deduplication, concurrent claims, retry/backoff, terminal failure, stale-send recovery, and manual resolution of ambiguous delivery against PostgreSQL. Local tests cover send-outside-transaction ordering, HTTP 429 retry, and timeout/manual handling only; do not automatically resend when the external provider may already have accepted a message.
+- [ ] Test outbox deduplication, concurrent claims, retry/backoff, terminal failure, stale-send recovery, and manual resolution of ambiguous delivery against PostgreSQL. Local tests cover send-outside-transaction ordering, HTTP 429 retry, and timeout classification as `MANUAL_REVIEW_REQUIRED`; ambiguous quote/RFQ workflows are held for internal review and customer follow-up is cancelled. Do not automatically resend when the external provider may already have accepted a message.
 - [ ] Verify that all production supplier, inbound email, and scheduled task paths use shared PostgreSQL, not the local SQLite fallback.
 - [ ] Verify quote/RFQ state stays pending while email is queued and advances to `Quote_Sent` only after the outbox confirms `SENT`.
 - [ ] Keep `OPERATIONAL_POSTGRES_RUNTIME_ENABLED=false` until these integration and concurrency checks pass.

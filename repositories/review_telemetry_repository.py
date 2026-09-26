@@ -720,25 +720,25 @@ class PostgresReviewTelemetryRepository:
             ), {"id": message_id}).scalar_one_or_none()
             outbox_status = connection.execute(text(
                 "UPDATE outbox_messages SET "
-                "status = CASE WHEN :retryable AND retry_count < max_retries THEN 'PENDING' ELSE 'FAILED' END, "
+                "status = CASE WHEN :retryable AND retry_count < max_retries THEN 'PENDING' ELSE 'MANUAL_REVIEW_REQUIRED' END, "
                 "error_message = :error, available_at = now() + LEAST(interval '1 hour', "
                 "interval '5 seconds' * power(2, GREATEST(retry_count - 1, 0))), sending_started_at = NULL "
                 "WHERE id = :id AND status = 'SENDING' RETURNING status"
             ), {"id": message_id, "error": str(error)[:2000], "retryable": bool(retryable)}).scalar_one_or_none()
             if task_id:
                 connection.execute(text(
-                    "UPDATE communication_tasks SET status = CASE WHEN :status = 'PENDING' THEN 'pending' ELSE 'dead_letter' END, "
+                    "UPDATE communication_tasks SET status = CASE WHEN :status = 'PENDING' THEN 'pending' ELSE 'manual_review_required' END, "
                     "attempts = attempts + 1, last_error = :error WHERE id = :task_id"
-                ), {"task_id": task_id, "status": outbox_status or "FAILED", "error": str(error)[:1000]})
-            return str(outbox_status or "FAILED")
+                ), {"task_id": task_id, "status": outbox_status or "MANUAL_REVIEW_REQUIRED", "error": str(error)[:1000]})
+            return str(outbox_status or "MANUAL_REVIEW_REQUIRED")
 
     def recover_stale_outbox_messages(self, *, sending_timeout_seconds: int = 300) -> int:
         with self._begin() as connection:
             result = connection.execute(text(
-                "WITH recovered AS (UPDATE outbox_messages SET status = 'FAILED', sending_started_at = NULL, "
+                "WITH recovered AS (UPDATE outbox_messages SET status = 'MANUAL_REVIEW_REQUIRED', sending_started_at = NULL, "
                 "error_message = 'Delivery outcome unknown after stale SENDING lease; manual verification required' "
                 "WHERE status = 'SENDING' AND sending_started_at < now() - make_interval(secs => :timeout) "
-                "RETURNING communication_task_id) UPDATE communication_tasks SET status = 'dead_letter', "
+                "RETURNING communication_task_id) UPDATE communication_tasks SET status = 'manual_review_required', "
                 "last_error = 'Outbox delivery outcome unknown; manual verification required' "
                 "WHERE id IN (SELECT communication_task_id FROM recovered WHERE communication_task_id IS NOT NULL)"
             ), {"timeout": max(1, int(sending_timeout_seconds))})

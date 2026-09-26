@@ -324,7 +324,7 @@ class OutboxMessageRecord(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
     reply_to: Mapped[str | None] = mapped_column(String(512))
     communication_task_id: Mapped[str | None] = mapped_column(String(64), index=True)
-    status: Mapped[str] = mapped_column(String(16), index=True, default="PENDING")
+    status: Mapped[str] = mapped_column(String(32), index=True, default="PENDING")
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, default=5)
     error_message: Mapped[str | None] = mapped_column(Text)

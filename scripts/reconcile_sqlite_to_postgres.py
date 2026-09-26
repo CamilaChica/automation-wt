@@ -138,12 +138,59 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
         rfq_items.append({"id": str(row["id"]), "rfq_id": str(row["rfq_id"]), "part_number": part_number,
                           "quantity": int(row.get("quantity") or 1), "condition_code": row.get("condition_code") or row.get("condition_preference"), "details": details})
 
+    snapshot_quote_item_ids = {str(row.get("id")) for row in source["snapshot_quote_items"] if row.get("id")}
+    incomplete_quote_items = [
+        row for row in source["customer_quote_items"]
+        if str(row.get("id")) not in snapshot_quote_item_ids
+    ]
+    incomplete_quote_ids = {str(row.get("quote_id")) for row in incomplete_quote_items if row.get("quote_id")}
+
     quotes_by_id: dict[str, dict[str, Any]] = {}
     for row in source["customer_quotes"] + source["snapshot_quotes"]:
         quote_id = str(row["id"])
-        quotes_by_id[quote_id] = {"id": quote_id, "rfq_id": str(row["rfq_id"]), "status": row.get("status") or "Draft",
+        original_status = row.get("status") or "Draft"
+        quote_status = "Pending_Internal_Review" if quote_id in incomplete_quote_ids else original_status
+        quotes_by_id[quote_id] = {"id": quote_id, "rfq_id": str(row["rfq_id"]), "status": quote_status,
                                   "total_amount": row.get("total_price", row.get("total_amount", 0)) or 0,
-                                  "created_at": _date(row.get("created_at"))}
+                                  "created_at": _date(row.get("created_at")),
+                                  "reconciliation_original_status": original_status if quote_id in incomplete_quote_ids else None}
+    incomplete_rfq_ids = {quotes_by_id[quote_id]["rfq_id"] for quote_id in incomplete_quote_ids if quote_id in quotes_by_id}
+    for rfq_id in incomplete_rfq_ids:
+        if rfq_id in rfqs:
+            rfqs[rfq_id]["reconciliation_original_status"] = rfqs[rfq_id]["status"]
+            rfqs[rfq_id]["status"] = "Pending_Internal_Review"
+
+    customer_quotes_by_id: dict[str, dict[str, Any]] = {}
+    for row in source["customer_quotes"] + source["snapshot_quotes"]:
+        quote_id = str(row["id"])
+        item_rows = [item for item in source["customer_quote_items"] if str(item.get("quote_id")) == quote_id]
+        first_item = item_rows[0] if item_rows else {}
+        customer_quotes_by_id[quote_id] = {
+            "id": quote_id, "rfq_id": str(row["rfq_id"]),
+            "quote_number": row.get("quote_number") or quote_id,
+            "unit_price": row.get("unit_price") if row.get("unit_price") is not None else (first_item.get("unit_price") or 0),
+            "quantity": int(row.get("quantity") or first_item.get("quantity") or 1),
+            "total_price": row.get("total_price", row.get("total_amount", 0)) or 0,
+            "currency": row.get("currency") or "USD", "lead_time": row.get("lead_time", row.get("lead_time_days")),
+            "condition": row.get("condition"), "certification": row.get("certification"),
+            "valid_until": row.get("valid_until"),
+            "status": quotes_by_id[quote_id]["status"],
+            "created_at": _date(row.get("created_at")), "updated_at": _date(row.get("updated_at")),
+        }
+
+    customer_quote_items_by_id: dict[str, dict[str, Any]] = {}
+    for row in source["customer_quote_items"]:
+        item_id = str(row["id"])
+        attachments = row.get("attachments") or ""
+        customer_quote_items_by_id[item_id] = {
+            "id": item_id, "quote_id": str(row["quote_id"]), "rfq_item_id": row.get("rfq_item_id"),
+            "part_number": row.get("part_number") or "UNKNOWN", "description": row.get("description"),
+            "quantity": int(row.get("quantity") or 1), "condition": row.get("condition"),
+            "certification": row.get("certification") or "PENDING_OPERATOR_REVIEW", "unit_price": row.get("unit_price") or 0,
+            "lead_time": row.get("lead_time"),
+            "attachments": attachments if isinstance(attachments, str) else json.dumps(attachments),
+            "created_at": _date(row.get("created_at")), "updated_at": _date(row.get("updated_at")),
+        }
 
     quote_items_by_id: dict[str, dict[str, Any]] = {}
     for row in source["customer_quote_items"] + source["snapshot_quote_items"]:
@@ -155,13 +202,48 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
             "details": {key: value for key, value in row.items() if key not in {"id", "quote_id", "part_number", "quantity", "unit_price"}},
         }
 
+    review_records: dict[str, dict[str, Any]] = {}
+
+    def add_review(review_key: str, *, entity_id: str | None, source_payload: dict[str, Any], reason: str, hold_flags: list[str]) -> None:
+        review_id = f"REV-{uuid.uuid5(uuid.NAMESPACE_URL, review_key).hex[:16].upper()}"
+        created_at = _date(source_payload.get("created_at")) or datetime.now(timezone.utc)
+        review_records[review_key] = {
+            "id": review_id, "idempotency_key": review_key[:255],
+            "task": "sqlite_reconciliation_review", "prompt_version": "sqlite-reconcile-v1",
+            "entity_id": entity_id,
+            "source_text": json.dumps(source_payload, default=str, ensure_ascii=False),
+            "extraction_json": json.dumps(source_payload, default=str, ensure_ascii=False),
+            "reason": reason, "hold_flags_json": json.dumps(hold_flags), "status": "PENDING",
+            "created_at": created_at, "updated_at": created_at,
+        }
+
+    for row in incomplete_quote_items:
+        item_id = str(row.get("id") or "unknown")
+        add_review(
+            f"sqlite-reconcile:quote-item:{item_id}", entity_id=str(row.get("quote_id") or "") or None,
+            source_payload=row,
+            reason="Legacy normalized quote item lacks source, acquisition cost, margin, or compliance fields needed for safe reuse.",
+            hold_flags=["source", "unit_cost", "margin_percent", "compliance_status"],
+        )
+
     suppliers: dict[str, dict[str, Any]] = {}
+    full_supplier_profile_ids = {str(row.get("id")) for row in source["snapshot_suppliers"] if row.get("id")}
+    suppliers_requiring_review: set[str] = set()
     for row in source["suppliers"]:
         supplier_id = str(row["id"])
+        approval_status = row.get("approval_status") or "Pending"
+        if supplier_id not in full_supplier_profile_ids:
+            approval_status = "Pending_Internal_Review"
+            suppliers_requiring_review.add(supplier_id)
+            add_review(
+                f"sqlite-reconcile:supplier:{supplier_id}", entity_id=supplier_id, source_payload=row,
+                reason="Supplier registry row lacks a complete legacy contact/address profile.",
+                hold_flags=["contact_name", "phone", "address_line1", "city", "state_province", "postal_code"],
+            )
         suppliers[supplier_id] = {
             "id": supplier_id, "company_name": row.get("company_name") or "Unknown Supplier",
             "email": row.get("email"), "phone": row.get("phone"),
-            "approval_status": row.get("approval_status") or "Pending",
+            "approval_status": approval_status,
             "itar_certified": bool(row.get("itar_certified", 0)), "source": row.get("source") or "legacy_sqlite",
         }
 
@@ -190,7 +272,7 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
             "warranty_terms": row.get("warranty_terms"),
             "trace_documents": row.get("trace_documents") if isinstance(row.get("trace_documents"), str) else json.dumps(row.get("trace_documents") or []),
             "source_email_id": source_id, "confidence": row.get("confidence"),
-            "approval_status": row.get("approval_status") or "Pending",
+            "approval_status": "Pending_Internal_Review" if supplier["id"] in suppliers_requiring_review else row.get("approval_status") or "Pending",
         }
 
     audits = []
@@ -274,6 +356,9 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
             "customer_email": row["customer_email"], "status": row["status"],
             "raw_text": row["raw_text"], "thread_id": row["thread_id"],
         })
+        if row["id"] in incomplete_rfq_ids:
+            record["reconciliation_original_status"] = row.get("reconciliation_original_status")
+            record["status"] = "Pending_Internal_Review"
         if "created_at" not in record and row.get("created_at") is not None:
             record["created_at"] = row["created_at"]
         record.setdefault("workflow_state", row["status"])
@@ -298,7 +383,10 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
     snapshot_quotes_by_id = {str(row.get("id")): row for row in source["snapshot_quotes"] if row.get("id")}
     for row in quotes_by_id.values():
         record = dict(snapshot_quotes_by_id.get(row["id"], {}))
+        original_status = record.get("status") or row.get("reconciliation_original_status")
         record.update({"id": row["id"], "rfq_id": row["rfq_id"], "status": row["status"], "total_amount": row["total_amount"]})
+        if row["status"] == "Pending_Internal_Review":
+            record["reconciliation_original_status"] = original_status
         record.setdefault("subtotal", row["total_amount"])
         record.setdefault("shipping_cost", 0.0)
         record.setdefault("version", 1)
@@ -306,6 +394,8 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
 
     snapshot_quote_items_by_id = {str(row.get("id")): row for row in source["snapshot_quote_items"] if row.get("id")}
     for row in quote_items_by_id.values():
+        if row["id"] not in snapshot_quote_items_by_id:
+            continue
         details = row.get("details") or {}
         record = dict(snapshot_quote_items_by_id.get(row["id"], {}))
         record.update({
@@ -349,10 +439,12 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
     return {
         "customers": list(customers.values()), "rfqs": list(rfqs.values()), "rfq_items": rfq_items,
         "quotes": list(quotes_by_id.values()), "quote_items": list(quote_items_by_id.values()),
+        "customer_quotes": list(customer_quotes_by_id.values()),
+        "customer_quote_items": list(customer_quote_items_by_id.values()),
         "suppliers": list(suppliers.values()), "supplier_parts": list(supplier_parts_by_key.values()),
         "audit_events": audits, "communications": list(communications_by_id.values()),
         "inbound_emails": inbound_emails, "communication_tasks": tasks,
-        "operational_records": records,
+        "operator_review_queue": list(review_records.values()), "operational_records": records,
     }
 
 
@@ -365,10 +457,10 @@ def reconciliation_warnings(source: dict[str, list[dict[str, Any]]]) -> list[dic
     ]
     if incomplete_quote_items:
         warnings.append({
-            "severity": "blocking",
+            "severity": "review",
             "table": "customer_quote_items",
             "count": len(incomplete_quote_items),
-            "reason": "SQLite normalized quote rows do not contain source, acquisition cost, margin, or compliance fields required to recreate QuoteItem runtime payloads. Recover a current complete state export or reconcile these records under an explicit manual-review policy before apply.",
+            "reason": "SQLite normalized quote rows do not contain source, acquisition cost, margin, or compliance fields required to recreate QuoteItem runtime payloads. The policy preserves normalized rows, queues raw values for operator review, excludes incomplete items from usable runtime records, and quarantines related quote/RFQ states.",
         })
 
     complete_supplier_ids = {str(row.get("id")) for row in source["snapshot_suppliers"] if row.get("id")}
@@ -376,7 +468,7 @@ def reconciliation_warnings(source: dict[str, list[dict[str, Any]]]) -> list[dic
     if incomplete_suppliers:
         warnings.append({
             "severity": "review", "table": "suppliers", "count": len(incomplete_suppliers),
-            "reason": "Supplier registry rows do not carry the full supplier contact/address profile required by the legacy Supplier model; reconcile missing profile fields before enabling profile-dependent actions.",
+            "reason": "Supplier registry rows do not carry the full supplier contact/address profile required by the legacy Supplier model. The policy queues raw rows for operator review and places supplier/offer approval on hold.",
         })
     return warnings
 

@@ -127,17 +127,26 @@ def test_outbox_retries_only_explicit_provider_throttling(monkeypatch):
 
         def __init__(self):
             self.retryable = None
+            self.delivery_state = None
 
         def recover_stale_outbox_messages(self):
             return 0
 
         def claim_outbox_messages(self, *, limit):
             return [{"id": "OUT-1", "mailbox": "sales", "recipient": "buyer@example.test",
-                     "subject": "Quote", "payload": {"body": "Body"}, "reply_to": None}]
+                     "subject": "Quote", "payload": {"body": "Body"}, "reply_to": None,
+                     "entity_id": "QUOTE-1"}]
 
         def fail_outbox_message(self, _message_id, _error, *, retryable=False):
             self.retryable = retryable
-            return "PENDING" if retryable else "FAILED"
+            self.delivery_state = "PENDING" if retryable else "MANUAL_REVIEW_REQUIRED"
+            return self.delivery_state
+
+        def update_customer_quote_status(self, _quote_id, _status):
+            return None
+
+        def cancel_communication_task(self, _task_key):
+            return None
 
     throttled_store = Store()
     monkeypatch.setattr("services.communication_service.operations_store", throttled_store)
@@ -147,9 +156,22 @@ def test_outbox_retries_only_explicit_provider_throttling(monkeypatch):
 
     ambiguous_store = Store()
     monkeypatch.setattr("services.communication_service.operations_store", ambiguous_store)
+    monkeypatch.setattr("services.communication_service.db_service.get_quote", lambda _quote_id: SimpleNamespace(
+        id="QUOTE-1", rfq_id="RFQ-1", status="Pending_Dispatch"
+    ))
+    monkeypatch.setattr("services.communication_service.db_service.get_rfq", lambda _rfq_id: SimpleNamespace(
+        id="RFQ-1", status="Quote_Dispatch_Pending"
+    ))
+    quote_transitions = []
+    rfq_transitions = []
+    monkeypatch.setattr("services.communication_service.db_service.update_quote_status", lambda _quote_id, status: quote_transitions.append(status))
+    monkeypatch.setattr("services.communication_service.db_service.update_rfq_status", lambda _rfq_id, status: rfq_transitions.append(status))
     monkeypatch.setattr("services.communication_service.send_message", Mock(side_effect=TimeoutError("delivery outcome unknown")))
     CommunicationService().dispatch_outbox_once()
     assert ambiguous_store.retryable is False
+    assert ambiguous_store.delivery_state == "MANUAL_REVIEW_REQUIRED"
+    assert quote_transitions == ["Pending_Internal_Review"]
+    assert rfq_transitions == ["Pending_Internal_Review"]
 
 
 def test_reconciliation_maps_legacy_ids_stably_and_conflict_policy_preserves_target():
@@ -177,13 +199,18 @@ def test_reconciliation_maps_legacy_ids_stably_and_conflict_policy_preserves_tar
     assert first["supplier_parts"][0]["supplier_id"] == "SUP-1"
     assert len({row["id"] for row in first["audit_events"]}) == 2
     records = {(row["domain"], row["record_id"]): row["payload"] for row in first["operational_records"]}
-    assert {"suppliers", "rfqs", "rfq_items", "quotes", "quote_items"} <= {domain for domain, _record_id in records}
+    assert {"suppliers", "rfqs", "rfq_items", "quotes"} <= {domain for domain, _record_id in records}
     assert records[("rfqs", "RFQ-NORMALIZED")]["customer_email"] == "buyer@example.test"
     assert records[("quotes", "QUOTE-NORMALIZED")]["total_amount"] == 50
     warnings = reconciliation_warnings(source)
-    assert any(item["table"] == "customer_quote_items" and item["severity"] == "blocking" for item in warnings)
+    assert any(item["table"] == "customer_quote_items" and item["severity"] == "review" for item in warnings)
+    assert any(item["table"] == "suppliers" and item["severity"] == "review" for item in warnings)
+    assert records[("rfqs", "RFQ-NORMALIZED")]["status"] == "Pending_Internal_Review"
+    assert records[("quotes", "QUOTE-NORMALIZED")]["status"] == "Pending_Internal_Review"
+    assert ("quote_items", "QI-NORMALIZED") not in records
+    assert len(first["operator_review_queue"]) == 2
     try:
-        assert_apply_has_complete_source(warnings)
+        assert_apply_has_complete_source([{"severity": "blocking", "table": "unknown", "count": 1}])
     except RuntimeError as exc:
         assert "incomplete source data" in str(exc)
     else:
