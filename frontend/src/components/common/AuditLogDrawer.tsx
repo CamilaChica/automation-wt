@@ -101,14 +101,16 @@ export const AuditLogDrawer: React.FC<AuditLogDrawerProps> = ({
               <Bot className="w-4 h-4 text-aero-blue" />
               <span>AGENT ACTIVITY LOG</span>
             </h3>
-            <p className="text-[10px] font-mono text-slate-500 dark:text-slate-400">Target RFQ: {rfqId}</p>
+            <p className="text-[10px] font-mono text-slate-500 dark:text-slate-400">Showing activity for RFQ: {rfqId}</p>
           </div>
           <button
             onClick={onClose}
             aria-label="Close audit log"
-            className="p-1.5 rounded-lg bg-white dark:bg-slate-800 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white border border-slate-200 dark:border-slate-700"
+            className="inline-flex h-11 w-11 min-h-11 min-w-11 items-center justify-center bg-transparent p-0 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
           >
-            <X className="w-4 h-4" />
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+              <X aria-hidden="true" className="h-4 w-4" />
+            </span>
           </button>
         </div>
 
