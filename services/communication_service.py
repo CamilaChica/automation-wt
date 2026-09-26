@@ -47,7 +47,7 @@ class EmailPayload(BaseModel):
     recipient_email: str = Field(..., description="Target supplier or customer email")
     subject: str = Field(..., min_length=5)
     rfq_id: str = Field(..., min_length=1)
-    parts: List[PartItem] = Field(..., min_items=1)
+    parts: List[PartItem] = Field(..., min_length=1)
 
     @field_validator("recipient_email")
     @classmethod
