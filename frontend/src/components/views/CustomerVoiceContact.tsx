@@ -50,7 +50,7 @@ export const CustomerVoiceContact: React.FC<CustomerVoiceContactProps> = ({ uiLa
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/60 p-3 sm:p-6" onMouseDown={event => { if (event.target === event.currentTarget) close(); }}>
+    <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-slate-950/60 p-3 sm:p-6" onMouseDown={event => { if (event.target === event.currentTarget) close(); }}>
       <section role="dialog" aria-modal="true" aria-labelledby="customer-voice-title" className="flex max-h-[92vh] w-full max-w-xl flex-col overflow-hidden border border-slate-200 bg-white shadow-2xl">
         <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
           <div>

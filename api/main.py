@@ -369,6 +369,17 @@ VOICE_TOOL_DEFINITIONS = [
 
 # Endpoints
 
+@app.on_event("startup")
+async def initialize_local_voice_recordings():
+    production = os.getenv("WT_ENV", os.getenv("WT_AUTH_ENV", "development")).strip().lower() == "production"
+    if production:
+        await preflight_database()
+    try:
+        await asyncio.to_thread(initialize_voice_media)
+    except Exception as exc:
+        logger.warning("voice_media_initialization_failed error=%s", type(exc).__name__)
+
+
 @app.post("/api/auth/otp/request")
 async def otp_request(request: OtpRequest):
     requested_role = request.role.strip().upper()
