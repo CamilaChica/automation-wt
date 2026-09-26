@@ -83,6 +83,7 @@ def read_source(backup: Path) -> dict[str, list[dict[str, Any]]]:
     source["snapshot_quotes"] = list(state.get("quotes", {}).values())
     source["snapshot_quote_items"] = [row for rows in state.get("quote_items", {}).values() for row in rows]
     source["snapshot_audit_logs"] = [row for rows in state.get("audit_logs", {}).values() for row in rows]
+    source["snapshot_suppliers"] = list(state.get("suppliers", {}).values())
     source["snapshot_inventory"] = list(state.get("inventory", {}).values())
     source["snapshot_shipments"] = list(state.get("shipments", {}).values())
     source["snapshot_shipment_events"] = [row for rows in state.get("shipment_events", {}).values() for row in rows]
@@ -244,8 +245,18 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
                 "created_at": _date(row.get("created_at")), "sent_at": _date(row.get("sent_at")),
             })
 
-    records = []
+    operational_records: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def put_operational(domain: str, record_id: Any, payload: dict[str, Any]) -> None:
+        if record_id:
+            operational_records[(domain, str(record_id))] = {"domain": domain, "record_id": str(record_id), "payload": payload}
+
     for domain, domain_rows in (
+        ("rfqs", source["snapshot_rfqs"]),
+        ("rfq_items", source["snapshot_rfq_items"]),
+        ("quotes", source["snapshot_quotes"]),
+        ("quote_items", source["snapshot_quote_items"]),
+        ("suppliers", source["snapshot_suppliers"]),
         ("inventory", source["snapshot_inventory"]),
         ("shipments", source["snapshot_shipments"]),
         ("shipment_events", source["snapshot_shipment_events"]),
@@ -253,7 +264,87 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
         for row in domain_rows:
             record_id = str(row.get("id") or "")
             if record_id:
-                records.append({"domain": domain, "record_id": record_id, "payload": row})
+                put_operational(domain, record_id, row)
+
+    snapshot_rfqs_by_id = {str(row.get("id")): row for row in source["snapshot_rfqs"] if row.get("id")}
+    for row in rfqs.values():
+        record = dict(snapshot_rfqs_by_id.get(row["id"], {}))
+        record.update({
+            "id": row["id"], "customer_name": row["customer_name"],
+            "customer_email": row["customer_email"], "status": row["status"],
+            "raw_text": row["raw_text"], "thread_id": row["thread_id"],
+        })
+        if "created_at" not in record and row.get("created_at") is not None:
+            record["created_at"] = row["created_at"]
+        record.setdefault("workflow_state", row["status"])
+        record.setdefault("version", 1)
+        record.setdefault("automation_paused", False)
+        record.setdefault("pause_reason", None)
+        put_operational("rfqs", row["id"], record)
+
+    snapshot_rfq_items_by_id = {str(row.get("id")): row for row in source["snapshot_rfq_items"] if row.get("id")}
+    for row in rfq_items:
+        record = dict(snapshot_rfq_items_by_id.get(row["id"], {}))
+        record.update({
+            "id": row["id"], "rfq_id": row["rfq_id"],
+            "requested_part_number": row["part_number"],
+            "resolved_part_number": record.get("resolved_part_number"),
+            "quantity": row["quantity"], "condition_preference": row["condition_code"] or "NE",
+        })
+        record.setdefault("uom", row.get("details", {}).get("uom", "EA"))
+        record.setdefault("aircraft_type", row.get("details", {}).get("aircraft_type"))
+        put_operational("rfq_items", row["id"], record)
+
+    snapshot_quotes_by_id = {str(row.get("id")): row for row in source["snapshot_quotes"] if row.get("id")}
+    for row in quotes_by_id.values():
+        record = dict(snapshot_quotes_by_id.get(row["id"], {}))
+        record.update({"id": row["id"], "rfq_id": row["rfq_id"], "status": row["status"], "total_amount": row["total_amount"]})
+        record.setdefault("subtotal", row["total_amount"])
+        record.setdefault("shipping_cost", 0.0)
+        record.setdefault("version", 1)
+        put_operational("quotes", row["id"], record)
+
+    snapshot_quote_items_by_id = {str(row.get("id")): row for row in source["snapshot_quote_items"] if row.get("id")}
+    for row in quote_items_by_id.values():
+        details = row.get("details") or {}
+        record = dict(snapshot_quote_items_by_id.get(row["id"], {}))
+        record.update({
+            "id": row["id"], "quote_id": row["quote_id"], "rfq_item_id": details.get("rfq_item_id", ""),
+            "part_number": row["part_number"], "description": details.get("description") or row["part_number"],
+            "quantity": row["quantity"], "uom": details.get("uom", "EA"),
+            "unit_price": row["unit_price"], "source": details.get("source", "Legacy"),
+            "unit_cost": details.get("unit_cost", 0.0), "margin_percent": details.get("margin_percent", 0.0),
+            "certificate_type": details.get("certification") or details.get("certificate_type") or "Unavailable",
+            "condition": details.get("condition"), "lead_time_days": details.get("lead_time"),
+            "compliance_status": details.get("compliance_status", "Needs_Review"),
+        })
+        attachments = details.get("attachments", [])
+        record["attachments"] = decode_json(attachments, []) if isinstance(attachments, str) else attachments
+        put_operational("quote_items", row["id"], record)
+
+    snapshot_suppliers_by_id = {str(row.get("id")): row for row in source["snapshot_suppliers"] if row.get("id")}
+    for row in suppliers.values():
+        supplier_id = row["id"]
+        record = dict(snapshot_suppliers_by_id.get(supplier_id, {}))
+        if not record:
+            company = row.get("company_name") or "Unknown Supplier"
+            record = {
+                "id": supplier_id, "company_name": company, "dba_name": None,
+                "contact_name": row.get("contact_name") or company, "contact_title": None,
+                "phone": row.get("phone") or "", "phone_alt": None,
+                "email": row.get("email") or "", "email_quotes": None, "website": None,
+                "address_line1": "", "address_line2": None, "city": "",
+                "state_province": "", "postal_code": "", "country": "",
+                "approval_status": row.get("approval_status") or "Pending",
+                "itar_certified": bool(row.get("itar_certified")), "account_manager": None, "notes": None,
+            }
+        put_operational("suppliers", supplier_id, record)
+
+    for index, row in enumerate(source["snapshot_audit_logs"], start=1):
+        record_id = f"{row.get('rfq_id', 'unknown')}:{row.get('id') or index}"
+        put_operational("audit_logs", record_id, row)
+
+    records = list(operational_records.values())
 
     return {
         "customers": list(customers.values()), "rfqs": list(rfqs.values()), "rfq_items": rfq_items,
@@ -263,6 +354,40 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
         "inbound_emails": inbound_emails, "communication_tasks": tasks,
         "operational_records": records,
     }
+
+
+def reconciliation_warnings(source: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    full_quote_item_ids = {str(row.get("id")) for row in source["snapshot_quote_items"] if row.get("id")}
+    incomplete_quote_items = [
+        row for row in source["customer_quote_items"]
+        if str(row.get("id")) not in full_quote_item_ids
+    ]
+    if incomplete_quote_items:
+        warnings.append({
+            "severity": "blocking",
+            "table": "customer_quote_items",
+            "count": len(incomplete_quote_items),
+            "reason": "SQLite normalized quote rows do not contain source, acquisition cost, margin, or compliance fields required to recreate QuoteItem runtime payloads. Recover a current complete state export or reconcile these records under an explicit manual-review policy before apply.",
+        })
+
+    complete_supplier_ids = {str(row.get("id")) for row in source["snapshot_suppliers"] if row.get("id")}
+    incomplete_suppliers = [row for row in source["suppliers"] if str(row.get("id")) not in complete_supplier_ids]
+    if incomplete_suppliers:
+        warnings.append({
+            "severity": "review", "table": "suppliers", "count": len(incomplete_suppliers),
+            "reason": "Supplier registry rows do not carry the full supplier contact/address profile required by the legacy Supplier model; reconcile missing profile fields before enabling profile-dependent actions.",
+        })
+    return warnings
+
+
+def assert_apply_has_complete_source(warnings: list[dict[str, Any]]) -> None:
+    blockers = [warning for warning in warnings if warning["severity"] == "blocking"]
+    if blockers:
+        raise RuntimeError(
+            "Reconciliation apply is blocked by incomplete source data: "
+            + "; ".join(f"{item['table']}={item['count']}" for item in blockers)
+        )
 
 
 def preflight_database(url: str, attempts: int = 5) -> None:
@@ -304,7 +429,13 @@ def upsert_rows(connection, metadata: MetaData, table_name: str, rows: list[dict
 def reconcile(backup: Path, *, apply: bool, url: str | None) -> dict[str, Any]:
     source = read_source(backup)
     rows = target_rows(source)
-    summary: dict[str, Any] = {"backup": str(backup), "mode": "apply" if apply else "dry-run", "tables": {}}
+    warnings = reconciliation_warnings(source)
+    summary: dict[str, Any] = {
+        "backup": str(backup), "mode": "apply" if apply else "dry-run",
+        "tables": {}, "warnings": warnings,
+    }
+    if apply:
+        assert_apply_has_complete_source(warnings)
     if not url:
         raise RuntimeError("DATABASE_URL is required for reconciliation. No local fallback is inferred.")
     preflight_database(url)
@@ -352,7 +483,11 @@ def main() -> int:
         source = read_source(backup)
         mapped = target_rows(source)
         if args.plan_only:
-            print(json.dumps({"backup": str(backup), "mode": "plan-only", "source_tables": {name: len(rows) for name, rows in mapped.items()}}, indent=2))
+            print(json.dumps({
+                "backup": str(backup), "mode": "plan-only",
+                "source_tables": {name: len(rows) for name, rows in mapped.items()},
+                "warnings": reconciliation_warnings(source),
+            }, indent=2))
             return 0
         url = os.getenv("DATABASE_URL", "").strip()
         if url.startswith("postgresql://"):

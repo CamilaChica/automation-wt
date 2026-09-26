@@ -121,13 +121,17 @@ def test_outbox_dispatch_sends_only_after_claim_transaction_has_closed(monkeypat
 
 
 def test_reconciliation_maps_legacy_ids_stably_and_conflict_policy_preserves_target():
-    from scripts.reconcile_sqlite_to_postgres import target_rows
+    from scripts.reconcile_sqlite_to_postgres import assert_apply_has_complete_source, reconciliation_warnings, target_rows
 
     source = {
-        "customers": [], "rfqs": [], "snapshot_rfqs": [], "rfq_items": [], "snapshot_rfq_items": [],
-        "customer_quotes": [], "snapshot_quotes": [], "customer_quote_items": [], "snapshot_quote_items": [],
+        "customers": [],
+        "rfqs": [{"id": "RFQ-NORMALIZED", "customer_email": "buyer@example.test", "customer_name": "Buyer", "raw_text": "Part 123", "status": "Intake"}],
+        "snapshot_rfqs": [], "rfq_items": [{"id": "ITEM-NORMALIZED", "rfq_id": "RFQ-NORMALIZED", "part_number": "123-45", "quantity": 2, "condition_code": "NE", "details": {"uom": "EA"}}], "snapshot_rfq_items": [],
+        "customer_quotes": [{"id": "QUOTE-NORMALIZED", "rfq_id": "RFQ-NORMALIZED", "status": "Draft", "total_amount": 50}],
+        "snapshot_quotes": [], "customer_quote_items": [{"id": "QI-NORMALIZED", "quote_id": "QUOTE-NORMALIZED", "part_number": "123-45", "quantity": 2, "unit_price": 25, "details": {"certification": "CoC"}}], "snapshot_quote_items": [],
         "suppliers": [{"id": "SUP-1", "company_name": "Supplier", "email": "supplier@example.test", "approval_status": "Approved"}],
         "supplier_parts": [{"id": "PART-1", "supplier_id": "SUP-1", "part_number": "060-1234-00", "source_email_id": "message-id-1"}],
+        "snapshot_suppliers": [{"id": "SUP-MODEL-1", "company_name": "Supplier Model", "contact_name": "Contact"}],
         "snapshot_audit_logs": [
             {"id": 1, "rfq_id": "RFQ-A", "agent_name": "Agent", "action_type": "parse", "message": "A"},
             {"id": 1, "rfq_id": "RFQ-B", "agent_name": "Agent", "action_type": "parse", "message": "B"},
@@ -140,4 +144,16 @@ def test_reconciliation_maps_legacy_ids_stably_and_conflict_policy_preserves_tar
     assert first["supplier_parts"][0]["id"] == second["supplier_parts"][0]["id"]
     assert first["supplier_parts"][0]["supplier_id"] == "SUP-1"
     assert len({row["id"] for row in first["audit_events"]}) == 2
+    records = {(row["domain"], row["record_id"]): row["payload"] for row in first["operational_records"]}
+    assert {"suppliers", "rfqs", "rfq_items", "quotes", "quote_items"} <= {domain for domain, _record_id in records}
+    assert records[("rfqs", "RFQ-NORMALIZED")]["customer_email"] == "buyer@example.test"
+    assert records[("quotes", "QUOTE-NORMALIZED")]["total_amount"] == 50
+    warnings = reconciliation_warnings(source)
+    assert any(item["table"] == "customer_quote_items" and item["severity"] == "blocking" for item in warnings)
+    try:
+        assert_apply_has_complete_source(warnings)
+    except RuntimeError as exc:
+        assert "incomplete source data" in str(exc)
+    else:
+        raise AssertionError("Incomplete quote data must prevent reconciliation apply")
     assert "on_conflict_do_nothing" in Path("scripts/reconcile_sqlite_to_postgres.py").read_text(encoding="utf-8")

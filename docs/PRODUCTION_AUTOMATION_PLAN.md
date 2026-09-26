@@ -10,10 +10,12 @@
 
 ## Backup and Reconciliation
 
-- [ ] Create and verify a PostgreSQL-native backup before changing production schema or data. `backups/20260926T202815Z` is a local SQLite archive, not a PostgreSQL backup.
-- [ ] Review the archived SQLite source mapping: customers 37, RFQs 439, RFQ items 1, quotes 255, quote items 242, suppliers 3, supplier offers 3, audit events 14, communications 377, scheduled tasks 1, and inventory/shipment records 10.
-- [ ] Review duplicate/conflicting records and the deterministic legacy audit-ID mapping in `scripts/reconcile_sqlite_to_postgres.py`.
-- [ ] Run the reconciliation dry-run against the verified target, review its report, then use `--apply` only after backup approval.
+- [ ] Create and verify a PostgreSQL-native backup before changing production schema or data. The local SQLite snapshot and ZIP at `backups/20260926T202815Z` passed SQLite/ZIP integrity checks but are not a PostgreSQL backup.
+- [ ] Review the archived SQLite source mapping: customers 37, RFQs 439, RFQ items 1, quotes 255, quote items 242, suppliers 3, supplier offers 3, audit events 14, communications 377, scheduled tasks 1, inventory/shipment records 10, and 966 runtime operational records.
+- [ ] Resolve duplicate/conflicting records and review the deterministic legacy audit-ID mapping in `scripts/reconcile_sqlite_to_postgres.py`. `ON CONFLICT DO NOTHING` preserves target rows; target-side conflicts cannot be compared until PostgreSQL is reachable.
+- [ ] Recover complete quote-item source data or approve an explicit manual-review reconciliation policy. The plan identifies 241/242 normalized quote items missing source, acquisition cost, margin, and compliance fields; `--apply` refuses to run while this blocker exists.
+- [ ] Enrich/review 3 supplier rows missing full legacy contact/address profiles before enabling profile-dependent actions.
+- [ ] Run the reconciliation dry-run against the verified target, review its conflict and data-quality report, then use `--apply` only after backup approval and all blocking source gaps are resolved.
 - [ ] Verify source-key parity and row counts after reconciliation; retain the report and a post-migration backup.
 
 ## PostgreSQL Runtime and Outbox
