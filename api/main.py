@@ -392,10 +392,11 @@ async def ready():
         raise HTTPException(status_code=503, detail=f"database not ready: {exc}") from exc
     persistence = persistence_status(postgres_healthy=postgres_healthy)
     postgresql_mirroring = bool(postgres_healthy and persistence["inventory_postgres_mirror_enabled"])
-    if production and not postgresql_mirroring:
+    operational_postgresql_primary = persistence["storage_engine"] == "postgresql"
+    if production and not (postgresql_mirroring and operational_postgresql_primary):
         raise HTTPException(
             status_code=503,
-            detail="PostgreSQL is reachable only when the operational mirror is enabled.",
+            detail="PostgreSQL mirroring and PostgreSQL operational repositories must both be active.",
         )
     return {
         "status": "ready",

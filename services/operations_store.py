@@ -16,9 +16,17 @@ SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema.sql"
 
 class OperationsStore:
     def __init__(self, path: str | Path | None = None):
-        production = os.getenv("ENVIRONMENT", os.getenv("WT_ENV", "development")).strip().lower() == "production"
+        production = (
+            os.getenv("ENVIRONMENT", os.getenv("WT_ENV", "development")).strip().lower() == "production"
+            or os.getenv("RENDER", "false").strip().lower() in {"1", "true", "yes", "on"}
+        )
         if production and not os.getenv("DATABASE_URL", "").strip():
             raise RuntimeError("DATABASE_URL is required for production operational persistence.")
+        if production:
+            raise RuntimeError(
+                "PostgreSQL operational repositories are not wired into OperationsStore; "
+                "refusing to use SQLite for production business state."
+            )
         configured = path or os.getenv("OPERATIONS_DB_PATH")
         self.path = Path(configured) if configured else DEFAULT_PATH
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -31,6 +39,10 @@ class OperationsStore:
             conn.commit()
         finally:
             conn.close()
+
+    @property
+    def storage_engine(self) -> str:
+        return "sqlite"
 
     @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:

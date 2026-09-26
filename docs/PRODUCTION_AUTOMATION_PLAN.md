@@ -20,6 +20,7 @@
 - Keep `0002_supplier_quote_inv_fields` at 32 characters or fewer.
 - Keep `version_table_column_length=255` in both Alembic modes.
 - Production must fail if PostgreSQL is missing or unreachable.
+- Production startup must also refuse the current SQLite `OperationsStore` until PostgreSQL repositories are wired into API and worker call sites. Deploying before that adapter is complete is expected to fail startup rather than run split state.
 - SQLite is allowed only for isolated local tests; never for production business state.
 
 ## 2. Render Configuration
