@@ -77,9 +77,8 @@ Worker ownership:
 - Never use `/tmp` as production operational storage.
 - Ignore messages sent by `sales@wingedtycoons.com` to prevent self-reply loops.
 - Read only Inbox messages for RFQ ingestion.
-- Process each Graph message ID once.
-- Use `IdempotencyRepository.claim()` as an atomic PostgreSQL operation before processing; integrate the claim and business writes into the same transaction in both workers.
 - Make workers claim message IDs through `IdempotencyRepository.claim()` using PostgreSQL atomic insert-on-conflict within the same transaction as business writes.
+- Process each Graph message ID once.
 - Reject supplier quote references as part numbers.
 - If a supplier PDF is unreadable, request quote details in the same email body thread.
 - Exclude supplier offers older than 30 days from automatic pricing and request threaded confirmation.
@@ -156,3 +155,11 @@ Do not mark the application ready until:
 - Production startup refuses SQLite `OperationsStore` until PostgreSQL repositories are wired into the runtime.
 - Remaining P0 work: migrate `db_service`, communication/audit persistence, workflow state, operator-review/tasks, API routes, and both workers to shared PostgreSQL repositories and transactions.
 - Local tests for schema coverage, fail-closed SQLite behavior, readiness, and idempotency pass. Live PostgreSQL integration and concurrent-worker tests require a test PostgreSQL instance and are not yet verified.
+
+## Render Readiness Mismatch Audit — 2026-09-26
+
+The live `/ready` response currently returns HTTP `200` and claims `storage_engine=postgresql`, `operational_store=postgresql`, mirroring enabled, and migration not required. However, the same response reports `operational_store_path=/opt/render/project/src/data/operations.db`.
+
+The committed source at `5bf319c` identifies the actual `OperationsStore.storage_engine` as `sqlite`, and `persistence_status()` only reports PostgreSQL-primary when that runtime store reports `postgresql`. Production initialization also refuses to start with the SQLite store. Therefore, the live payload is inconsistent with this source revision and cannot be accepted as proof that operational repositories are migrated. It indicates Render is serving a stale/different build or an outdated readiness implementation.
+
+Required action: redeploy the backend from the current `main` commit, verify the deployed revision, and inspect the deployed readiness implementation. Do not sign off until the API reads/writes RFQs, quotes, communications, workflow state, tasks, and idempotency through shared PostgreSQL repositories and the readiness path no longer identifies a SQLite file.
