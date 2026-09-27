@@ -87,6 +87,7 @@ export interface ApproveQuoteBody {
   operator_name: string;
   comments?: string;
   items_override?: Array<{ quote_item_id: string; unit_price: number }>;
+  expected_version?: number;
 }
 export interface RejectQuoteBody { operator_name: string; comments: string }
 export interface PurchaseOrderBody {

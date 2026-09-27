@@ -170,7 +170,7 @@ export const CustomerDashboard: React.FC = () => {
       return;
     }
     try {
-      const result = await dispatchQuoteMutation.mutateAsync({ quoteId: liveQuote.id, operatorName: approverName });
+      const result = await dispatchQuoteMutation.mutateAsync({ quoteId: liveQuote.id, operatorName: approverName, expectedVersion: liveQuote.version });
       if (!result) return;
       setIsApproveModalOpen(false);
       setNotification({ type: 'success', message: result.message });

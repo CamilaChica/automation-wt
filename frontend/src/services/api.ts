@@ -673,11 +673,12 @@ export const apiService = {
     return res.data;
   },
 
-  async approveQuote(quote_id: string, operator_name: string, overrides?: Array<{ quote_item_id: string; unit_price: number }>): Promise<{ status: string; quote_id: string; message: string }> {
+  async approveQuote(quote_id: string, operator_name: string, overrides?: Array<{ quote_item_id: string; unit_price: number }>, expected_version?: number): Promise<{ status: string; quote_id: string; message: string }> {
     try {
       const res = await axios.post(`${API_BASE}/quotes/${quote_id}/approve`, {
         operator_name,
-        items_override: overrides
+        items_override: overrides,
+        expected_version
       });
       return res.data;
     } catch (error) {

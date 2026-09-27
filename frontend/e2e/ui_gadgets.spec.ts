@@ -27,7 +27,7 @@ async function installApiRoutes(page: Page) {
 
     if (path.endsWith('/rfqs')) body = rfqs;
     if (path.includes('/rfqs/') && request.method() === 'GET') {
-      body = { ...rfqs[0], logs: [], quote_details: { quote: { id: 'QUOTE-1', total_amount: 14450 } } };
+      body = { ...rfqs[0], logs: [], quote_details: { quote: { id: 'QUOTE-1', total_amount: 14450, version: 4 } } };
     }
     if (path.endsWith('/catalog/search')) {
       body = [{ part_number: '32-11-45-01', condition_code: 'SV', quantity_available: 3, certificate_type: 'FAA 8130-3', has_full_trace: true }];
@@ -145,8 +145,10 @@ test.describe('UI gadget clickability', () => {
     await installApiRoutes(page);
     let releasePurchaseOrder: (() => void) | undefined;
     let dispatchRequests = 0;
+    let expectedVersion: number | undefined;
     await page.route('**/api/quotes/QUOTE-1/approve', async route => {
       dispatchRequests += 1;
+      expectedVersion = route.request().postDataJSON().expected_version;
       await new Promise<void>(resolve => { releasePurchaseOrder = resolve; });
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'Sent', quote_id: 'QUOTE-1', message: 'Quote QUOTE-1 dispatched.' }) });
     });
@@ -158,6 +160,7 @@ test.describe('UI gadget clickability', () => {
     const dispatch = page.getByRole('button', { name: 'CONFIRM & DISPATCH QUOTE' });
     await dispatch.click();
     await expect.poll(() => dispatchRequests).toBe(1);
+    expect(expectedVersion).toBe(4);
 
     const pendingDispatch = page.getByRole('button', { name: 'DISPATCHING...' });
     await expect(pendingDispatch).toBeDisabled();

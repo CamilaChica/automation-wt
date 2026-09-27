@@ -242,8 +242,8 @@ export function useCreatePurchaseOrder() {
 }
 
 export function useDispatchQuote() {
-  return useApiMutation((input: { quoteId: string; operatorName: string; overrides?: Array<{ quote_item_id: string; unit_price: number }> }) =>
-    apiService.approveQuote(input.quoteId, input.operatorName, input.overrides), [apiQueryKeys.rfqs, 'rfq-detail']);
+  return useApiMutation((input: { quoteId: string; operatorName: string; overrides?: Array<{ quote_item_id: string; unit_price: number }>; expectedVersion?: number }) =>
+    apiService.approveQuote(input.quoteId, input.operatorName, input.overrides, input.expectedVersion), [apiQueryKeys.rfqs, 'rfq-detail']);
 }
 
 export function useTraceDecision() {
