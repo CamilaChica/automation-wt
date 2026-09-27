@@ -2,6 +2,7 @@ import React from 'react';
 import { CircleMarker, MapContainer, Polyline, TileLayer, Tooltip } from 'react-leaflet';
 import { LatLngBounds, type LatLngExpression } from 'leaflet';
 import { MapPin, CheckCircle, Clock } from 'lucide-react';
+import { Badge } from './Badge';
 
 const mia: LatLngExpression = [25.7959, -80.287];
 const dfw: LatLngExpression = [32.8998, -97.0403];
@@ -34,7 +35,7 @@ export const WorldMapTelemetry: React.FC<WorldMapTelemetryProps> = ({
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <span className="inline-flex items-center whitespace-nowrap rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 font-mono text-[10px] font-bold text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">DEMO ROUTE</span>
+          <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
           <span className="inline-flex items-center whitespace-nowrap rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 font-mono text-[10px] font-bold text-aero-blue dark:border-aero-blue/30 dark:bg-aero-blue/10">ORDER: {orderId}</span>
         </div>
       </div>

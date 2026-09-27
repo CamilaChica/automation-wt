@@ -13,6 +13,7 @@ import { CustomerPortal } from './components/views/CustomerPortal';
 import { SwarmSimulationView } from './components/views/SwarmSimulationView';
 import { VoiceServiceView } from './components/views/VoiceServiceView';
 import { AuthScreen } from './components/common/AuthScreen';
+import { EmployeeProfilePanel } from './components/common/EmployeeProfilePanel';
 import { apiService } from './services/api';
 import { getThemePreference, getViewPreference, setThemePreference, setViewPreference } from './services/preferences';
 
@@ -22,9 +23,16 @@ const InternalApp: React.FC = () => {
   const [theme, setThemeState] = useState<ThemeMode>(getThemePreference('dark'));
   const [isAuditLogOpen, setIsAuditLogOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isEmployeeProfileOpen, setIsEmployeeProfileOpen] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AgentAuditLog[]>([]);
   const [auditRfqId, setAuditRfqId] = useState('');
   const [isLiveAuditUnavailable, setIsLiveAuditUnavailable] = useState(false);
+
+  useEffect(() => {
+    const handleAuthChange = () => setAuthenticated(apiService.getRole() === 'internal');
+    window.addEventListener('wt-auth-changed', handleAuthChange);
+    return () => window.removeEventListener('wt-auth-changed', handleAuthChange);
+  }, []);
 
   const sampleLogs: AgentAuditLog[] = [
     {
@@ -201,6 +209,7 @@ const InternalApp: React.FC = () => {
         }}
         onOpenAuditLog={() => setIsAuditLogOpen(true)}
         onOpenSidebar={() => setIsSidebarOpen(true)}
+        onOpenProfile={() => setIsEmployeeProfileOpen(true)}
       />
 
       {/* Main Content Layout (Sidebar + Active View) */}
@@ -210,6 +219,7 @@ const InternalApp: React.FC = () => {
           onSelectView={setCurrentView}
           isMobileOpen={isSidebarOpen}
           onCloseMobile={() => setIsSidebarOpen(false)}
+          onOpenProfile={() => setIsEmployeeProfileOpen(true)}
         />
 
         <main className="min-w-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950/60">
@@ -225,6 +235,7 @@ const InternalApp: React.FC = () => {
         rfqId={auditRfqId || 'Live operations'}
         isLiveAuditUnavailable={isLiveAuditUnavailable}
       />
+      {isEmployeeProfileOpen && <EmployeeProfilePanel onClose={() => setIsEmployeeProfileOpen(false)} />}
     </div>
   );
 };

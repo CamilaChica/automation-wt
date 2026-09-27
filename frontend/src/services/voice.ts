@@ -1,5 +1,4 @@
-import axios from 'axios';
-import { API_BASE } from './api';
+import { apiService } from './api';
 
 export const voiceLanguages = [
   { code: 'en', label: 'English' },
@@ -71,17 +70,14 @@ export interface VoiceDashboard {
 
 export const voiceService = {
   async createSession(language: VoiceLanguage = 'en'): Promise<{ client_secret: string; model: string }> {
-    const response = await axios.post(`${API_BASE}/session`, { language });
-    return response.data;
+    return apiService.createRealtimeSession(language);
   },
 
   async getDashboard(): Promise<VoiceDashboard> {
-    const response = await axios.get(`${API_BASE}/voice/dashboard`);
-    return response.data;
+    return apiService.getVoiceDashboard<VoiceDashboard>();
   },
 
   async executeTool(name: string, arguments_: Record<string, unknown>): Promise<unknown> {
-    const response = await axios.post(`${API_BASE}/voice/tools/${encodeURIComponent(name)}`, arguments_);
-    return response.data;
+    return apiService.executeVoiceTool(name, arguments_);
   },
 };

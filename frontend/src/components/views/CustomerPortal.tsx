@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowRight, CheckCircle2, ChevronDown, Clock3, FileSearch, Globe2, Headphones, LogOut, Mail, Plane, Search, ShieldCheck } from 'lucide-react';
-import { apiService } from '../../services/api';
+import { AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, Clock3, FileSearch, Globe2, Headphones, Loader2, LogOut, Mail, Plane, Search, ShieldCheck } from 'lucide-react';
+import { apiService, getApiErrorMessage } from '../../services/api';
+import { Badge } from '../common/Badge';
 import { BrandMark } from '../common/BrandMark';
 import { CustomerVoiceContact } from './CustomerVoiceContact';
 import { FloatingQa } from '../common/FloatingQa';
 import { normalizeQuantityInput } from '../../utils/quantity';
 import { customerLanguages, CustomerLanguage, getCustomerLanguagePreference, setCustomerLanguagePreference, translateCustomerPortal } from '../../i18n/customerPortal';
+import { useCreatePurchaseOrder, useCreateRFQ, useShipmentTrace } from '../../hooks/useApiResources';
 
 type CatalogResult = Awaited<ReturnType<typeof apiService.searchCatalog>>[number];
 
@@ -15,6 +17,7 @@ export const CustomerPortal: React.FC = () => {
   const [isVoiceContactOpen, setIsVoiceContactOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<CatalogResult[]>([]);
+  const [usingFallbackCatalog, setUsingFallbackCatalog] = useState(false);
   const [customerName, setCustomerName] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
   const [partNumber, setPartNumber] = useState('');
@@ -31,11 +34,16 @@ export const CustomerPortal: React.FC = () => {
   const [poDocument, setPoDocument] = useState<File | null>(null);
   const [isSubmittingPo, setIsSubmittingPo] = useState(false);
   const [trackingToken, setTrackingToken] = useState('');
-  const [shipment, setShipment] = useState<import('../../types').Shipment | null>(null);
-  const [isTracking, setIsTracking] = useState(false);
+  const [requestedTrackingToken, setRequestedTrackingToken] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [noticeType, setNoticeType] = useState<'success' | 'error' | 'info'>('info');
+  const createRfqMutation = useCreateRFQ();
+  const purchaseOrderMutation = useCreatePurchaseOrder();
+  const shipmentTraceQuery = useShipmentTrace(requestedTrackingToken);
+  const shipment = shipmentTraceQuery.data;
+  const isTracking = shipmentTraceQuery.isLoading;
   const t = (phrase: Parameters<typeof translateCustomerPortal>[1], values?: Record<string, string | number>) => translateCustomerPortal(language, phrase, values);
 
   useEffect(() => {
@@ -46,15 +54,21 @@ export const CustomerPortal: React.FC = () => {
   const searchCatalog = async (value: string) => {
     if (!value.trim()) {
       setResults([]);
+      setUsingFallbackCatalog(false);
+      setNoticeType('info');
       setNotice(t('enterPartNumber'));
       return;
     }
     setIsSearching(true);
     try {
-      setResults(await apiService.searchCatalog(value, condition || undefined));
+      const result = await apiService.searchCatalogWithSource(value, condition || undefined);
+      setResults(result.results);
+      setUsingFallbackCatalog(result.isFallback);
       setNotice(null);
-    } catch {
-      setNotice(t('catalogSearchFailed'));
+    } catch (error) {
+      setUsingFallbackCatalog(false);
+      setNoticeType('error');
+      setNotice(getApiErrorMessage(error, t('catalogSearchFailed')));
     } finally {
       setIsSearching(false);
     }
@@ -67,23 +81,28 @@ export const CustomerPortal: React.FC = () => {
 
   const handleRequest = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (isSubmitting) return;
     if (!agreementSigned) {
+      setNoticeType('error');
       setNotice(t('agreementRequired'));
       return;
     }
     setIsSubmitting(true);
     try {
       const attachmentIds = partsListFile ? [(await apiService.uploadAttachment(partsListFile)).attachment_id] : [];
-      const response = await apiService.submitCustomerRFQ(
-        `Customer request for P/N ${partNumber}, quantity ${quantity}, condition ${condition}. ${details}`,
-        customerName,
-        customerEmail,
-        attachmentIds,
-      );
+      const response = await createRfqMutation.mutateAsync({
+        raw_text: `Customer request for P/N ${partNumber}, quantity ${quantity}, condition ${condition}. ${details}`,
+        customer_name: customerName,
+        customer_email: customerEmail,
+        attachment_ids: attachmentIds,
+      });
+      if (!response) return;
       setNotice(response.message || `Request ${response.rfq_id} received.`);
+      setNoticeType('success');
       setTrackingStatus(t('processingFulfillment'));
-    } catch {
-      setNotice(t('rfqSubmissionFailed'));
+    } catch (error) {
+      setNoticeType('error');
+      setNotice(getApiErrorMessage(error, t('rfqSubmissionFailed')));
     } finally {
       setIsSubmitting(false);
     }
@@ -91,22 +110,32 @@ export const CustomerPortal: React.FC = () => {
 
   const handlePurchaseOrder = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (isSubmittingPo) return;
     if (!exportCertificate || !kycForm || !poDocument) {
+      setNoticeType('error');
       setNotice('Upload the signed export certification, signed KYC form, and purchase order document before submitting.');
       return;
     }
     setIsSubmittingPo(true);
     try {
       const uploaded = await Promise.all([exportCertificate, kycForm, poDocument].map(file => apiService.uploadAttachment(file)));
-      await apiService.submitPurchaseOrder(quoteId, poNumber, customerEmail, uploaded.map(item => item.attachment_id));
+      const poResponse = await purchaseOrderMutation.mutateAsync({
+        quoteId,
+        poNumber,
+        customerEmail,
+        attachmentIds: uploaded.map(item => item.attachment_id),
+      });
+      if (!poResponse) return;
+      setNoticeType('success');
       setNotice(t('poReceived', { number: poNumber }));
       setQuoteId('');
       setPoNumber('');
       setExportCertificate(null);
       setKycForm(null);
       setPoDocument(null);
-    } catch {
-      setNotice(t('purchaseOrderFailed'));
+    } catch (error) {
+      setNoticeType('error');
+      setNotice(getApiErrorMessage(error, t('purchaseOrderFailed')));
     } finally {
       setIsSubmittingPo(false);
     }
@@ -114,24 +143,19 @@ export const CustomerPortal: React.FC = () => {
 
   const handleTrackShipment = async (event: React.FormEvent) => {
     event.preventDefault();
-    setIsTracking(true);
-    try {
-      setShipment(await apiService.trackShipment(trackingToken));
-      setNotice(null);
-    } catch {
-      setNotice(t('trackingFailed'));
-    } finally {
-      setIsTracking(false);
-    }
+    if (!trackingToken.trim()) return;
+    setNotice(null);
+    if (requestedTrackingToken === trackingToken.trim()) void shipmentTraceQuery.refetch();
+    else setRequestedTrackingToken(trackingToken.trim());
   };
 
   useEffect(() => {
-    if (!trackingToken || !shipment) return;
+    if (!requestedTrackingToken || !shipment) return;
     const refresh = window.setInterval(() => {
-      void apiService.trackShipment(trackingToken).then(setShipment).catch(() => undefined);
+      void shipmentTraceQuery.refetch();
     }, 60000);
     return () => window.clearInterval(refresh);
-  }, [trackingToken, shipment]);
+  }, [requestedTrackingToken, shipment, shipmentTraceQuery.refetch]);
 
   return (
     <div lang={language} dir={language === 'ar' ? 'rtl' : 'ltr'} className="customer-portal-light min-h-screen bg-slate-50 text-slate-900">
@@ -210,8 +234,9 @@ export const CustomerPortal: React.FC = () => {
             <form onSubmit={handleSearch} className="flex gap-3">
               <label htmlFor="catalog-search" className="sr-only">{t('searchAircraftParts')}</label>
               <input id="catalog-search" name="catalog-search" autoComplete="off" aria-label={t('searchAircraftParts')} value={query} onChange={event => setQuery(event.target.value)} placeholder="e.g., 060-1234-00" className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
-              <button className="rounded-xl bg-cyan-700 px-4 py-3 font-bold text-white hover:bg-cyan-800" aria-label={t('searchParts')}><Search className="h-4 w-4" /></button>
+              <button disabled={isSearching} aria-busy={isSearching} className="rounded-xl bg-cyan-700 px-4 py-3 font-bold text-white hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60" aria-label={t('searchParts')}>{isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}</button>
             </form>
+            {usingFallbackCatalog && <div role="status" className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900"><Badge variant="outline">SAMPLE / DEMO DATA</Badge><span>Catalog results are local samples and are not confirmed availability.</span></div>}
             <div className="mt-5 space-y-3">
               {isSearching && <p className="text-sm text-slate-600">{t('searching')}</p>}
               {!isSearching && results.length === 0 && <p className="text-sm text-slate-600">{t('noMatches')}</p>}
@@ -275,9 +300,9 @@ export const CustomerPortal: React.FC = () => {
                 />
                 {t('agreement')}
               </label>
-              <button disabled={isSubmitting} className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-700 px-4 py-3 font-bold text-white hover:bg-cyan-800 disabled:opacity-60">{isSubmitting ? t('sendingRequest') : t('sendRequest')} <ArrowRight className="h-4 w-4" /></button>
+              <button disabled={isSubmitting} aria-busy={isSubmitting} className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-700 px-4 py-3 font-bold text-white hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60">{isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <ArrowRight className="h-4 w-4" />} {isSubmitting ? t('sendingRequest') : t('sendRequest')}</button>
             </div>
-            {notice && <p role="status" aria-live="polite" className="mt-4 flex gap-2 rounded-xl bg-emerald-400/10 p-3 text-sm text-emerald-300"><CheckCircle2 className="h-5 w-5 shrink-0" />{notice}</p>}
+            {notice && <p role={noticeType === 'error' ? 'alert' : 'status'} aria-live="polite" className={`mt-4 flex gap-2 rounded-xl p-3 text-sm ${noticeType === 'error' ? 'bg-red-50 text-red-800' : 'bg-emerald-50 text-emerald-800'}`}>{noticeType === 'error' ? <AlertTriangle className="h-5 w-5 shrink-0" /> : <CheckCircle2 className="h-5 w-5 shrink-0" />}{notice}</p>}
             {trackingStatus && (
               <p className="mt-3 rounded-xl border border-cyan-400/40 bg-cyan-400/10 p-3 text-xs font-semibold text-cyan-300">
                 {t('tracking')}: {trackingStatus}
@@ -290,16 +315,16 @@ export const CustomerPortal: React.FC = () => {
             <p className="mt-1 text-sm text-slate-700">{t('purchaseOrderDescription')}</p>
             <div className="mt-5 space-y-3">
               <label htmlFor="quote-id" className="sr-only">{t('quoteReference')}</label>
-              <input id="quote-id" name="quote-id" autoComplete="off" required value={quoteId} onChange={event => setQuoteId(event.target.value)} placeholder="e.g., QTE-123456" className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none" />
+              <input id="quote-id" name="quote-id" autoComplete="off" required disabled={isSubmittingPo} value={quoteId} onChange={event => setQuoteId(event.target.value)} placeholder="e.g., QTE-123456" className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none disabled:opacity-60" />
               <label htmlFor="po-number" className="sr-only">{t('poNumber')}</label>
-              <input id="po-number" name="po-number" autoComplete="off" required value={poNumber} onChange={event => setPoNumber(event.target.value)} placeholder="e.g., PO-1001" className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none" />
+              <input id="po-number" name="po-number" autoComplete="off" required disabled={isSubmittingPo} value={poNumber} onChange={event => setPoNumber(event.target.value)} placeholder="e.g., PO-1001" className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none disabled:opacity-60" />
               <label htmlFor="po-email" className="sr-only">{t('poEmail')}</label>
-              <input id="po-email" name="po-email" autoComplete="email" required type="email" value={customerEmail} onChange={event => setCustomerEmail(event.target.value)} placeholder="e.g., buyer@airline.com" className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none" />
+              <input id="po-email" name="po-email" autoComplete="email" required disabled={isSubmittingPo} type="email" value={customerEmail} onChange={event => setCustomerEmail(event.target.value)} placeholder="e.g., buyer@airline.com" className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none disabled:opacity-60" />
               <div className="rounded-xl border border-slate-300 bg-white p-3 text-xs text-slate-700"><p className="font-semibold">{t('requiredDocuments')}</p><div className="mt-2 flex flex-wrap gap-3"><a className="text-emerald-800 underline" href="/documents/WingedTycoons-Export-Compliance-Certification.pdf" download>{t('downloadExport')}</a><a className="text-emerald-800 underline" href="/documents/WingedTycoons-KYC-Form.pdf" download>{t('downloadKyc')}</a></div></div>
-              <label htmlFor="po-export" className="block text-xs text-slate-700">{t('signedExport')}<input id="po-export" name="po-export" required type="file" accept=".pdf,application/pdf" onChange={event => setExportCertificate(event.target.files?.[0] ?? null)} className="mt-1 block w-full text-xs" /></label>
-              <label htmlFor="po-kyc" className="block text-xs text-slate-700">{t('signedKyc')}<input id="po-kyc" name="po-kyc" required type="file" accept=".pdf,application/pdf" onChange={event => setKycForm(event.target.files?.[0] ?? null)} className="mt-1 block w-full text-xs" /></label>
-              <label htmlFor="po-document" className="block text-xs text-slate-700">{t('poDocument')}<input id="po-document" name="po-document" required type="file" accept=".pdf,application/pdf" onChange={event => setPoDocument(event.target.files?.[0] ?? null)} className="mt-1 block w-full text-xs" /></label>
-              <button disabled={isSubmittingPo} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60">{isSubmittingPo ? t('sendingPo') : t('submitPo')} <ArrowRight className="h-4 w-4" /></button>
+              <label htmlFor="po-export" className="block text-xs text-slate-700">{t('signedExport')}<input id="po-export" name="po-export" required disabled={isSubmittingPo} type="file" accept=".pdf,application/pdf" onChange={event => setExportCertificate(event.target.files?.[0] ?? null)} className="mt-1 block w-full text-xs disabled:opacity-60" /></label>
+              <label htmlFor="po-kyc" className="block text-xs text-slate-700">{t('signedKyc')}<input id="po-kyc" name="po-kyc" required disabled={isSubmittingPo} type="file" accept=".pdf,application/pdf" onChange={event => setKycForm(event.target.files?.[0] ?? null)} className="mt-1 block w-full text-xs disabled:opacity-60" /></label>
+              <label htmlFor="po-document" className="block text-xs text-slate-700">{t('poDocument')}<input id="po-document" name="po-document" required disabled={isSubmittingPo} type="file" accept=".pdf,application/pdf" onChange={event => setPoDocument(event.target.files?.[0] ?? null)} className="mt-1 block w-full text-xs disabled:opacity-60" /></label>
+              <button disabled={isSubmittingPo} aria-busy={isSubmittingPo} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60">{isSubmittingPo ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <ArrowRight className="h-4 w-4" />} {isSubmittingPo ? t('sendingPo') : t('submitPo')}</button>
             </div>
           </form>
 
@@ -311,6 +336,7 @@ export const CustomerPortal: React.FC = () => {
               <input id="tracking-token" name="tracking-token" autoComplete="off" aria-label={t('trackingToken')} required value={trackingToken} onChange={event => setTrackingToken(event.target.value)} placeholder={t('trackingTokenPlaceholder')} className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
               <button disabled={isTracking} className="rounded-xl bg-cyan-700 px-4 py-3 font-bold text-white disabled:opacity-60" aria-label={t('trackShipment')}>{isTracking ? '...' : t('track')}</button>
             </div>
+            {shipmentTraceQuery.error && <div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{getApiErrorMessage(shipmentTraceQuery.error, t('trackingFailed'))}<button type="button" onClick={() => void shipmentTraceQuery.refetch()} className="ml-2 font-bold underline">Retry</button></div>}
             {shipment && (
               <div className="mt-4 rounded-xl border border-slate-700 bg-slate-950 p-4 text-sm">
                 <div className="flex items-center justify-between gap-3">

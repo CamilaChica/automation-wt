@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { apiService } from '../../services/api';
+import { getApiErrorMessage } from '../../services/api';
+import { Badge } from '../common/Badge';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
-import { RFQ } from '../../types';
+import { useAutomationEvents, useRFQs, useTraceDecision } from '../../hooks/useApiResources';
 import { 
   ShieldCheck, 
   AlertOctagon, 
@@ -13,66 +14,64 @@ import {
   AlertTriangle,
   FileCheck,
   Search,
-  Eye
+  Eye,
+  Loader2
 } from 'lucide-react';
 
 export const TraceVaultView: React.FC = () => {
   const [activeTab, setActiveTab] = useState('');
-  const [rfqs, setRfqs] = useState<RFQ[]>([]);
   const [verificationPassed, setVerificationPassed] = useState(false);
   const [hardFreezeEnabled, setHardFreezeEnabled] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [decisionLoading, setDecisionLoading] = useState(false);
-  const [usingFallbackData, setUsingFallbackData] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [pendingDecision, setPendingDecision] = useState<'certify' | 'reject' | 'rescan' | 'freeze' | null>(null);
+  const rfqQuery = useRFQs();
+  const eventsQuery = useAutomationEvents();
+  const decisionMutation = useTraceDecision();
+  const rfqs = rfqQuery.data || [];
+  const loading = rfqQuery.isLoading;
+  const usingFallbackData = rfqQuery.isSampleData;
+  const loadError = rfqQuery.error?.message || null;
+  const automationEvents = eventsQuery.data || [];
+  const complianceLoadError = eventsQuery.error?.message || null;
+  const loadingComplianceEvents = eventsQuery.isLoading;
   const selectedRfq = rfqs.find(rfq => rfq.id === activeTab);
-  const actionsBlocked = loading || decisionLoading || usingFallbackData || !selectedRfq || isFailedRfq(selectedRfq);
+  const actionsBlocked = loading || decisionMutation.isPending || usingFallbackData || !selectedRfq || isFailedRfq(selectedRfq);
 
   const recordDecision = async (decision: 'certify' | 'reject' | 'rescan' | 'freeze') => {
-    if (!selectedRfq || isFailedRfq(selectedRfq) || usingFallbackData) {
+    if (decisionMutation.isPending || !selectedRfq || isFailedRfq(selectedRfq) || usingFallbackData) {
       setNotice(isFailedRfq(selectedRfq)
-        ? 'Intake failed. Trace decisions are disabled. Contact intake operations to arrange retry or escalation.'
+        ? selectedRfq?.status.trim().toUpperCase() === 'NEEDS_HUMAN_REVIEW'
+          ? 'Operator review required. Trace decisions are disabled until intake operations resolves the review.'
+          : 'Intake failed. Trace decisions are disabled. Contact intake operations to arrange retry or escalation.'
         : 'Select a live RFQ before recording a trace decision.');
       return;
     }
     const decisionLabel = decision === 'freeze' ? 'place a hard freeze on' : `${decision} trace documents for`;
     if (!window.confirm(`Confirm ${decisionLabel} RFQ ${activeTab}?`)) return;
-    setDecisionLoading(true);
+    setPendingDecision(decision);
     try {
-      await apiService.recordTraceDecision(activeTab, decision);
+      await decisionMutation.mutateAsync({ rfqId: activeTab, decision });
       setVerificationPassed(decision === 'certify');
       setHardFreezeEnabled(decision === 'freeze');
       setNotice(`Trace decision ${decision} recorded for ${activeTab}.`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Unable to record trace decision.');
+      setNotice(getApiErrorMessage(error, 'Unable to record trace decision.'));
     } finally {
-      setDecisionLoading(false);
+      setPendingDecision(null);
     }
   };
 
-  const loadRfqs = async () => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const result = await apiService.getRFQsWithSource();
-      setRfqs(result.rfqs);
-      setUsingFallbackData(result.isFallback);
-      setActiveTab(currentId => result.rfqs.some(rfq => rfq.id === currentId) ? currentId : result.rfqs[0]?.id || '');
-      setNotice(null);
-    } catch (error) {
-      setUsingFallbackData(false);
-      setLoadError(error instanceof Error ? error.message : 'Unable to load trace records.');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const complianceEvents = automationEvents.filter(event => /compliance|trace/i.test(`${event.event_type} ${event.entity_type}`));
+  const flaggedRfqCount = rfqs.filter(rfq => isFailedRfq(rfq)).length;
+  const latestComplianceEvent = complianceEvents[0];
 
-  useEffect(() => { void loadRfqs(); }, []);
+  useEffect(() => {
+    if (!activeTab && rfqs.length > 0) setActiveTab(rfqs[0].id);
+  }, [activeTab, rfqs]);
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
-      {loadError && <div role="alert" className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700"><span>{loadError}</span><button type="button" aria-label="Retry loading trace records" onClick={() => void loadRfqs()} className="font-bold underline focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">Retry</button></div>}
+      {loadError && <div role="alert" className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700"><span>{loadError}</span><button type="button" aria-label="Retry loading trace records" onClick={() => void rfqQuery.refetch()} className="font-bold underline focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">Retry</button></div>}
       {notice && <div role="status" aria-live="polite" className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
       {usingFallbackData && <FallbackDataBanner />}
       {/* Top Grid: Pipeline & Active Vault & Document Viewer */}
@@ -86,7 +85,7 @@ export const TraceVaultView: React.FC = () => {
                 <span className="w-2 h-2 rounded-full bg-aero-blue animate-ping" />
                 <span>DOCUMENTATION STATUS PIPELINE</span>
               </h2>
-              <span className="text-[10px] font-mono text-amber-600 dark:text-amber-300 font-bold">CACHED SAMPLE DATA</span>
+              <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
             </div>
 
             <div className="overflow-x-auto font-mono text-[10px]">
@@ -126,7 +125,7 @@ export const TraceVaultView: React.FC = () => {
               <h3 className="font-display font-bold text-xs text-slate-900 dark:text-slate-100 uppercase">
                 ACTIVE DOCUMENT VAULT
               </h3>
-              <span className="text-[10px] text-slate-500 font-semibold">Required ({activeTab})</span>
+              <div className="flex items-center gap-2"><span className="text-[10px] text-slate-500 font-semibold">Required ({activeTab || '—'})</span><Badge variant="outline">SAMPLE / DEMO DATA</Badge></div>
             </div>
 
             <div className="space-y-2 text-slate-700 dark:text-slate-300">
@@ -176,16 +175,14 @@ export const TraceVaultView: React.FC = () => {
         {/* Right Top (8 cols): DOCUMENT REVIEW & VERIFICATION TERMINAL */}
         <div className="lg:col-span-8 bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between">
           <div>
-            {isFailedRfq(selectedRfq) && <div role="alert" className="mb-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">Intake failed. Trace decisions are disabled. Contact intake operations to arrange retry or escalation.</div>}
+            {isFailedRfq(selectedRfq) && <div role="alert" className="mb-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">{selectedRfq?.status.trim().toUpperCase() === 'NEEDS_HUMAN_REVIEW' ? 'Operator review required.' : 'Intake failed.'} Trace decisions are disabled. Contact intake operations for escalation; the reprocess API is not available.</div>}
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
               <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase flex items-center space-x-2">
                 <FileSearch className="w-4 h-4 text-aero-blue" />
                 <span>DOCUMENT REVIEW & VERIFICATION TERMINAL</span>
               </h2>
               <div className="flex items-center space-x-3">
-                <span className="px-2.5 py-0.5 rounded-full bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-300 font-mono text-[10px] font-bold border border-amber-200 dark:border-amber-500/30">
-                  CACHED OCR REVIEW
-                </span>
+                <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
               </div>
             </div>
 
@@ -254,36 +251,39 @@ export const TraceVaultView: React.FC = () => {
 
           {/* Action Buttons */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 font-display pt-2">
-            <button
+              <button
               type="button"
               disabled={actionsBlocked}
+              aria-busy={pendingDecision === 'certify'}
               onClick={() => void recordDecision('certify')}
               className="bg-emerald-700 hover:bg-emerald-600 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 text-xs"
             >
-              <CheckCircle2 className="w-4 h-4" />
-              <span>ACCEPT & CERTIFY</span>
+              {pendingDecision === 'certify' ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <CheckCircle2 className="w-4 h-4" />}
+              <span>{pendingDecision === 'certify' ? 'CERTIFYING...' : 'ACCEPT & CERTIFY'}</span>
             </button>
             <button
               type="button"
               disabled={actionsBlocked}
+              aria-busy={pendingDecision === 'reject'}
               onClick={() => void recordDecision('reject')}
               className="bg-red-700 hover:bg-red-600 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-red-500/20 flex items-center justify-center space-x-2 text-xs"
             >
-              <XCircle className="w-4 h-4" />
-              <span>REJECT DOC</span>
+              {pendingDecision === 'reject' ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <XCircle className="w-4 h-4" />}
+              <span>{pendingDecision === 'reject' ? 'REJECTING...' : 'REJECT DOC'}</span>
             </button>
-            <button type="button" disabled={actionsBlocked} onClick={() => void recordDecision('rescan')} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 text-xs disabled:cursor-not-allowed disabled:opacity-50">
-              <FileSearch className="w-4 h-4" />
-              <span>REQUEST RE-SCAN</span>
+            <button type="button" disabled={actionsBlocked} aria-busy={pendingDecision === 'rescan'} onClick={() => void recordDecision('rescan')} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 text-xs disabled:cursor-not-allowed disabled:opacity-50">
+              {pendingDecision === 'rescan' ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <FileSearch className="w-4 h-4" />}
+              <span>{pendingDecision === 'rescan' ? 'REQUESTING...' : 'REQUEST RE-SCAN'}</span>
             </button>
             <button
               type="button"
               disabled={actionsBlocked}
+              aria-busy={pendingDecision === 'freeze'}
               onClick={() => void recordDecision('freeze')}
               className="bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 px-4 rounded-xl border border-red-500/60 flex items-center justify-center space-x-2 text-xs"
             >
-              <AlertOctagon className="w-4 h-4 text-red-300" />
-              <span>HARD FREEZE ORDER</span>
+              {pendingDecision === 'freeze' ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <AlertOctagon className="w-4 h-4 text-red-300" />}
+              <span>{pendingDecision === 'freeze' ? 'FREEZING...' : 'HARD FREEZE ORDER'}</span>
             </button>
           </div>
           <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
@@ -299,6 +299,7 @@ export const TraceVaultView: React.FC = () => {
           <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase">
             TRACEABILITY & COMPLIANCE HISTORY
           </h2>
+          <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
 
           {/* Milestone Stepper Timeline */}
           <div className="grid grid-cols-2 gap-x-2 gap-y-4 pt-2 text-center font-mono text-[10px] sm:grid-cols-4">
@@ -341,26 +342,27 @@ export const TraceVaultView: React.FC = () => {
           <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase">
             COMPLIANCE DASHBOARD OVERVIEW
           </h2>
+          {complianceLoadError && <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700"><span>{complianceLoadError}</span><button type="button" onClick={() => void eventsQuery.refetch()} className="font-bold underline">Retry</button></div>}
 
           <div className="grid grid-cols-3 gap-3 text-center font-mono">
             <div className="bg-slate-50 dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800">
-              <div className="text-emerald-600 dark:text-emerald-400 font-extrabold text-xl">100%</div>
+              <div className="text-emerald-600 dark:text-emerald-400 font-extrabold text-xl">{loading ? '…' : loadError ? '—' : flaggedRfqCount}</div>
               <div className="text-[9px] text-slate-500 mt-1 uppercase leading-tight font-semibold">
-                COMPLETE TRACE
+                RFQS REQUIRING REVIEW
               </div>
             </div>
 
             <div className="bg-slate-50 dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800">
-              <div className="text-aero-blue font-extrabold text-xl">1.4s</div>
+              <div className="text-aero-blue font-extrabold text-xl">{loadingComplianceEvents ? '…' : complianceLoadError ? '—' : complianceEvents.length}</div>
               <div className="text-[9px] text-slate-500 mt-1 uppercase leading-tight font-semibold">
-                AI OCR SPEED
+                COMPLIANCE EVENTS
               </div>
             </div>
 
             <div className="bg-slate-50 dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800">
-              <div className="text-amber-600 dark:text-amber-400 font-extrabold text-xl">142</div>
+              <div className="text-amber-600 dark:text-amber-400 font-extrabold text-xl">{loadingComplianceEvents ? '…' : complianceLoadError ? '—' : latestComplianceEvent?.status || '—'}</div>
               <div className="text-[9px] text-slate-500 mt-1 uppercase leading-tight font-semibold">
-                CERTS VAULTED
+                LATEST COMPLIANCE EVENT
               </div>
             </div>
           </div>

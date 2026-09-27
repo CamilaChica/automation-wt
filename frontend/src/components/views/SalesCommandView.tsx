@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
-import { apiService } from '../../services/api';
+import { apiService, getApiErrorMessage } from '../../services/api';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
-import { RFQ } from '../../types';
+import { useDispatchQuote, useRFQDetail, useRFQs } from '../../hooks/useApiResources';
 import { 
   Send, 
   FileText, 
@@ -11,60 +11,40 @@ import {
   Sliders, 
   Download,
   Mail,
-  UserCheck
+  UserCheck,
+  Loader2,
+  AlertTriangle
 } from 'lucide-react';
 
 export const SalesCommandView: React.FC = () => {
   const [selectedRfqId, setSelectedRfqId] = useState('');
-  const [rfqInbox, setRfqInbox] = useState<RFQ[]>([]);
-  const [selectedQuoteId, setSelectedQuoteId] = useState('');
-  const [quoteReady, setQuoteReady] = useState(false);
   const [unitPrice, setUnitPrice] = useState<number>(14200);
   const [marginPercent, setMarginPercent] = useState<number>(20);
   const [shippingOption, setShippingOption] = useState<'NFO' | 'HotShot'>('HotShot');
-  const [issuing, setIssuing] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
-  const [detailError, setDetailError] = useState<string | null>(null);
+  const [notificationType, setNotificationType] = useState<'success' | 'error' | 'info'>('success');
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
-  const [usingFallbackData, setUsingFallbackData] = useState(false);
+  const rfqQuery = useRFQs();
+  const rfqDetailQuery = useRFQDetail(selectedRfqId);
+  const dispatchMutation = useDispatchQuote();
+  const rfqInbox = rfqQuery.data || [];
+  const usingFallbackData = rfqQuery.isSampleData || rfqDetailQuery.isSampleData;
+  const selectedQuoteId = rfqDetailQuery.data?.quote_details?.quote.id || '';
+  const quoteReady = Boolean(selectedQuoteId);
+  const issuing = dispatchMutation.isPending;
+  const detailError = rfqDetailQuery.error?.message || null;
   const selectedRfq = rfqInbox.find(rfq => rfq.id === selectedRfqId);
   const selectedRfqFailed = isFailedRfq(selectedRfq);
 
-  const loadRfqDetail = async (rfqId: string) => {
-    setSelectedRfqId(rfqId);
-    setQuoteReady(false);
-    setDetailError(null);
-    try {
-      const detail = await apiService.getRFQDetail(rfqId);
-      setSelectedQuoteId(detail.quote_details?.quote.id || '');
-      setQuoteReady(Boolean(detail.quote_details?.quote.id));
-      setAttachmentIds((detail.quote_details?.items || []).flatMap(item => item.attachments || []));
-    } catch (error) {
-      setSelectedQuoteId('');
-      setAttachmentIds([]);
-      setDetailError(error instanceof Error ? error.message : 'Unable to load RFQ details.');
+  useEffect(() => {
+    if (!selectedRfqId && rfqInbox.length > 0) {
+      setSelectedRfqId((rfqInbox.find(rfq => rfq.status === 'Quoted') || rfqInbox[0]).id);
     }
-  };
-
-  const refreshRfqs = async () => {
-    try {
-      const result = await apiService.getRFQsWithSource();
-      const rfqs = result.rfqs;
-      setUsingFallbackData(result.isFallback);
-      setRfqInbox(rfqs);
-      const quoteReadyRfq = rfqs.find(rfq => rfq.status === 'Quoted') || rfqs[0];
-      if (quoteReadyRfq) {
-        await loadRfqDetail(quoteReadyRfq.id);
-      }
-    } catch (error) {
-      setUsingFallbackData(false);
-      setNotification(error instanceof Error ? error.message : 'Unable to load RFQs.');
-    }
-  };
+  }, [rfqInbox, selectedRfqId]);
 
   useEffect(() => {
-    void refreshRfqs();
-  }, []);
+    setAttachmentIds((rfqDetailQuery.data?.quote_details?.items || []).flatMap(item => item.attachments || []));
+  }, [rfqDetailQuery.data]);
 
   const calculateTotal = () => {
     const selectedRfq = rfqInbox.find(rfq => rfq.id === selectedRfqId);
@@ -119,24 +99,24 @@ export const SalesCommandView: React.FC = () => {
   };
 
   const handleIssueQuote = async () => {
+    if (issuing) return;
     if (!selectedQuoteId || !selectedRfq || selectedRfqFailed || usingFallbackData) {
+      setNotificationType('error');
       setNotification('Select a live, quote-ready RFQ before issuing a customer quote.');
       return;
     }
     if (!window.confirm(`Issue quote ${selectedQuoteId} to ${selectedRfq.customer_name}?`)) return;
-    setIssuing(true);
     try {
-      await apiService.approveQuote(selectedQuoteId, 'Alex R. (Sales Lead)', [
+      const result = await dispatchMutation.mutateAsync({ quoteId: selectedQuoteId, operatorName: 'Alex R. (Sales Lead)', overrides: [
         { quote_item_id: 'QITEM-01', unit_price: unitPrice }
-      ]);
-      await refreshRfqs();
-      const customer = rfqInbox.find(rfq => rfq.id === selectedRfqId)?.customer_name || 'customer';
-      setNotification(`Quote ${selectedRfqId} issued to ${customer}! Customer communication dispatched.`);
+      ] });
+      if (!result) return;
+      setNotificationType('success');
+      setNotification(result.message);
       setTimeout(() => setNotification(null), 5000);
     } catch (error) {
-      setNotification(error instanceof Error ? error.message : 'Unable to issue the quote. Please retry.');
-    } finally {
-      setIssuing(false);
+      setNotificationType('error');
+      setNotification(getApiErrorMessage(error, 'Unable to issue the quote. Please retry.'));
     }
   };
 
@@ -154,7 +134,8 @@ export const SalesCommandView: React.FC = () => {
       link.click();
       URL.revokeObjectURL(url);
     } catch (error) {
-      setNotification(error instanceof Error ? error.message : 'Unable to download the attachment.');
+      setNotificationType('error');
+      setNotification(getApiErrorMessage(error, 'Unable to download the attachment.'));
     }
   };
 
@@ -162,9 +143,9 @@ export const SalesCommandView: React.FC = () => {
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
       {/* Toast Notification */}
       {notification && (
-        <div role="status" aria-live="polite" aria-atomic="true" className="bg-emerald-50 dark:bg-emerald-500/20 border border-emerald-300 dark:border-emerald-500 text-emerald-800 dark:text-emerald-300 p-4 rounded-2xl flex items-center justify-between text-xs font-semibold animate-fade-in shadow-sm">
+        <div role={notificationType === 'error' ? 'alert' : 'status'} aria-live="polite" aria-atomic="true" className={`border p-4 rounded-2xl flex items-center justify-between text-xs font-semibold animate-fade-in shadow-sm ${notificationType === 'error' ? 'bg-red-50 dark:bg-red-500/20 border-red-300 dark:border-red-500 text-red-800 dark:text-red-300' : 'bg-emerald-50 dark:bg-emerald-500/20 border-emerald-300 dark:border-emerald-500 text-emerald-800 dark:text-emerald-300'}`}>
           <div className="flex items-center space-x-2">
-            <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+            {notificationType === 'error' ? <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400" /> : <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />}
             <span>{notification}</span>
           </div>
           <button type="button" aria-label="Dismiss notification" onClick={() => setNotification(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">✕</button>
@@ -172,10 +153,12 @@ export const SalesCommandView: React.FC = () => {
       )}
       {usingFallbackData && <FallbackDataBanner />}
 
+      {rfqQuery.error && <div role="alert" className="flex items-center justify-between rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-700"><span>{rfqQuery.error.message}</span><button type="button" onClick={() => void rfqQuery.refetch()} className="font-bold underline">Retry</button></div>}
+
       {detailError && (
         <div role="alert" className="bg-red-50 dark:bg-red-500/20 border border-red-300 dark:border-red-500 text-red-800 dark:text-red-300 p-4 rounded-2xl flex items-center justify-between text-xs font-semibold">
           <span>{detailError}</span>
-          <button onClick={() => void loadRfqDetail(selectedRfqId)} className="underline">Retry</button>
+          <button onClick={() => void rfqDetailQuery.refetch()} className="underline">Retry</button>
         </div>
       )}
 
@@ -208,11 +191,11 @@ export const SalesCommandView: React.FC = () => {
                 {rfqInbox.map((rfq) => (
                   <tr
                     key={rfq.id}
-                    onClick={() => loadRfqDetail(rfq.id)}
+                    onClick={() => setSelectedRfqId(rfq.id)}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter' || event.key === ' ') {
                         event.preventDefault();
-                        void loadRfqDetail(rfq.id);
+                        setSelectedRfqId(rfq.id);
                       }
                     }}
                     tabIndex={0}
@@ -375,12 +358,12 @@ export const SalesCommandView: React.FC = () => {
                   onClick={handleIssueQuote}
                   disabled={issuing || usingFallbackData || !quoteReady || !selectedRfq || selectedRfqFailed}
                   aria-busy={issuing}
-                  className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1.5 shadow-sm"
+                  className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1.5 shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  <Send className="w-3.5 h-3.5" />
+                  {issuing ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Send className="w-3.5 h-3.5" />}
                   <span>{issuing ? 'ISSUING...' : quoteReady ? 'ISSUE QUOTE' : 'LOADING QUOTE...'}</span>
                 </button>
-                <button onClick={() => setNotification('Purchase orders are submitted by customers through the customer portal after quote approval.')} className="bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 transition-colors">
+                <button onClick={() => { setNotificationType('info'); setNotification('Purchase orders are submitted by customers through the customer portal after quote approval.'); }} className="bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 transition-colors">
                   ISSUE PO
                 </button>
               </div>

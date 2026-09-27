@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
-import { apiService } from '../../services/api';
-import { RFQ, SupplierQuote, type InternalCommand } from '../../types';
+import { getApiErrorMessage } from '../../services/api';
+import { Badge } from '../common/Badge';
+import { type InternalCommand } from '../../types';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
+import { useExecuteInternalCommand, useRFQs, useSupplierOffers } from '../../hooks/useApiResources';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip } from 'recharts';
 import { 
   CheckCircle, 
@@ -12,50 +14,29 @@ import {
   ShieldCheck, 
   Clock, 
   Search,
-  Filter
+  Filter,
+  Loader2
 } from 'lucide-react';
 
 export const SupplierSourcingView: React.FC = () => {
   const [selectedPn, setSelectedPn] = useState('32-11-45-01');
   const [selectedRfqId, setSelectedRfqId] = useState<string | null>(null);
-  const [liveOffers, setLiveOffers] = useState<SupplierQuote[]>([]);
-  const [activeRfqs, setActiveRfqs] = useState<RFQ[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [usingFallbackData, setUsingFallbackData] = useState(false);
+  const [noticeType, setNoticeType] = useState<'success' | 'error' | 'info'>('info');
   const [commandPending, setCommandPending] = useState<InternalCommand | null>(null);
 
-  const loadData = async () => {
-    setLoading(true);
-    setLoadError(null);
-    const [offersResult, rfqsResult] = await Promise.allSettled([
-      apiService.getSupplierOffers(selectedPn),
-      apiService.getRFQsWithSource(),
-    ]);
-    const errors: string[] = [];
-    if (offersResult.status === 'fulfilled') {
-      setLiveOffers(offersResult.value);
-    } else {
-      setLiveOffers([]);
-      errors.push(offersResult.reason instanceof Error ? offersResult.reason.message : 'Unable to load supplier offers.');
-    }
-    if (rfqsResult.status === 'fulfilled') {
-      setActiveRfqs(rfqsResult.value.rfqs);
-      setSelectedRfqId(currentId => rfqsResult.value.rfqs.some(rfq => rfq.id === currentId) ? currentId : rfqsResult.value.rfqs[0]?.id || null);
-      setUsingFallbackData(rfqsResult.value.isFallback);
-    } else {
-      setActiveRfqs([]);
-      setUsingFallbackData(false);
-      errors.push(rfqsResult.reason instanceof Error ? rfqsResult.reason.message : 'Unable to load RFQs.');
-    }
-    setLoadError(errors.length ? errors.join(' ') : null);
-    setLoading(false);
-  };
+  const rfqQuery = useRFQs();
+  const offersQuery = useSupplierOffers(selectedPn);
+  const commandMutation = useExecuteInternalCommand();
+  const activeRfqs = rfqQuery.data || [];
+  const liveOffers = offersQuery.data || [];
+  const loading = rfqQuery.isLoading || offersQuery.isLoading;
+  const loadError = [rfqQuery.error?.message, offersQuery.error?.message].filter(Boolean).join(' ') || null;
+  const usingFallbackData = rfqQuery.isSampleData;
 
   useEffect(() => {
-    void loadData();
-  }, [selectedPn]);
+    if (!selectedRfqId && activeRfqs.length > 0) setSelectedRfqId(activeRfqs[0].id);
+  }, [activeRfqs, selectedRfqId]);
 
   const compareMatrix = liveOffers.map(offer => ({
     part_number: offer.part_number,
@@ -70,15 +51,18 @@ export const SupplierSourcingView: React.FC = () => {
   const actionsBlocked = loading || Boolean(loadError) || usingFallbackData || !selectedRfq || isFailedRfq(selectedRfq);
 
   const addToQuote = async (partNumber: string) => {
-    if (actionsBlocked || commandPending || !selectedRfq) return;
+    if (actionsBlocked || commandMutation.isPending || !selectedRfq) return;
     if (!window.confirm(`Add part ${partNumber} to quote for RFQ ${selectedRfq.id}?`)) return;
     setCommandPending('add_to_quote');
     setNotice(null);
     try {
-      const result = await apiService.executeInternalCommand('add_to_quote', partNumber);
+      const result = await commandMutation.mutateAsync({ command: 'add_to_quote', entityId: selectedRfq.id, details: `Add part ${partNumber} to this RFQ.` });
+      if (!result) return;
+      setNoticeType('success');
       setNotice(result.message);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Unable to add part to quote.');
+      setNoticeType('error');
+      setNotice(getApiErrorMessage(error, 'Unable to add part to quote.'));
     } finally {
       setCommandPending(null);
     }
@@ -95,9 +79,9 @@ export const SupplierSourcingView: React.FC = () => {
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
-      {notice && <div role="status" aria-live="polite" className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
+      {notice && <div role={noticeType === 'error' ? 'alert' : 'status'} aria-live="polite" className={`rounded-xl border px-4 py-3 text-xs font-semibold ${noticeType === 'error' ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200' : 'border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200'}`}>{notice}</div>}
       {usingFallbackData && <FallbackDataBanner />}
-      {loadError && <div role="alert" className="flex items-center justify-between rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300"><span>{loadError}</span><button type="button" onClick={() => void loadData()} className="font-bold underline">Retry</button></div>}
+      {loadError && <div role="alert" className="flex items-center justify-between rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300"><span>{loadError}</span><button type="button" onClick={() => { void rfqQuery.refetch(); void offersQuery.refetch(); }} className="font-bold underline">Retry</button></div>}
       {/* Top Row: Global Sourcing Matrix & Part Sourcing Terminal & Performance */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column (5 cols): GLOBAL SOURCING MATRIX */}
@@ -198,11 +182,11 @@ export const SupplierSourcingView: React.FC = () => {
 
           {/* Sourcing Action Triggers */}
           <div className="grid grid-cols-3 gap-2 pt-2">
-            <button type="button" disabled={actionsBlocked} onClick={() => setNotice(`Added ${selectedPn} to the active quote.`)} className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2 px-2 rounded-xl text-[10px] flex items-center justify-center space-x-1 shadow-sm disabled:cursor-not-allowed disabled:opacity-50">
-              <PlusCircle className="w-3 h-3" />
-              <span>ADD TO QUOTE</span>
+            <button type="button" disabled={actionsBlocked || commandMutation.isPending} aria-busy={commandPending === 'add_to_quote'} onClick={() => void addToQuote(selectedPn)} className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2 px-2 rounded-xl text-[10px] flex items-center justify-center space-x-1 shadow-sm disabled:cursor-not-allowed disabled:opacity-50">
+              {commandPending === 'add_to_quote' ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> : <PlusCircle className="w-3 h-3" />}
+              <span>{commandPending === 'add_to_quote' ? 'ADDING...' : 'ADD TO QUOTE'}</span>
             </button>
-            <button type="button" disabled={actionsBlocked} onClick={() => setNotice(`Purchase order workflow opened for ${selectedPn}.`)} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2 px-2 rounded-xl text-[10px] border border-slate-200 dark:border-slate-700 disabled:cursor-not-allowed disabled:opacity-50">
+            <button type="button" disabled={actionsBlocked} onClick={() => { setNoticeType('info'); setNotice('Purchase orders are submitted by customers through the portal after quote approval.'); }} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2 px-2 rounded-xl text-[10px] border border-slate-200 dark:border-slate-700 disabled:cursor-not-allowed disabled:opacity-50">
               ISSUE PO
             </button>
             <button type="button" onClick={() => setNotice(`Document audit opened for ${selectedPn}.`)} className="bg-amber-50 dark:bg-amber-600/20 hover:bg-amber-100 text-amber-700 dark:text-amber-300 font-bold py-2 px-2 rounded-xl text-[10px] border border-amber-200 dark:border-amber-500/40">
@@ -218,6 +202,7 @@ export const SupplierSourcingView: React.FC = () => {
             <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase">
               SUPPLIER PERFORMANCE & RATINGS
             </h2>
+            <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
             <div className="h-28 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={otdData}>
@@ -288,7 +273,7 @@ export const SupplierSourcingView: React.FC = () => {
                     {item.cond}
                   </span>
                   <span className="font-bold text-slate-900 dark:text-slate-100">{item.price}</span>
-                      <button type="button" disabled={actionsBlocked || Boolean(commandPending)} aria-busy={commandPending === 'add_to_quote'} onClick={() => void addToQuote(item.pn)} className="bg-aero-blue hover:bg-blue-600 text-white px-3 py-1 rounded-xl text-[10px] font-bold shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50">
+                      <button type="button" disabled={actionsBlocked || commandMutation.isPending} aria-busy={commandPending === 'add_to_quote'} onClick={() => void addToQuote(item.pn)} className="bg-aero-blue hover:bg-blue-600 text-white px-3 py-1 rounded-xl text-[10px] font-bold shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50">
                     {commandPending === 'add_to_quote' ? 'Adding...' : 'Quick-Add'}
                   </button>
                 </div>

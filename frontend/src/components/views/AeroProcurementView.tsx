@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
-import { apiService } from '../../services/api';
-import { InternalCommand, RFQ } from '../../types';
+import { getApiErrorMessage } from '../../services/api';
+import { Badge } from '../common/Badge';
+import { InternalCommand, RFQ, SupplierQuote } from '../../types';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import { 
   FileCheck, 
@@ -10,55 +11,58 @@ import {
   Split, 
   Flame, 
   CheckCircle,
-  FileText
+  FileText,
+  Loader2
 } from 'lucide-react';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
+import { useExecuteInternalCommand, useRFQs, useSupplierOffers } from '../../hooks/useApiResources';
 
 export const AeroProcurementView: React.FC = () => {
-  const [selectedSupplier, setSelectedSupplier] = useState<'A' | 'B' | 'C'>('A');
+  const [selectedOfferId, setSelectedOfferId] = useState('');
   const [selectedRfqId, setSelectedRfqId] = useState('');
-  const [rfqs, setRfqs] = useState<RFQ[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [usingFallbackData, setUsingFallbackData] = useState(false);
   const [commandPending, setCommandPending] = useState<InternalCommand | null>(null);
-
-  const loadRfqs = async () => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const result = await apiService.getRFQsWithSource();
-      setRfqs(result.rfqs);
-      setUsingFallbackData(result.isFallback);
-      setSelectedRfqId(currentId => result.rfqs.some(rfq => rfq.id === currentId) ? currentId : result.rfqs[0]?.id || '');
-    } catch (error) {
-      setRfqs([]);
-      setUsingFallbackData(false);
-      setLoadError(error instanceof Error ? error.message : 'Unable to load RFQs.');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [noticeType, setNoticeType] = useState<'success' | 'error'>('success');
+  const rfqQuery = useRFQs();
+  const rfqs = rfqQuery.data || [];
+  const loading = rfqQuery.isLoading;
+  const loadError = rfqQuery.error?.message || null;
+  const usingFallbackData = rfqQuery.isSampleData;
+  const commandMutation = useExecuteInternalCommand();
+  const selectedRfq = rfqs.find(rfq => rfq.id === selectedRfqId);
+  const selectedPartNumber = selectedRfq?.part_number?.trim() || '';
+  const actionsBlocked = loading || Boolean(loadError) || usingFallbackData || !selectedRfq || isFailedRfq(selectedRfq);
+  const offersQuery = useSupplierOffers(selectedPartNumber);
+  const offers = offersQuery.data || [];
+  const selectedOffer = offers.find(offer => offer.id === selectedOfferId);
+  const offersLoading = offersQuery.isLoading;
+  const offersError = offersQuery.error?.message || null;
 
   useEffect(() => {
-    void loadRfqs();
-  }, []);
+    if (!selectedRfqId && rfqs.length > 0) setSelectedRfqId(rfqs[0].id);
+  }, [rfqs, selectedRfqId]);
 
-  const selectedRfq = rfqs.find(rfq => rfq.id === selectedRfqId);
-  const actionsBlocked = loading || Boolean(loadError) || usingFallbackData || !selectedRfq || isFailedRfq(selectedRfq);
+  useEffect(() => {
+    if (!selectedOfferId && offers.length > 0) setSelectedOfferId(offers[0].id);
+  }, [offers, selectedOfferId]);
 
   const runCommand = async (command: InternalCommand, description: string) => {
-    if (actionsBlocked || commandPending || !selectedRfq) return;
+    if (actionsBlocked || commandMutation.isPending || !selectedRfq) return;
     if (!window.confirm(`Confirm ${description} for RFQ ${selectedRfq.id}?`)) return;
     setCommandPending(command);
     setNotice(null);
     try {
-      const result = await apiService.executeInternalCommand(command, selectedSupplier);
+      const details = selectedOffer
+        ? `Selected supplier offer ${selectedOffer.id} from ${selectedOffer.supplier_name}.`
+        : undefined;
+      const result = await commandMutation.mutateAsync({ command, entityId: selectedRfq.id, details });
+      if (!result) return;
+      setNoticeType('success');
       setNotice(result.message);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : `Unable to ${description}.`);
+      setNoticeType('error');
+      setNotice(getApiErrorMessage(error, `Unable to ${description}.`));
     } finally {
       setCommandPending(null);
     }
@@ -75,9 +79,9 @@ export const AeroProcurementView: React.FC = () => {
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
-      {notice && <div role="status" className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
+      {notice && <div role={noticeType === 'error' ? 'alert' : 'status'} aria-live="polite" className={`rounded-xl border px-4 py-3 text-xs font-semibold ${noticeType === 'error' ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200' : 'border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200'}`}>{notice}</div>}
       {usingFallbackData && <FallbackDataBanner />}
-      {loadError && <div role="alert" className="flex items-center justify-between rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300"><span>{loadError}</span><button type="button" onClick={() => void loadRfqs()} className="font-bold underline">Retry</button></div>}
+      {loadError && <div role="alert" className="flex items-center justify-between rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300"><span>{loadError}</span><button type="button" onClick={() => void rfqQuery.refetch()} className="font-bold underline">Retry</button></div>}
       {/* Top Section: Active RFQ Queue & Sourcing Detail */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Active RFQ Queue (6 cols) */}
@@ -104,9 +108,8 @@ export const AeroProcurementView: React.FC = () => {
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
                 {loading && <tr><td colSpan={6} className="py-8 text-center text-slate-400" role="status">Loading RFQs...</td></tr>}
                 {!loading && !loadError && rfqs.length === 0 && <tr><td colSpan={6} className="py-8 text-center text-slate-400" role="status">No active RFQs.</td></tr>}
-                {rfqs.map((rfq, idx) => {
-                  const supplier = (['A', 'B', 'C'] as const)[idx % 3];
-                  return <tr key={rfq.id} tabIndex={0} role="button" aria-pressed={selectedRfqId === rfq.id} onClick={() => { setSelectedRfqId(rfq.id); setSelectedSupplier(supplier); }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedRfqId(rfq.id); setSelectedSupplier(supplier); } }} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors focus:outline-none focus-visible:bg-blue-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-aero-blue">
+                {rfqs.map(rfq => {
+                  return <tr key={rfq.id} tabIndex={0} role="button" aria-pressed={selectedRfqId === rfq.id} onClick={() => setSelectedRfqId(rfq.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedRfqId(rfq.id); } }} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors focus:outline-none focus-visible:bg-blue-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-aero-blue">
                     <td className="py-2.5 text-aero-blue font-bold">{rfq.id}</td>
                     <td className="py-2.5">
                       <div className="font-bold text-slate-900 dark:text-slate-200">{rfq.part_number || 'Pending extraction'}</div>
@@ -137,78 +140,35 @@ export const AeroProcurementView: React.FC = () => {
             <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase">
               RFQ DETAIL & SOURCING
             </h2>
-            <span className="font-mono text-[10px] text-slate-500 dark:text-slate-400">P/N: 32-11-45-01 | SV</span>
+            <span className="font-mono text-[10px] text-slate-500 dark:text-slate-400">P/N: {selectedRfq?.part_number || 'Unavailable'} | {selectedRfq?.condition || 'Condition unavailable'}</span>
           </div>
 
-          {isFailedRfq(selectedRfq) && <div role="alert" className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">Intake failed. Sourcing and order actions are disabled. Contact intake operations to arrange retry or escalation.</div>}
+          {isFailedRfq(selectedRfq) && <div role="alert" className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">{selectedRfq?.status.trim().toUpperCase() === 'NEEDS_HUMAN_REVIEW' ? 'Operator review required.' : 'Intake failed.'} Sourcing and order actions are disabled. Contact intake operations for escalation; the reprocess API is not available.</div>}
           <div className="font-mono text-[11px] text-slate-800 dark:text-slate-300 bg-slate-50 dark:bg-slate-900/80 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
-            <span className="text-aero-blue font-bold">PART:</span> Main Landing Gear Actuator | 32-11-45-01 | Condition: SV (Serviceable)
+            <span className="text-aero-blue font-bold">REQUEST:</span> {selectedRfq?.raw_text || 'Select an RFQ to view its submitted request.'}
           </div>
 
-          {/* Source Matrix Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 font-mono text-[11px]">
-            {/* Supplier A */}
-            <button type="button"
-              onClick={() => setSelectedSupplier('A')}
-              className={`p-3 rounded-xl border cursor-pointer transition-all text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${
-                selectedSupplier === 'A'
-                  ? 'bg-blue-50/70 dark:bg-aero-blue/20 border-aero-blue text-slate-900 dark:text-white shadow-sm ring-1 ring-aero-blue'
-                  : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-700'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-bold text-aero-blue">SUPPLIER A</span>
-                <span className="font-bold text-emerald-600 dark:text-emerald-400">$14,200</span>
-              </div>
-              <div className="text-[10px] space-y-0.5 text-slate-600 dark:text-slate-300">
-                <div className="font-bold">(INTERNAL STOCK)</div>
-                <div>Condition: SV</div>
-                <div>Cert: FAA 8130-3</div>
-                <div>Lead: Immediate</div>
-              </div>
-            </button>
-
-            {/* Supplier B */}
-            <button type="button"
-              onClick={() => setSelectedSupplier('B')}
-              className={`p-3 rounded-xl border cursor-pointer transition-all text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${
-                selectedSupplier === 'B'
-                  ? 'bg-blue-50/70 dark:bg-aero-blue/20 border-aero-blue text-slate-900 dark:text-white shadow-sm ring-1 ring-aero-blue'
-                  : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-700'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-bold text-slate-900 dark:text-slate-200">SUPPLIER B</span>
-                <span className="font-bold text-slate-900 dark:text-slate-100">$11,800</span>
-              </div>
-              <div className="text-[10px] space-y-0.5 text-slate-500 dark:text-slate-400">
-                <div>Condition: OH</div>
-                <div>Cert: EASA Form 1</div>
-                <div>Location: FRA</div>
-                <div>Lead: 3 Days</div>
-              </div>
-            </button>
-
-            {/* Supplier C */}
-            <button type="button"
-              onClick={() => setSelectedSupplier('C')}
-              className={`p-3 rounded-xl border cursor-pointer transition-all text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${
-                selectedSupplier === 'C'
-                  ? 'bg-blue-50/70 dark:bg-aero-blue/20 border-aero-blue text-slate-900 dark:text-white shadow-sm ring-1 ring-aero-blue'
-                  : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-700'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-bold text-slate-900 dark:text-slate-200">SUPPLIER C</span>
-                <span className="font-bold text-slate-900 dark:text-slate-100">$12,500</span>
-              </div>
-              <div className="text-[10px] space-y-0.5 text-slate-500 dark:text-slate-400">
-                <div>Condition: SV</div>
-                <div>Cert: 8130-3</div>
-                <div>Location: DFW</div>
-                <div>Lead: Hot Shot</div>
-              </div>
-            </button>
+          <div className="space-y-2 font-mono text-[11px]">
+            <h3 className="flex items-center justify-between gap-2 font-display text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+              <span>Live Supplier Offers</span>
+              <span className="text-[10px] font-normal text-slate-500">{selectedPartNumber || 'Select an RFQ'}</span>
+            </h3>
+            {offersLoading && <p role="status" className="py-4 text-center text-slate-500">Loading supplier offers...</p>}
+            {offersError && <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-700"><span>{offersError}</span><button type="button" onClick={() => void offersQuery.refetch()} className="shrink-0 font-bold underline">Retry</button></div>}
+            {!offersLoading && !offersError && offers.length === 0 && <p role="status" className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">No persisted supplier offers are available for this part.</p>}
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+              {offers.map(offer => (
+                <button key={offer.id} type="button" aria-pressed={selectedOfferId === offer.id} onClick={() => setSelectedOfferId(offer.id)} className={`rounded-xl border p-3 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${selectedOfferId === offer.id ? 'border-aero-blue bg-blue-50 dark:bg-aero-blue/20' : 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900/60'}`}>
+                  <span className="flex items-start justify-between gap-2 font-bold text-aero-blue"><span>{offer.supplier_name}</span><span>${offer.unit_cost.toLocaleString()}</span></span>
+                  <span className="mt-2 block space-y-0.5 text-[10px] text-slate-600 dark:text-slate-300">
+                    <span className="block">Condition: {offer.condition || 'Not provided'}</span>
+                    <span className="block">Certificate: {offer.certificate_type || 'Not provided'}</span>
+                    <span className="block">Available: {offer.quantity_available}</span>
+                    <span className="block">Lead: {offer.lead_time_days} days{offer.location ? ` · ${offer.location}` : ''}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Traceability Compliance Vault */}
@@ -218,7 +178,7 @@ export const AeroProcurementView: React.FC = () => {
                 <FileCheck className="w-4 h-4 text-emerald-500" />
                 <span>TRACEABILITY COMPLIANCE VAULT</span>
               </span>
-              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">Mandatory Documents Verified</span>
+              <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
             </div>
 
             <div className="flex items-center space-x-4 text-[10px]">
@@ -239,16 +199,16 @@ export const AeroProcurementView: React.FC = () => {
 
           {/* Action Buttons */}
           <div className="grid grid-cols-3 gap-2 pt-1 font-display">
-            <button type="button" disabled={actionsBlocked || Boolean(commandPending)} aria-busy={commandPending === 'generate_quote'} onClick={() => void runCommand('generate_quote', 'generate a quote')} className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow-sm disabled:cursor-not-allowed disabled:opacity-50">
-              <FileText className="w-3.5 h-3.5" />
+            <button type="button" disabled={actionsBlocked || commandMutation.isPending} aria-busy={commandPending === 'generate_quote'} onClick={() => void runCommand('generate_quote', 'generate a quote')} className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow-sm disabled:cursor-not-allowed disabled:opacity-50">
+              {commandPending === 'generate_quote' ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <FileText className="w-3.5 h-3.5" />}
               <span>{commandPending === 'generate_quote' ? 'GENERATING...' : 'GENERATE SMART QUOTE'}</span>
             </button>
-            <button type="button" disabled={actionsBlocked || Boolean(commandPending)} aria-busy={commandPending === 'split_po'} onClick={() => void runCommand('split_po', 'split the purchase order')} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1 disabled:cursor-not-allowed disabled:opacity-50">
-              <Split className="w-3.5 h-3.5" />
+            <button type="button" disabled={actionsBlocked || commandMutation.isPending} aria-busy={commandPending === 'split_po'} onClick={() => void runCommand('split_po', 'split the purchase order')} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-1 disabled:cursor-not-allowed disabled:opacity-50">
+              {commandPending === 'split_po' ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Split className="w-3.5 h-3.5" />}
               <span>{commandPending === 'split_po' ? 'SPLITTING...' : 'SPLIT PO'}</span>
             </button>
-            <button type="button" disabled={actionsBlocked || Boolean(commandPending)} aria-busy={commandPending === 'escalate_aog'} onClick={() => void runCommand('escalate_aog', 'escalate this AOG')} className="bg-red-700 hover:bg-red-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow aog-pulse-badge disabled:cursor-not-allowed disabled:opacity-50">
-              <Flame className="w-3.5 h-3.5" />
+            <button type="button" disabled={actionsBlocked || commandMutation.isPending} aria-busy={commandPending === 'escalate_aog'} onClick={() => void runCommand('escalate_aog', 'escalate this AOG')} className="bg-red-700 hover:bg-red-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shadow aog-pulse-badge disabled:cursor-not-allowed disabled:opacity-50">
+              {commandPending === 'escalate_aog' ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Flame className="w-3.5 h-3.5" />}
               <span>{commandPending === 'escalate_aog' ? 'ESCALATING...' : 'ESCALATE AOG'}</span>
             </button>
           </div>
@@ -262,6 +222,7 @@ export const AeroProcurementView: React.FC = () => {
           <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase">
             AOG TRIAGE MATRIX (WORKLOAD VS RESPONSE)
           </h2>
+          <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
 
           {/* 3x3 Heatmap grid */}
           <div className="grid grid-cols-3 gap-2 text-center font-mono text-[10px] font-bold">
@@ -302,6 +263,7 @@ export const AeroProcurementView: React.FC = () => {
           <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase">
             LEAD TIME & QUOTES VOLUME
           </h2>
+          <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
           <div className="h-36 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={leadTimeData}>

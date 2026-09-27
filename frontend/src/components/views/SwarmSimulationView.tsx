@@ -112,7 +112,7 @@ export const SwarmSimulationView: React.FC = () => {
           </div>
           <div className="flex items-center gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400">
             <span className="h-2 w-2 rounded-full bg-emerald-500" /> Local simulation bus online
-            <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 font-mono text-[10px] dark:border-slate-700 dark:bg-slate-900">{runCount} runs</span>
+            <span className="inline-flex h-7 min-h-0 items-center justify-center whitespace-nowrap rounded-full border border-slate-200 bg-white px-2.5 font-mono text-[10px] leading-none dark:border-slate-700 dark:bg-slate-900">{runCount} runs</span>
           </div>
         </div>
 

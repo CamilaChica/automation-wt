@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { ViewMode, ThemeMode } from '../../types';
-import { Search, Sun, Moon, ShieldCheck, UserCheck, AlertTriangle, Bot, Menu } from 'lucide-react';
+import { Search, Sun, Moon, ShieldCheck, UserCheck, AlertTriangle, Bell, Menu } from 'lucide-react';
 import { BrandMark } from './BrandMark';
 import { FloatingQa } from './FloatingQa';
+import { useMailboxHealth, useSystemHealth } from '../../hooks/useApiResources';
+import { apiService } from '../../services/api';
 
 interface TopBarProps {
   currentView: ViewMode;
@@ -12,6 +14,7 @@ interface TopBarProps {
   onSearch?: (query: string) => void;
   onOpenAuditLog?: () => void;
   onOpenSidebar?: () => void;
+  onOpenProfile?: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -22,9 +25,26 @@ export const TopBar: React.FC<TopBarProps> = ({
   onSearch,
   onOpenAuditLog,
   onOpenSidebar,
+  onOpenProfile,
 }) => {
   const [timeString, setTimeString] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [employeeName, setEmployeeName] = useState('');
+  const [employeeTitle, setEmployeeTitle] = useState('');
+  const [isOnline, setIsOnline] = useState(false);
+  const systemHealth = useSystemHealth();
+  const role = localStorage.getItem('wt_role');
+  const isBoss = localStorage.getItem('wt_email')?.toLowerCase() === 'camila@wingedtycoons.com';
+  const mailboxHealthEnabled = ['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_SALES', 'ROLE_PURCHASING', 'ROLE_INTERNAL'].includes(role || '');
+  const mailboxHealth = useMailboxHealth(mailboxHealthEnabled);
+  const mailboxStates = Object.values(mailboxHealth.data || {});
+  const mailboxStatus = mailboxHealth.error
+    ? 'unavailable'
+    : mailboxHealth.isLoading
+      ? 'checking'
+      : mailboxStates.length === 0
+        ? 'unknown'
+        : mailboxStates.every(mailbox => mailbox.status === 'ok') ? 'healthy' : 'attention required';
 
   useEffect(() => {
     const updateTime = () => {
@@ -36,34 +56,23 @@ export const TopBar: React.FC<TopBarProps> = ({
     return () => clearInterval(interval);
   }, []);
 
-  const getViewTitle = () => {
-    switch (currentView) {
-      case 'customer':
-        return 'CUSTOMER DASHBOARD | GLOBAL AIRLINES (MRO OPS)';
-      case 'sourcing':
-        return 'WINGED TYCOONS | PROC COMMAND CENTER | SUPPLIER & PART SOURCING';
-      case 'aero-procurement':
-        return 'WINGED TYCOONS | AERO-PROCUREMENT COMMAND CENTER';
-      case 'trace-vault':
-        return 'WINGED TYCOONS | PROC COMMAND CENTER | TRACE VAULT & COMPLIANCE';
-      case 'fulfillment':
-        return 'CORE UI MODULES & VISUAL ANATOMY | FULFILLMENT COMMAND HUB (FCH)';
-      case 'sales':
-        return 'WINGED TYCOONS | SALES COMMAND CENTER | GLOBAL FLEET SOLUTIONS';
-      default:
-        return 'WINGED TYCOONS | COMMAND CENTER';
-    }
-  };
-
-  const getOperatorName = () => {
-    switch (currentView) {
-      case 'customer': return 'ALEX R. (MRO OPS)';
-      case 'sourcing': return 'ELIZA C. (PROC OPERATIONS)';
-      case 'trace-vault': return 'MARIA G. (QUALITY OPERATIONS)';
-      case 'fulfillment': return 'MARCUS D. (OPS LEAD)';
-      default: return 'ALEX R. (MRO SALES)';
-    }
-  };
+  useEffect(() => {
+    let active = true;
+    const refreshProfile = () => {
+      void apiService.getEmployeeProfile().then(profile => {
+        if (!active) return;
+        setEmployeeName(profile.display_name);
+        setEmployeeTitle(profile.job_title);
+        setIsOnline(profile.is_online);
+      }).catch(() => undefined);
+    };
+    refreshProfile();
+    window.addEventListener('wt-employee-profile-changed', refreshProfile);
+    return () => {
+      active = false;
+      window.removeEventListener('wt-employee-profile-changed', refreshProfile);
+    };
+  }, []);
 
   return (
     <>
@@ -84,9 +93,6 @@ export const TopBar: React.FC<TopBarProps> = ({
           </span>
         </a>
         <div className="h-4 w-px shrink-0 bg-slate-300 dark:bg-slate-700" />
-        <span className="hidden min-w-0 flex-1 truncate font-display font-semibold text-slate-700 dark:text-slate-300 tracking-wide uppercase sm:inline">
-          {getViewTitle()}
-        </span>
       </div>
 
       {/* Center Search & AOG Badge */}
@@ -118,7 +124,19 @@ export const TopBar: React.FC<TopBarProps> = ({
       {/* Right Controls: Telemetry, Theme, Notifications & User */}
       <div className="ml-auto flex shrink-0 items-center space-x-1.5 md:space-x-4">
         {/* Sub-header status tags */}
-        <div className="hidden lg:flex items-center space-x-3 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+        <div className="hidden xl:flex items-center space-x-2 text-[10px] font-mono text-slate-600 dark:text-slate-400">
+          <span className="flex items-center gap-1" title={systemHealth.error?.message || `Readiness status: ${systemHealth.data?.status || 'checking'}`} aria-label={`API readiness ${systemHealth.error ? 'unavailable' : systemHealth.data?.status || 'checking'}`}>
+            <span aria-hidden="true" className={`h-2 w-2 rounded-full ${systemHealth.error ? 'bg-red-500' : systemHealth.data?.status === 'ready' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+            <span>API {systemHealth.isLoading ? '…' : systemHealth.error ? 'DEGRADED' : systemHealth.data?.status === 'ready' ? 'READY' : 'UNKNOWN'}</span>
+            {systemHealth.error && <button type="button" aria-label="Retry API readiness" onClick={() => void systemHealth.refetch()} className="ml-1 underline">Retry</button>}
+          </span>
+          {mailboxHealthEnabled && <span className="flex items-center gap-1" title={mailboxHealth.error?.message || `Mailbox health: ${mailboxStatus}`} aria-label={`Mailbox health ${mailboxStatus}`}>
+            <span aria-hidden="true" className={`h-2 w-2 rounded-full ${mailboxStatus === 'healthy' ? 'bg-emerald-500' : mailboxStatus === 'checking' ? 'bg-amber-500' : 'bg-red-500'}`} />
+            <span>MAIL {mailboxStatus === 'healthy' ? 'OK' : mailboxStatus === 'checking' ? '…' : mailboxStatus === 'attention required' ? 'ATTENTION' : 'N/A'}</span>
+            {mailboxHealth.error && <button type="button" aria-label="Retry mailbox health" onClick={() => void mailboxHealth.refetch()} className="ml-1 underline">Retry</button>}
+          </span>}
+        </div>
+        <div className="hidden 2xl:flex items-center space-x-3 text-[11px] font-mono text-slate-600 dark:text-slate-400">
           <span className="flex items-center space-x-1 text-emerald-600 dark:text-emerald-400 font-semibold">
             <ShieldCheck className="w-3.5 h-3.5" />
             <span>SPEED. TRACEABILITY. RELIABILITY.</span>
@@ -127,14 +145,14 @@ export const TopBar: React.FC<TopBarProps> = ({
           <span className="font-semibold text-slate-800 dark:text-slate-200">{timeString}</span>
         </div>
 
-        {/* Agent Audit Log Drawer Trigger */}
+        {/* Shared notifications/activity drawer trigger */}
         <button
           onClick={onOpenAuditLog}
-          aria-label="Open agent activity log"
-          title="Agent activity log"
+          aria-label="Open notifications and agent activity"
+          title="Notifications and agent activity"
           className="flex min-h-11 min-w-11 shrink-0 items-center justify-center space-x-1.5 rounded-xl border border-blue-200 bg-blue-50 p-2 font-mono text-[10px] font-bold text-aero-blue shadow-sm transition-all hover:bg-aero-blue hover:text-white dark:border-aero-blue/40 dark:bg-aero-blue/10 md:px-3 md:py-1.5"
         >
-          <Bot className="w-3.5 h-3.5" />
+          <Bell className="w-3.5 h-3.5" aria-hidden="true" />
           <span className="hidden md:inline">ACTIVITY LOG</span>
         </button>
 
@@ -153,18 +171,18 @@ export const TopBar: React.FC<TopBarProps> = ({
         </button>
 
         {/* Operator Profile Context */}
-        <div className="hidden sm:flex items-center space-x-2 bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-xl">
+        <button type="button" onClick={onOpenProfile} aria-label="Open employee profile and work hours" title="Profile and work hours" className="hidden sm:flex items-center space-x-2 bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-xl text-left hover:border-aero-blue focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">
           <div className="w-6 h-6 rounded-full bg-blue-100 dark:bg-slate-700 flex items-center justify-center text-aero-blue font-bold font-mono">
             <UserCheck className="w-3.5 h-3.5" />
           </div>
           <div className="flex flex-col text-[11px] leading-tight">
-            <span className="font-semibold text-slate-900 dark:text-slate-100">{getOperatorName()}</span>
-            <span className="text-[9px] font-mono text-emerald-600 dark:text-emerald-400 flex items-center space-x-1 font-bold">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>ONLINE</span>
+            <span className="font-semibold text-slate-900 dark:text-slate-100">{isBoss ? 'BOSS' : (employeeName || localStorage.getItem('wt_email')?.split('@')[0] || 'EMPLOYEE').toUpperCase()}{employeeTitle ? ` (${employeeTitle.toUpperCase()})` : ''}</span>
+            <span className={`flex items-center space-x-1 text-[9px] font-mono font-bold ${isOnline ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-slate-400'}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`}></span>
+              <span>{isOnline ? 'ONLINE' : 'OFFLINE'}</span>
             </span>
           </div>
-        </div>
+        </button>
       </div>
     </header>
     <FloatingQa audience="internal" />

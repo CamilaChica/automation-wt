@@ -9,6 +9,11 @@ export type ViewMode =
   | 'voice-service';
 
 export type ThemeMode = 'dark' | 'light';
+export type ISODateTime = string;
+export type RFQStatus =
+  | 'Intake' | 'Validating' | 'Supplier_Sourcing' | 'Compliance_Check' | 'Pricing'
+  | 'Pending_Approval' | 'Quote_Sent' | 'Quote_Dispatch_Pending' | 'Rejected'
+  | 'FAILED' | 'NEEDS_HUMAN_REVIEW' | 'Intake_Failed' | (string & {});
 
 export interface RFQItem {
   id: string;
@@ -19,15 +24,16 @@ export interface RFQItem {
   uom: string;
   aircraft_type?: string;
   condition_preference?: 'SV' | 'NE' | 'NS' | 'OH' | 'AR';
+  is_sample_data?: boolean;
 }
 
 export interface RFQ {
   id: string;
   customer_name: string;
   customer_email: string;
-  status: string;
+  status: RFQStatus;
   raw_text: string;
-  created_at: string;
+  created_at: ISODateTime;
   urgency?: 'AOG' | 'Critical' | 'Routine';
   part_number?: string;
   quantity?: number;
@@ -35,6 +41,10 @@ export interface RFQ {
   best_price?: number;
   lead_time?: string;
   delivery_location?: string;
+  workflow_state?: string;
+  automation_paused?: boolean;
+  version?: number;
+  is_sample_data?: boolean;
 }
 
 export interface InventoryItem {
@@ -47,6 +57,7 @@ export interface InventoryItem {
   unit_cost: number;
   certificate_type: string;
   has_full_trace: boolean;
+  is_sample_data?: boolean;
 }
 
 export interface Supplier {
@@ -70,6 +81,7 @@ export interface Supplier {
   itar_certified: boolean;
   account_manager?: string;
   notes?: string;
+  is_sample_data?: boolean;
 }
 
 export interface SupplierQuote {
@@ -90,6 +102,7 @@ export interface SupplierQuote {
   return_rate?: string;
   confidence?: number;
   supplier_email?: string;
+  is_sample_data?: boolean;
 }
 
 export interface QuoteItem {
@@ -108,13 +121,16 @@ export interface QuoteItem {
   description?: string;
   condition?: string;
   lead_time_days?: number;
+  is_sample_data?: boolean;
 }
 
 export interface ShipmentEvent {
   id: string;
+  shipment_id?: string;
   status: string;
   location?: string;
   description: string;
+  occurred_at?: ISODateTime;
 }
 
 export interface Shipment {
@@ -124,6 +140,13 @@ export interface Shipment {
   tracking_number?: string;
   estimated_delivery?: string;
   events?: ShipmentEvent[];
+  rfq_id?: string;
+  quote_id?: string;
+  part_numbers?: string[];
+  quantity?: number;
+  created_at?: ISODateTime;
+  updated_at?: ISODateTime;
+  is_sample_data?: boolean;
 }
 
 export type InternalCommand =
@@ -152,7 +175,11 @@ export interface Quote {
   status: 'Draft' | 'Approved' | 'Rejected' | 'Sent';
   comments?: string;
   approved_by?: string;
-  approved_at?: string;
+  approved_at?: ISODateTime;
+  lead_time_days?: number;
+  valid_until?: string;
+  version?: number;
+  is_sample_data?: boolean;
 }
 
 export interface AgentAuditLog {
@@ -163,7 +190,7 @@ export interface AgentAuditLog {
   message: string;
   status: 'SUCCESS' | 'WARNING' | 'FAILURE';
   payload_json?: string;
-  timestamp: string;
+  timestamp: ISODateTime;
 }
 
 export interface AutomationEvent {
@@ -177,15 +204,27 @@ export interface AutomationEvent {
   execution_time?: string;
   result?: string;
   error?: string;
-  created_at: string;
+  created_at: ISODateTime;
 }
 
 export interface RFQDetailResponse {
   rfq: RFQ;
   items: RFQItem[];
-  logs: AgentAuditLog[];
+  logs?: AgentAuditLog[];
+  isFallback?: boolean;
   quote_details?: {
     quote: Quote;
-    items: QuoteItem[];
+    items: Array<QuoteItem | CustomerQuoteItem>;
   };
+  is_sample_data?: boolean;
+}
+
+export interface CustomerQuoteItem {
+  part_number: string;
+  quantity: number;
+  unit_price: number;
+  certificate_type: string;
+  compliance_status: string;
+  attachments?: string[];
+  is_sample_data?: boolean;
 }

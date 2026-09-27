@@ -1,6 +1,8 @@
-import React, { useEffect, useState } from 'react';
-import { apiService } from '../../services/api';
-import { InternalCommand, Shipment } from '../../types';
+import React, { useState } from 'react';
+import { getApiErrorMessage } from '../../services/api';
+import { Badge } from '../common/Badge';
+import { InternalCommand } from '../../types';
+import { useExecuteInternalCommand, useFulfillmentStages } from '../../hooks/useApiResources';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { 
   QrCode, 
@@ -9,48 +11,44 @@ import {
   Printer, 
   ShieldCheck, 
   CheckCircle,
-  FileCheck
+  FileCheck,
+  Loader2
 } from 'lucide-react';
 
 export const FulfillmentHubView: React.FC = () => {
-  const [shipments, setShipments] = useState<Shipment[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const shipmentsQuery = useFulfillmentStages();
+  const stages = shipmentsQuery.data || [];
+  const shipments = stages;
+  const loading = shipmentsQuery.isLoading;
+  const error = shipmentsQuery.error?.message || null;
   const [notice, setNotice] = useState<string | null>(null);
   const [commandPending, setCommandPending] = useState<InternalCommand | null>(null);
+  const [noticeType, setNoticeType] = useState<'success' | 'error'>('success');
+  const commandMutation = useExecuteInternalCommand();
+  const selectedShipment = shipments[0];
+  const actionsBlocked = loading || Boolean(error) || !selectedShipment;
 
   const runCommand = async (command: InternalCommand, description: string) => {
-    if (commandPending) return;
+    if (commandMutation.isPending || actionsBlocked || !selectedShipment) return;
     if (!window.confirm(`Confirm ${description}?`)) return;
     setCommandPending(command);
     setNotice(null);
     try {
-      const result = await apiService.executeInternalCommand(command, 'fulfillment');
+      const result = await commandMutation.mutateAsync({ command, entityId: selectedShipment.shipment_id, details: `Shipment ${selectedShipment.shipment_id}: ${description}` });
+      if (!result) return;
+      setNoticeType('success');
       setNotice(result.message);
     } catch (requestError) {
-      setNotice(requestError instanceof Error ? requestError.message : `Unable to ${description}.`);
+      setNoticeType('error');
+      setNotice(getApiErrorMessage(requestError, `Unable to ${description}.`));
     } finally {
       setCommandPending(null);
     }
   };
 
-  const loadShipments = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      setShipments(await apiService.getShipments());
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Unable to load shipments.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { void loadShipments(); }, []);
-
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
-      {notice && <div role="status" aria-live="polite" className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-semibold text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
+      {notice && <div role={noticeType === 'error' ? 'alert' : 'status'} aria-live="polite" className={`rounded-xl border px-4 py-3 text-xs font-semibold ${noticeType === 'error' ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200' : 'border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200'}`}>{notice}</div>}
       {/* Stage Progress Breadcrumb Tracker */}
       <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm">
         <div className="grid grid-cols-1 gap-2 font-mono text-[11px] sm:grid-cols-2 lg:grid-cols-5">
@@ -84,14 +82,14 @@ export const FulfillmentHubView: React.FC = () => {
       <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
         <div className="flex items-center justify-between">
           <h2 className="font-display font-bold text-xs uppercase tracking-wider">Live Shipments</h2>
-          <span className="font-mono text-[10px] text-aero-blue">{shipments.length} tracked</span>
+          <span className="font-mono text-[10px] text-aero-blue">{loading ? '…' : error ? '—' : `${shipments.length} tracked`}</span>
         </div>
-        {error && <div role="alert" className="mt-4 flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700"><span>{error}</span><button type="button" onClick={() => void loadShipments()} className="font-bold underline">Retry</button></div>}
+        {error && <div role="alert" className="mt-4 flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700"><span>{error}</span><button type="button" onClick={() => void shipmentsQuery.refetch()} className="font-bold underline">Retry</button></div>}
         <div className="mt-4 grid gap-3 md:grid-cols-3">
           {loading ? <p className="text-sm text-slate-400" role="status" aria-live="polite" aria-busy="true">Loading shipments...</p> : shipments.length === 0 ? <p className="text-sm text-slate-400" role="status" aria-live="polite">No shipments are currently registered.</p> : shipments.slice(0, 6).map(shipment => (
-            <div key={shipment.id} className="rounded-xl border border-slate-200 dark:border-slate-800 p-3 text-xs">
-              <div className="font-mono font-bold text-aero-blue">{shipment.id}</div>
-              <div className="mt-1 font-semibold">{shipment.status}</div>
+            <div key={shipment.shipment_id} className="rounded-xl border border-slate-200 dark:border-slate-800 p-3 text-xs">
+              <div className="font-mono font-bold text-aero-blue">{shipment.shipment_id}</div>
+              <div className="mt-1 font-semibold">{shipment.stage}: {shipment.status}</div>
               <div className="mt-1 text-slate-500">{shipment.carrier || 'Carrier pending'} {shipment.tracking_number || ''}</div>
             </div>
           ))}
@@ -107,6 +105,7 @@ export const FulfillmentHubView: React.FC = () => {
               <span className="w-2 h-2 rounded-full bg-aero-blue" />
               <span>DIGITAL QA WORKBENCH</span>
             </h2>
+            <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
           </div>
 
           <div className="font-mono text-[11px] space-y-0.5">
@@ -159,6 +158,7 @@ export const FulfillmentHubView: React.FC = () => {
             <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase border-b border-slate-100 dark:border-slate-800 pb-3">
               AERO-PACKAGING PROTOCOL (ATA 300)
             </h2>
+            <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
 
             <div className="font-mono text-[11px] space-y-0.5">
               <div className="text-slate-500 dark:text-slate-400">Part Number: <span className="text-slate-900 dark:text-slate-100 font-bold">32-11-45-01</span></div>
@@ -176,8 +176,8 @@ export const FulfillmentHubView: React.FC = () => {
               </div>
             </div>
 
-            <button type="button" disabled={Boolean(commandPending)} aria-busy={commandPending === 'print_tags'} onClick={() => void runCommand('print_tags', 'print ATA 300 Category I tags')} className="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-display font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 transition-colors disabled:cursor-not-allowed disabled:opacity-50">
-              <Printer className="w-4 h-4 text-aero-blue" />
+            <button type="button" disabled={actionsBlocked || commandMutation.isPending} aria-busy={commandPending === 'print_tags'} onClick={() => void runCommand('print_tags', 'print ATA 300 Category I tags')} className="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-display font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 transition-colors disabled:cursor-not-allowed disabled:opacity-50">
+              {commandPending === 'print_tags' ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Printer className="w-4 h-4 text-aero-blue" />}
               <span>{commandPending === 'print_tags' ? 'QUEUEING TAGS...' : 'PRINT ATA 300 CAT I TAGS'}</span>
             </button>
           </div>
@@ -193,12 +193,13 @@ export const FulfillmentHubView: React.FC = () => {
               <ShieldCheck className="w-4 h-4 text-emerald-500" />
               <span>6. COMPLIANCE PACKET COMPILER</span>
             </h2>
+            <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
           </div>
 
           <div className="space-y-3 font-mono text-[11px]">
             <div className="flex items-center justify-between gap-3 bg-slate-50 p-3 text-slate-800 dark:bg-slate-900/80 dark:text-slate-200">
               <span className="min-w-0 font-semibold">Airworthiness verification</span>
-              <span className="shrink-0 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">SAMPLE</span>
+              <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
             </div>
 
             <div className="bg-slate-50 dark:bg-slate-900/80 p-3 rounded-xl border border-slate-200 dark:border-slate-800 space-y-1">
@@ -206,7 +207,8 @@ export const FulfillmentHubView: React.FC = () => {
               <div className="text-emerald-700 dark:text-emerald-400 font-bold">DIGITAL TAMPER-EVIDENT STAMPS</div>
             </div>
 
-            <button type="button" disabled={Boolean(commandPending)} aria-busy={commandPending === 'generate_stamps'} onClick={() => void runCommand('generate_stamps', 'generate serialized tamper-evident stamps')} className="w-full bg-blue-50 hover:bg-blue-100 dark:bg-aero-blue/20 dark:hover:bg-aero-blue text-aero-blue dark:text-aero-blue dark:hover:text-white border border-blue-200 dark:border-aero-blue/40 font-bold py-2.5 px-3 rounded-xl text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50">
+            <button type="button" disabled={actionsBlocked || commandMutation.isPending} aria-busy={commandPending === 'generate_stamps'} onClick={() => void runCommand('generate_stamps', 'generate serialized tamper-evident stamps')} className="w-full bg-blue-50 hover:bg-blue-100 dark:bg-aero-blue/20 dark:hover:bg-aero-blue text-aero-blue dark:text-aero-blue dark:hover:text-white border border-blue-200 dark:border-aero-blue/40 font-bold py-2.5 px-3 rounded-xl text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50">
+              {commandPending === 'generate_stamps' && <Loader2 className="mr-2 inline h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
               {commandPending === 'generate_stamps' ? 'GENERATING STAMPS...' : 'SERIALIZED TAMPER-EVIDENT STAMPS'}
             </button>
 

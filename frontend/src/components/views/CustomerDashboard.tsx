@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { WorkflowStepper } from '../common/WorkflowStepper';
-import { apiService } from '../../services/api';
-import { SimulatedDataBanner } from '../common/SimulatedDataBanner';
+import { getApiErrorMessage } from '../../services/api';
+import { Badge } from '../common/Badge';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { RFQ } from '../../types';
 import { isFailedRfq } from '../../utils/rfqState';
 import { getAgentIdentity } from '../../services/agentIdentity';
+import { useCreateRFQ, useDispatchQuote, useRFQDetail, useRFQs, useShipments } from '../../hooks/useApiResources';
 import { 
   Send, 
   CheckCircle, 
@@ -33,7 +34,8 @@ import {
   Layers,
   Award,
   Eye,
-  X
+  X,
+  Loader2
 } from 'lucide-react';
 
 type ClientTab = 'quotations' | 'new-rfq' | 'tracking' | 'trace-vault' | 'analytics';
@@ -56,23 +58,37 @@ export const CustomerDashboard: React.FC = () => {
   const [documents, setDocuments] = useState({ faa8130: true, easaForm1: false, trace121: true, nonIncident: true });
   
   // Active RFQs & Quotations
-  const [activeRfqs, setActiveRfqs] = useState<RFQ[]>([]);
   const [selectedRfqId, setSelectedRfqId] = useState('');
-  const [loadingRfqs, setLoadingRfqs] = useState(true);
-  const [usingFallbackData, setUsingFallbackData] = useState(false);
-  const [approving, setApproving] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'info' | 'error'; message: string } | null>(null);
   const [selectedOption, setSelectedOption] = useState<'A' | 'B' | 'C'>('A');
-  const [submitting, setSubmitting] = useState(false);
 
   // Modals
   const [isApproveModalOpen, setIsApproveModalOpen] = useState(false);
   const [isDocModalOpen, setIsDocModalOpen] = useState(false);
   const [selectedDoc, setSelectedDoc] = useState<{ tag: string; pn: string; sn: string; cert: string; date: string } | null>(null);
-  const [poNumber, setPoNumber] = useState('PO-2026-9941');
   const [approverName, setApproverName] = useState('Alex R. (Lead MRO Engineer)');
 
-  const selectedRfq = activeRfqs.find(r => r.id === selectedRfqId) || {
+  const rfqQuery = useRFQs();
+  const shipmentQuery = useShipments();
+  const rfqDetailQuery = useRFQDetail(selectedRfqId);
+  const createRfqMutation = useCreateRFQ();
+  const dispatchQuoteMutation = useDispatchQuote();
+  const activeRfqs = rfqQuery.data || [];
+  const selectedRfqDetail = rfqDetailQuery.data;
+  const shipments = shipmentQuery.data || [];
+  const loadingRfqs = rfqQuery.isLoading;
+  const loadingShipments = shipmentQuery.isLoading;
+  const loadingRfqDetail = rfqDetailQuery.isLoading;
+  const rfqLoadError = rfqQuery.error?.message || null;
+  const shipmentLoadError = shipmentQuery.error?.message || null;
+  const rfqDetailError = rfqDetailQuery.error?.message || null;
+  const usingFallbackData = rfqQuery.isSampleData;
+  const approving = dispatchQuoteMutation.isPending;
+  const submitting = createRfqMutation.isPending;
+  const refreshRfqs = rfqQuery.refetch;
+  const refreshShipments = shipmentQuery.refetch;
+
+  const selectedRfq: RFQ = activeRfqs.find(r => r.id === selectedRfqId) || {
     id: selectedRfqId || 'No RFQ selected',
     customer_name: 'Customer',
     customer_email: '',
@@ -81,26 +97,18 @@ export const CustomerDashboard: React.FC = () => {
     created_at: new Date(0).toISOString()
   };
   const selectedRfqFailed = isFailedRfq(activeRfqs.find(rfq => rfq.id === selectedRfqId));
+  const liveQuote = selectedRfqDetail && !selectedRfqDetail.isFallback
+    ? selectedRfqDetail.quote_details?.quote
+    : undefined;
 
-  const refreshRfqs = async () => {
-    setLoadingRfqs(true);
-    try {
-      const result = await apiService.getRFQsWithSource();
-      const rfqs = result.rfqs;
-      setUsingFallbackData(result.isFallback);
-      setActiveRfqs(rfqs);
-      setSelectedRfqId(currentId => rfqs.some(rfq => rfq.id === currentId) ? currentId : rfqs[0]?.id || '');
-    } catch (error) {
-      setUsingFallbackData(false);
-      setNotification({ type: 'error', message: error instanceof Error ? error.message : 'Unable to load your RFQs. Please retry.' });
-    } finally {
-      setLoadingRfqs(false);
-    }
-  };
+  const readyForApprovalCount = activeRfqs.filter(rfq =>
+    ['quoted', 'quote_ready', 'pending_approval', 'pending_internal_review'].includes(rfq.status.trim().toLowerCase().replace(/[\s-]+/g, '_')),
+  ).length;
+  const inTransitShipmentCount = shipments.filter(shipment => /transit|shipped|out_for_delivery/i.test(shipment.status)).length;
 
   useEffect(() => {
-    void refreshRfqs();
-  }, []);
+    if (!selectedRfqId && activeRfqs.length > 0) setSelectedRfqId(activeRfqs[0].id);
+  }, [activeRfqs, selectedRfqId]);
 
   // Quick Preset Handlers
   const applyPreset = (preset: 'aog-actuator' | 'routine-overhaul' | 'hydraulic-pump' | 'avionics') => {
@@ -141,42 +149,34 @@ export const CustomerDashboard: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitting(true);
+    if (submitting) return;
     const rawText = `RFQ P/N ${partNumber} (${partName}) Qty ${quantity} Condition: ${Object.keys(conditions).filter(key => conditions[key as ConditionKey]).join(', ')} Urgency: ${urgency} Delivery: ${deliveryIcao} ${dockLocation}`;
     try {
-      const res = await apiService.submitCustomerRFQ(rawText, 'GLOBAL AIRLINES', 'mro.ops@globalairlines.com');
-      await refreshRfqs();
+      const res = await createRfqMutation.mutateAsync({ raw_text: rawText, customer_name: 'GLOBAL AIRLINES', customer_email: 'mro.ops@globalairlines.com' });
+      if (!res) return;
       setSelectedRfqId(res.rfq_id);
       setActiveTab('quotations');
       setNotification({ type: 'success', message: `RFQ ${res.rfq_id} submitted and is now visible in your RFQ list.` });
       setTimeout(() => setNotification(null), 6000);
     } catch (error) {
-      setNotification({ type: 'error', message: error instanceof Error ? error.message : 'RFQ submission failed. Please retry.' });
-    } finally {
-      setSubmitting(false);
+      setNotification({ type: 'error', message: getApiErrorMessage(error, 'RFQ submission failed. Please retry.') });
     }
   };
 
   const handleApproveQuote = async () => {
-    if (usingFallbackData || selectedRfqFailed) {
-      setNotification({ type: 'error', message: selectedRfqFailed ? 'Intake failed. Approval is disabled; contact intake operations.' : 'Quote approval is disabled while sample data is displayed.' });
+    if (approving) return;
+    if (usingFallbackData || selectedRfqFailed || !liveQuote || selectedRfqDetail?.isFallback) {
+      setNotification({ type: 'error', message: selectedRfqFailed ? 'Intake failed. Approval is disabled; contact intake operations.' : 'Approval is disabled until a persisted quote is available.' });
       return;
     }
-    setApproving(true);
     try {
-      await apiService.submitPurchaseOrder(
-        `QTE-${selectedRfqId.replace('WT-', '')}`,
-        poNumber,
-        selectedRfq.customer_email,
-      );
-      await refreshRfqs();
+      const result = await dispatchQuoteMutation.mutateAsync({ quoteId: liveQuote.id, operatorName: approverName });
+      if (!result) return;
       setIsApproveModalOpen(false);
-      setNotification({ type: 'success', message: `Quotation approved! Purchase Order ${poNumber} linked.` });
+      setNotification({ type: 'success', message: result.message });
       setTimeout(() => setNotification(null), 7000);
     } catch (error) {
-      setNotification({ type: 'error', message: error instanceof Error ? error.message : 'Quote approval failed. Please retry.' });
-    } finally {
-      setApproving(false);
+      setNotification({ type: 'error', message: getApiErrorMessage(error, 'Quote approval failed. Please retry.') });
     }
   };
 
@@ -187,8 +187,11 @@ export const CustomerDashboard: React.FC = () => {
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans">
-      <SimulatedDataBanner label="SIMULATED CUSTOMER METRICS AND SOURCING OPTIONS" />
-      {usingFallbackData && <FallbackDataBanner />}
+      <div role="note" className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[10px] text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
+        <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
+        <span>Pricing options, document previews, and response-time estimates are illustrative. RFQ and shipment counts load from the API.</span>
+      </div>
+      {usingFallbackData && <FallbackDataBanner message="RFQ API unavailable; local sample RFQs are shown and mutation actions are disabled." />}
       {/* 1. Client Header & Profile Card */}
       <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm transition-all">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -232,7 +235,7 @@ export const CustomerDashboard: React.FC = () => {
           <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-xl border border-slate-100 dark:border-slate-800">
             <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">ACTIVE RFQS</div>
             <div className="text-xl font-display font-bold text-slate-900 dark:text-white mt-0.5 flex items-center justify-between">
-              <span>{activeRfqs.length}</span>
+              <span>{loadingRfqs ? '…' : rfqLoadError ? '—' : activeRfqs.length}</span>
               <Package className="w-4 h-4 text-blue-500" />
             </div>
           </div>
@@ -240,17 +243,18 @@ export const CustomerDashboard: React.FC = () => {
           <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-xl border border-slate-100 dark:border-slate-800">
             <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">READY FOR APPROVAL</div>
             <div className="text-xl font-display font-bold text-amber-600 dark:text-amber-400 mt-0.5 flex items-center justify-between">
-              <span>2</span>
+              <span>{loadingRfqs ? '…' : rfqLoadError ? '—' : readyForApprovalCount}</span>
               <Clock className="w-4 h-4 text-amber-500" />
             </div>
           </div>
 
           <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-xl border border-slate-100 dark:border-slate-800">
-            <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">IN-TRANSIT FLIGHTS</div>
+            <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">IN-TRANSIT SHIPMENTS</div>
             <div className="text-xl font-display font-bold text-emerald-600 dark:text-emerald-400 mt-0.5 flex items-center justify-between">
-              <span>1</span>
+              <span>{loadingShipments ? '…' : shipmentLoadError ? '—' : inTransitShipmentCount}</span>
               <Plane className="w-4 h-4 text-emerald-500" />
             </div>
+            {shipmentLoadError && <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-red-700" role="alert"><span>{shipmentLoadError}</span><button type="button" onClick={() => void refreshShipments()} className="shrink-0 font-bold underline">Retry</button></div>}
           </div>
 
           <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-xl border border-slate-100 dark:border-slate-800">
@@ -259,15 +263,16 @@ export const CustomerDashboard: React.FC = () => {
               <span>14.2 min</span>
               <ShieldCheck className="w-4 h-4 text-aero-blue" />
             </div>
+            <Badge variant="outline" className="mt-2">SAMPLE / DEMO DATA</Badge>
           </div>
         </div>
       </div>
 
       {/* 2. Notification Banner */}
       {notification && (
-        <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 p-4 rounded-xl flex items-center justify-between text-xs font-semibold shadow-sm animate-fade-in">
+        <div role={notification.type === 'error' ? 'alert' : 'status'} aria-live="polite" className={`border p-4 rounded-xl flex items-center justify-between text-xs font-semibold shadow-sm animate-fade-in ${notification.type === 'error' ? 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800 text-red-800 dark:text-red-300' : 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'}`}>
           <div className="flex items-center space-x-2.5">
-            <CheckCircle className="w-5 h-5 text-emerald-500 shrink-0" />
+            {notification.type === 'error' ? <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" /> : <CheckCircle className="w-5 h-5 text-emerald-500 shrink-0" />}
             <span>{notification.message}</span>
           </div>
           <button 
@@ -346,6 +351,9 @@ export const CustomerDashboard: React.FC = () => {
 
                 {/* RFQs List Cards */}
                 <div className="space-y-2.5">
+                  {loadingRfqs && <div className="space-y-2" role="status" aria-live="polite" aria-busy="true"><div className="h-16 animate-pulse rounded-xl bg-slate-100 dark:bg-slate-800" /><div className="h-16 animate-pulse rounded-xl bg-slate-100 dark:bg-slate-800" /></div>}
+                  {rfqLoadError && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">{rfqLoadError}<button type="button" onClick={() => void refreshRfqs()} className="ml-2 font-bold underline">Retry</button></div>}
+                  {!loadingRfqs && !rfqLoadError && activeRfqs.length === 0 && <p role="status" className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">No RFQs are currently available.</p>}
                   {activeRfqs.map((rfq) => {
                     const isSelected = selectedRfqId === rfq.id;
                     const isAOG = rfq.urgency === 'AOG';
@@ -428,11 +436,16 @@ export const CustomerDashboard: React.FC = () => {
                 </button>
               </div>
 
+              {rfqDetailError && <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300"><span>{rfqDetailError}</span><button type="button" onClick={() => void rfqDetailQuery.refetch()} className="shrink-0 font-bold underline">Retry</button></div>}
+              {loadingRfqDetail && <p role="status" className="text-xs text-slate-500">Loading persisted quote details...</p>}
+              {!loadingRfqDetail && !rfqDetailError && selectedRfqDetail && !liveQuote && <p role="status" className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">No quote is attached to this RFQ yet.</p>}
+              {selectedRfqFailed && <div role="alert" className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">{activeRfqs.find(rfq => rfq.id === selectedRfqId)?.status.trim().toUpperCase() === 'NEEDS_HUMAN_REVIEW' ? 'Operator review required.' : 'Intake failed.'} Approval and sourcing actions are disabled. Contact intake operations for escalation; the reprocess API is not available.</div>}
+
               {/* Sourcing Option Comparison Cards */}
               <div className="space-y-3">
                 <div className="text-xs font-display font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider flex items-center justify-between">
                   <span>Available Inventory & Sourcing Options</span>
-                  <span className="text-[10px] font-mono text-slate-400 font-normal">Choose best fit for approval</span>
+                  <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -569,11 +582,11 @@ export const CustomerDashboard: React.FC = () => {
                 <div className="mt-4 flex flex-col sm:flex-row items-center gap-3">
                   <button
                     onClick={() => setIsApproveModalOpen(true)}
-                    disabled={loadingRfqs || usingFallbackData || selectedRfqFailed}
+                    disabled={loadingRfqs || loadingRfqDetail || Boolean(rfqDetailError) || usingFallbackData || selectedRfqFailed || !liveQuote || Boolean(selectedRfqDetail?.isFallback)}
                     className="w-full sm:flex-1 bg-emerald-700 hover:bg-emerald-600 text-white font-display font-bold py-2.5 px-4 rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 transition-all transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>APPROVE & ISSUE PURCHASE ORDER</span>
+                    <span>APPROVE & DISPATCH QUOTE</span>
                   </button>
 
                   <button
@@ -854,9 +867,10 @@ export const CustomerDashboard: React.FC = () => {
               <button
                 type="submit"
                 disabled={submitting}
+                  aria-busy={submitting}
                 className="w-full bg-aero-blue hover:bg-blue-600 text-white font-display font-bold py-3 px-6 rounded-xl shadow-lg shadow-aero-blue/20 flex items-center justify-center space-x-2 text-sm transition-all transform active:scale-98"
               >
-                <Sparkles className="w-4 h-4" />
+                {submitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Sparkles className="w-4 h-4" />}
                 <span>{submitting ? 'DISPATCHING TO MULTI-AGENT PIPELINE...' : 'SUBMIT RFQ & GENERATE INSTANT QUOTE'}</span>
               </button>
             </form>
@@ -933,9 +947,7 @@ export const CustomerDashboard: React.FC = () => {
                   <h3 className="font-display font-bold text-sm text-slate-900 dark:text-white">
                     DEMO FLIGHT STATUS
                   </h3>
-                  <span className="bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 font-mono text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
-                    SAMPLE
-                  </span>
+                  <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
                 </div>
 
                 <div className="space-y-3 font-mono text-xs">
@@ -1074,6 +1086,7 @@ export const CustomerDashboard: React.FC = () => {
             <h3 className="font-display font-bold text-xs uppercase text-slate-900 dark:text-white">
               FLEET SPEND DISTRIBUTION (YTD)
             </h3>
+            <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
             <div className="space-y-2 font-mono text-xs">
               <div className="flex justify-between items-center text-slate-600 dark:text-slate-400">
                 <span>Boeing 737 Fleet</span>
@@ -1105,6 +1118,7 @@ export const CustomerDashboard: React.FC = () => {
             <h3 className="font-display font-bold text-xs uppercase text-slate-900 dark:text-white">
               SLA & FULFILLMENT METRICS
             </h3>
+            <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
             <div className="space-y-3 font-mono text-xs">
               <div className="p-3 bg-slate-50 dark:bg-slate-900/60 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center justify-between">
                 <div>
@@ -1128,6 +1142,7 @@ export const CustomerDashboard: React.FC = () => {
             <h3 className="font-display font-bold text-xs uppercase text-slate-900 dark:text-white">
               ESTIMATED ANNUAL SAVINGS
             </h3>
+            <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
             <div className="p-4 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-xl text-center space-y-1">
               <div className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 font-semibold">AI SOURCING EFFICIENCY</div>
               <div className="text-2xl font-display font-bold text-emerald-600 dark:text-emerald-300">$64,800 saved</div>
@@ -1147,7 +1162,7 @@ export const CustomerDashboard: React.FC = () => {
               <div className="flex items-center space-x-2">
                 <CheckCircle2 className="w-5 h-5 text-emerald-500" />
                 <h3 className="font-display font-bold text-base text-slate-900 dark:text-white">
-                  Confirm Purchase Order Approval
+                  Confirm Quote Approval and Dispatch
                 </h3>
               </div>
               <button 
@@ -1169,21 +1184,13 @@ export const CustomerDashboard: React.FC = () => {
                   <span className="font-bold text-aero-blue">{selectedRfq.part_number || '32-11-45-01'}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Authorized Total Cost:</span>
-                  <span className="font-bold text-emerald-600 text-sm">$14,450.00</span>
+                  <span className="text-slate-500">Quote ID:</span>
+                  <span className="font-bold text-slate-900 dark:text-white">{liveQuote?.id || 'Unavailable'}</span>
                 </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="font-semibold text-slate-700 dark:text-slate-300">
-                  Customer Purchase Order (PO #):
-                </label>
-                <input
-                  type="text"
-                  value={poNumber}
-                  onChange={(e) => setPoNumber(e.target.value)}
-                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white font-bold"
-                />
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Quote Total:</span>
+                  <span className="font-bold text-emerald-600 text-sm">{liveQuote ? `$${liveQuote.total_amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'Unavailable'}</span>
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -1193,6 +1200,7 @@ export const CustomerDashboard: React.FC = () => {
                 <input
                   type="text"
                   value={approverName}
+                  disabled={approving}
                   onChange={(e) => setApproverName(e.target.value)}
                   className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white"
                 />
@@ -1202,6 +1210,7 @@ export const CustomerDashboard: React.FC = () => {
             <div className="flex space-x-3 pt-2">
               <button
                 onClick={() => setIsApproveModalOpen(false)}
+                disabled={approving}
                 className="flex-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 font-display font-semibold py-2.5 rounded-xl text-xs"
               >
                 Cancel
@@ -1209,9 +1218,11 @@ export const CustomerDashboard: React.FC = () => {
               <button
                 onClick={handleApproveQuote}
                 disabled={approving}
+                aria-busy={approving}
                 className="flex-1 bg-emerald-700 hover:bg-emerald-600 text-white font-display font-bold py-2.5 rounded-xl text-xs shadow-lg shadow-emerald-600/20"
               >
-                {approving ? 'DISPATCHING...' : 'CONFIRM & DISPATCH ORDER'}
+                {approving && <Loader2 className="mr-2 inline h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+                {approving ? 'DISPATCHING...' : 'CONFIRM & DISPATCH QUOTE'}
               </button>
             </div>
           </div>

@@ -46,7 +46,7 @@ async function installApiRoutes(page: Page, status = rfq.status) {
     } else if (path.endsWith('/supplier-offers')) {
       body = [];
     } else if (path.endsWith('/internal/shipments')) {
-      body = [];
+      body = [{ id: 'SHIP-E2E-001', status: 'IN_TRANSIT', carrier: 'E2E Carrier', tracking_number: 'TRACK-E2E-001' }];
     } else if (path.endsWith('/internal/automation-events')) {
       body = [];
     } else if (path.endsWith('/attachments')) {
@@ -200,26 +200,42 @@ test('API failures surface retryable states across dynamic customer and internal
   await page.goto('/internal', { waitUntil: 'networkidle' });
 
   const internalFailureViews = [
-    { path: '/sales', label: /Sales Command/i, expected: 'Request failed with status code 503' },
-    { path: '/sourcing', label: /Sourcing Matrix/i, expected: 'Request failed with status code 503' },
-    { path: '/procurement', label: /Proc Command/i, expected: 'Request failed with status code 503' },
-    { path: '/trace', label: /Trace Vault/i, expected: 'Request failed with status code 503' },
-    { path: '/fulfillment', label: /Fulfillment/i, expected: 'Request failed with status code 503' },
+    { path: '/sales', label: /Sales Command/i, expected: 'Service temporarily unavailable (HTTP 503)' },
+    { path: '/sourcing', label: /Sourcing Matrix/i, expected: 'Service temporarily unavailable (HTTP 503)' },
+    { path: '/procurement', label: /Proc Command/i, expected: 'Service temporarily unavailable (HTTP 503)' },
+    { path: '/trace', label: /Trace Vault/i, expected: 'Service temporarily unavailable (HTTP 503)' },
+    { path: '/fulfillment', label: /Fulfillment/i, expected: 'Service temporarily unavailable (HTTP 503)' },
   ];
 
   for (const view of internalFailureViews) {
     await selectTargetView(page, view);
-    const feedback = page.getByRole(view.path === '/sales' ? 'status' : 'alert').filter({ hasText: view.expected }).first();
+    const feedback = page.getByRole('alert').filter({ hasText: view.expected }).first();
     await expect(feedback, `Expected recoverable API error on ${view.path}`).toBeVisible();
     if (view.path !== '/sales') await expect(feedback.getByRole('button', { name: 'Retry' })).toBeVisible();
   }
+
+  await selectTargetView(page, { path: '/fulfillment', label: /Fulfillment/i });
+  await expect(page.getByText('SAMPLE / DEMO DATA', { exact: true }).first()).toBeVisible();
+
+  let unauthenticatedAuthorization: string | undefined;
+  await page.route('**/api/internal/commands', async route => {
+    unauthenticatedAuthorization = route.request().headers().authorization;
+    await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ detail: 'Authentication required.' }) });
+  });
+  const unauthorizedStatus = await page.evaluate(async () => (await fetch('/api/internal/commands', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command: 'print_tags', entity_id: 'SHIP-E2E-001' }),
+  })).status);
+  expect(unauthorizedStatus).toBe(401);
+  expect(unauthenticatedAuthorization).toBeUndefined();
 
   await page.addInitScript(() => localStorage.setItem('wt_role', 'ROLE_CUSTOMER'));
   await page.goto('/customer-portal', { waitUntil: 'networkidle' });
   await page.getByRole('textbox', { name: 'Search aircraft parts' }).fill('32-11-45-01');
   await page.getByRole('button', { name: 'Search parts' }).click();
   await expect.poll(() => catalogSearchFailed).toBe(true);
-  await expect(page.getByRole('status').filter({ hasText: 'Catalog search failed. Please retry.' })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'Service temporarily unavailable (HTTP 503)' })).toBeVisible();
 });
 
 test('RFQ, fulfillment, and trace labels retain Montserrat and align on mobile', async ({ page }) => {
@@ -447,7 +463,7 @@ test('audit drawer traps keyboard focus and restores it on Escape', async ({ pag
   await installApiRoutes(page);
   await page.goto('/internal', { waitUntil: 'networkidle' });
 
-  const opener = page.getByRole('button', { name: 'Open agent activity log' });
+  const opener = page.getByRole('button', { name: 'Open notifications and agent activity' });
   await opener.focus();
   await page.keyboard.press('Enter');
   const dialog = page.getByRole('dialog', { name: /AGENT ACTIVITY LOG/i });
@@ -465,9 +481,9 @@ test('top-bar activity log is the only agent-log action and overlays map panes',
   await selectTargetView(page, { path: '/sourcing', label: /Sourcing Matrix/i });
   await expect(page.locator('.leaflet-container')).toBeVisible();
 
-  await expect(page.getByRole('button', { name: 'Open agent activity log' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open notifications and agent activity' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open operational notifications' })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Open agent activity log' }).click();
+  await page.getByRole('button', { name: 'Open notifications and agent activity' }).click();
 
   const drawer = page.getByRole('dialog', { name: 'AGENT ACTIVITY LOG' });
   await expect(drawer).toBeVisible();

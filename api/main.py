@@ -49,6 +49,14 @@ from services.voice_service import (
 )
 from services.voice_media import initialize_voice_media
 from api.auth import current_user, init_auth_db, request_otp, require_roles, verify_otp, ROLE_CUSTOMER
+from services.employee_profile_service import (
+    employee_session,
+    get_profile,
+    record_clock_event,
+    set_presence,
+    update_profile,
+    work_hours_report,
+)
 
 app = FastAPI(
     title="Winged Tycoons RFQ-to-Quote Multi-Agent API",
@@ -207,6 +215,19 @@ class OtpRequest(BaseModel):
 class OtpVerifyRequest(BaseModel):
     challenge_id: str
     code: str
+
+
+class EmployeeProfileUpdate(BaseModel):
+    display_name: str = Field(min_length=1, max_length=120)
+    job_title: str = Field(min_length=1, max_length=120)
+
+
+class EmployeePresenceUpdate(BaseModel):
+    is_online: bool
+
+
+class EmployeeClockAction(BaseModel):
+    action: Literal["clock_in", "clock_out"]
 
 class LoginResponse(BaseModel):
     access_token: str
@@ -428,6 +449,76 @@ async def otp_verify(request: OtpVerifyRequest, response: Response):
 async def logout(response: Response):
     response.delete_cookie("wt_session", secure=os.getenv("WT_AUTH_ENV", "development").strip().lower() == "production", samesite="Strict")
 
+
+@app.get("/api/internal/profile")
+async def employee_profile(user: dict = Depends(require_roles("ROLE_INTERNAL", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"))):
+    async with employee_session() as session:
+        return await get_profile(session, user)
+
+
+@app.patch("/api/internal/profile")
+async def employee_profile_update(
+    request: EmployeeProfileUpdate,
+    user: dict = Depends(require_roles("ROLE_INTERNAL", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
+):
+    display_name = request.display_name.strip()
+    job_title = request.job_title.strip()
+    if not display_name or not job_title:
+        raise HTTPException(status_code=422, detail="Display name and job title cannot be blank.")
+    async with employee_session() as session:
+        return await update_profile(session, user, display_name, job_title)
+
+
+@app.put("/api/internal/profile/presence")
+async def employee_presence_update(
+    request: EmployeePresenceUpdate,
+    user: dict = Depends(require_roles("ROLE_INTERNAL", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
+):
+    async with employee_session() as session:
+        return await set_presence(session, user, request.is_online)
+
+
+@app.post("/api/internal/profile/clock")
+async def employee_clock_action(
+    request: EmployeeClockAction,
+    user: dict = Depends(require_roles("ROLE_INTERNAL", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
+):
+    try:
+        async with employee_session() as session:
+            profile = await record_clock_event(session, user, request.action)
+            return profile
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/internal/work-hours")
+async def employee_work_hours(
+    month: str,
+    user: dict = Depends(require_roles("ROLE_INTERNAL", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
+):
+    try:
+        async with employee_session() as session:
+            await get_profile(session, user)
+            report = await work_hours_report(session, month, user["id"])
+            return report["employees"][0] if report["employees"] else {
+                "month": month, "email": user["email"], "display_name": user.get("full_name", ""),
+                "job_title": "", "is_online": False, "total_seconds": 0, "daily_seconds": {},
+            }
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/internal/hr/work-hours")
+async def hr_work_hours_report(
+    month: str,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER")),
+):
+    try:
+        async with employee_session() as session:
+            return await work_hours_report(session, month)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
 @app.get("/")
 async def root():
     return {
@@ -466,7 +557,8 @@ async def ready():
     try:
         db_service.list_rfqs()
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"database not ready: {exc}") from exc
+        logger.error("readiness_database_check_failed", extra={"error_type": type(exc).__name__})
+        raise HTTPException(status_code=503, detail="Database readiness check failed.") from exc
     persistence = persistence_status(postgres_healthy=postgres_healthy)
     postgresql_mirroring = bool(postgres_healthy and persistence["inventory_postgres_mirror_enabled"])
     full_operational_postgresql = bool(persistence.get("full_operational_persistence_ready"))
@@ -885,10 +977,15 @@ async def llm_health(
 
 @app.get("/api/internal/mailboxes/health")
 async def mailbox_health(
-    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+    user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING", "ROLE_INTERNAL")),
 ):
-    """Return operational health for the shared sales and purchasing mailboxes."""
-    return health_check_mailboxes()
+    """Return status-only health for the shared sales and purchasing mailboxes."""
+    health = health_check_mailboxes(["sales", "purchasing"])
+    return {
+        "sales_mailbox": health.get("sales", {}).get("status", "unknown"),
+        "purchasing_mailbox": health.get("purchasing", {}).get("status", "unknown"),
+        "authenticated_user": user["email"],
+    }
 
 @app.get("/api/rfqs", response_model=List[RFQ])
 async def list_rfqs(user: dict = Depends(current_user)):

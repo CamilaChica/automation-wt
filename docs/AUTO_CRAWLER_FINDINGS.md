@@ -18,9 +18,9 @@ Target: `https://winged-tycoons-frontend.onrender.com/internal`
 ## Product and Operational Decisions
 
 - [ ] Decide whether intake operations should expose a retry/reprocess API. No such endpoint is currently available; failed RFQs remain blocked from mutations and show escalation guidance.
-- [ ] Connect the customer UI's remaining live RFQ, quote, catalog, shipment, sourcing, compliance, and KPI values to verified production API data; keep sample values labeled and do not present them as live.
+- [ ] Verify the RFQ/detail, supplier-offer, shipment, and automation-event bindings in approved staging. Document state, compliance-file checks, historical SLA, fleet-spend, and annual-savings values remain sample because no persisted read endpoints are available; keep their `SAMPLE / DEMO DATA` badges until those API contracts exist.
 - [ ] Confirm whether carrier map tiles and external shipment sources are approved for production use, including attribution, availability, and rate limits.
-- [ ] Decide whether the header activity indicator should be backed by a real unread-notification count and dedicated notification feed; the duplicate bell control was removed because it opened the same audit drawer.
+- [ ] Decide whether to implement a real unread-notification count and dedicated notification feed; neither capability is currently available.
 
 ## Verification Gaps
 

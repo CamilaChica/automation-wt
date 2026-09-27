@@ -1,5 +1,33 @@
 import axios from 'axios';
 import { RFQ, RFQDetailResponse, InventoryItem, Supplier, SupplierQuote, Quote, QuoteItem, AgentAuditLog, AutomationEvent, Shipment, CommandResponse, InternalCommand } from '../types';
+import type {
+  AutomationPauseBody,
+  CarrierTrackingBody,
+  CreateShipmentBody,
+  ExtractionReviewDecisionBody,
+  ExtractionReviewResponse,
+  EmployeeProfile,
+  EmployeeWorkHours,
+  EmployeeWorkHoursReport,
+  FreightQuoteBody,
+  IntakeResponse,
+  LoginResponse,
+  MailboxHealthResponse,
+  MailboxInboxResponse,
+  MailboxMessageBody,
+  OtpRequestBody,
+  OtpRequestResponse,
+  OtpVerifyBody,
+  PurchaseOrderApprovalRequest,
+  ShipmentEventBody,
+  ShipmentSmsBody,
+  ShipmentTraceResponse,
+  SystemHealthResponse,
+  TraceDecisionBody,
+  VoiceLanguageCode,
+  VoiceSessionResponse,
+  VoiceToolRequest,
+} from '../types/api';
 
 const hostedApiBase = window.location.hostname === 'winged-tycoons-frontend.onrender.com'
   ? 'https://winged-tycoons-api.onrender.com/api'
@@ -11,9 +39,47 @@ export const API_BASE = isDeployedStaticHost && (!configuredApiBase || configure
   : (configuredApiBase || hostedApiBase);
 const allowMockFallbacks = import.meta.env.VITE_ALLOW_MOCK_FALLBACKS === 'true';
 axios.defaults.timeout = 10000;
+axios.defaults.withCredentials = true;
+
+const AUTH_STORAGE_KEYS = ['wt_access_token', 'wt_role', 'wt_email'];
+
+function storedValue(key: string): string | null {
+  return localStorage.getItem(key) || sessionStorage.getItem(key);
+}
+
+function clearStoredAuth(): void {
+  for (const key of AUTH_STORAGE_KEYS) {
+    localStorage.removeItem(key);
+    sessionStorage.removeItem(key);
+  }
+  window.dispatchEvent(new Event('wt-auth-changed'));
+}
+
+function requestPath(url?: string): string {
+  if (!url) return '';
+  try {
+    return new URL(url, window.location.origin).pathname;
+  } catch {
+    return url.split('?')[0];
+  }
+}
+
+export const getApiErrorMessage = (error: unknown, fallback = 'The request could not be completed. Please retry.'): string => {
+  if (!axios.isAxiosError(error)) return error instanceof Error ? error.message : fallback;
+  const status = error.response?.status;
+  if (status === 502 || status === 503 || status === 504) {
+    return `Service temporarily unavailable (HTTP ${status}). Please retry.`;
+  }
+  if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+    return 'The request timed out. Please retry.';
+  }
+  if (!error.response) return 'Unable to reach the service. Check your connection and retry.';
+  const detail = error.response.data?.detail;
+  return typeof detail === 'string' ? detail : error.message || fallback;
+};
 
 axios.interceptors.request.use(config => {
-  const token = localStorage.getItem('wt_access_token');
+  const token = storedValue('wt_access_token');
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
@@ -22,15 +88,16 @@ axios.interceptors.response.use(
   response => response,
   error => {
     if (import.meta.env.DEV) {
-      console.error('API request failed', {
+      console.warn('API request failed', {
         method: error.config?.method,
-        url: error.config?.url,
+        path: requestPath(error.config?.url),
         status: error.response?.status,
-        responseData: error.response?.data,
         hasRequest: Boolean(error.request),
-        message: error.message,
       });
     }
+    const path = requestPath(error.config?.url);
+    const isOtpFlow = /\/auth\/otp\/(request|verify)$/.test(path);
+    if (error.response?.status === 401 && !isOtpFlow) clearStoredAuth();
     return Promise.reject(error);
   },
 );
@@ -197,13 +264,87 @@ export const mockInventory: InventoryItem[] = [
 ];
 
 export const apiService = {
-  async requestOtp(email: string, role: 'ROLE_CUSTOMER' | 'ROLE_INTERNAL', fullName = ''): Promise<{ challenge_id: string; development_otp?: string }> {
-    const res = await axios.post(`${API_BASE}/auth/otp/request`, { email, role, full_name: fullName });
+  async getLiveness(): Promise<{ status: string }> {
+    const res = await axios.get(`${API_BASE.replace(/\/api\/?$/, '')}/healthz`);
     return res.data;
   },
 
-  async verifyOtp(challengeId: string, code: string): Promise<{ role: string; email: string }> {
-    const res = await axios.post(`${API_BASE}/auth/otp/verify`, { challenge_id: challengeId, code });
+  async getEmployeeProfile(): Promise<EmployeeProfile> {
+    const res = await axios.get(`${API_BASE}/internal/profile`);
+    return res.data;
+  },
+
+  async updateEmployeeProfile(displayName: string, jobTitle: string): Promise<EmployeeProfile> {
+    const res = await axios.patch(`${API_BASE}/internal/profile`, { display_name: displayName, job_title: jobTitle });
+    return res.data;
+  },
+
+  async setEmployeePresence(isOnline: boolean): Promise<EmployeeProfile> {
+    const res = await axios.put(`${API_BASE}/internal/profile/presence`, { is_online: isOnline });
+    return res.data;
+  },
+
+  async recordEmployeeClockAction(action: 'clock_in' | 'clock_out'): Promise<EmployeeProfile> {
+    const res = await axios.post(`${API_BASE}/internal/profile/clock`, { action });
+    return res.data;
+  },
+
+  async getEmployeeWorkHours(month: string): Promise<EmployeeWorkHours> {
+    const res = await axios.get(`${API_BASE}/internal/work-hours`, { params: { month } });
+    return res.data;
+  },
+
+  async getHrWorkHoursReport(month: string): Promise<EmployeeWorkHoursReport> {
+    const res = await axios.get(`${API_BASE}/internal/hr/work-hours`, { params: { month } });
+    return res.data;
+  },
+
+  async getRootHealth(): Promise<{ status: string; service: string; version: string; docs_url: string; frontend_url: string }> {
+    const res = await axios.get(`${API_BASE.replace(/\/api\/?$/, '')}/`);
+    return res.data;
+  },
+
+  async getReadiness(): Promise<SystemHealthResponse> {
+    const res = await axios.get(`${API_BASE.replace(/\/api\/?$/, '')}/ready`);
+    return res.data;
+  },
+
+  async getMailboxHealth(): Promise<Partial<Record<'sales' | 'purchasing', { status: string; message_count: number }>>> {
+    const res = await axios.get<{
+      sales_mailbox: string;
+      purchasing_mailbox: string;
+      authenticated_user: string;
+    }>(`${API_BASE}/internal/mailboxes/health`);
+    return {
+      sales: { status: res.data.sales_mailbox, message_count: 0 },
+      purchasing: { status: res.data.purchasing_mailbox, message_count: 0 },
+    };
+  },
+
+  async createRealtimeSession(language: VoiceLanguageCode): Promise<VoiceSessionResponse> {
+    const res = await axios.post(`${API_BASE}/session`, { language });
+    return res.data;
+  },
+
+  async getVoiceDashboard<T = Record<string, unknown>>(): Promise<T> {
+    const res = await axios.get(`${API_BASE}/voice/dashboard`);
+    return res.data as T;
+  },
+
+  async executeVoiceTool<T = unknown>(toolName: string, body: VoiceToolRequest): Promise<T> {
+    const res = await axios.post(`${API_BASE}/voice/tools/${encodeURIComponent(toolName)}`, body);
+    return res.data as T;
+  },
+
+  async requestOtp(email: string, role: 'ROLE_CUSTOMER' | 'ROLE_INTERNAL', fullName = ''): Promise<OtpRequestResponse> {
+    const body: OtpRequestBody = { email, role, full_name: fullName };
+    const res = await axios.post(`${API_BASE}/auth/otp/request`, body);
+    return res.data;
+  },
+
+  async verifyOtp(challengeId: string, code: string): Promise<LoginResponse> {
+    const body: OtpVerifyBody = { challenge_id: challengeId, code };
+    const res = await axios.post(`${API_BASE}/auth/otp/verify`, body);
     localStorage.setItem('wt_access_token', res.data.access_token);
     localStorage.setItem('wt_role', res.data.role);
     localStorage.setItem('wt_email', res.data.email);
@@ -218,21 +359,18 @@ export const apiService = {
     }
   },
   logout() {
-    localStorage.removeItem('wt_access_token');
-    localStorage.removeItem('wt_role');
-    localStorage.removeItem('wt_email');
-    window.dispatchEvent(new Event('wt-auth-changed'));
+    clearStoredAuth();
   },
 
   getRole(): 'customer' | 'internal' | null {
-    const role = localStorage.getItem('wt_role');
+    const role = storedValue('wt_role');
     if (role === 'ROLE_CUSTOMER') return 'customer';
     if (role === 'ROLE_ADMIN' || role === 'ROLE_MANAGER' || role === 'ROLE_SALES' || role === 'ROLE_PURCHASING') return 'internal';
     return null;
   },
 
   isAuthenticated() {
-    return Boolean(localStorage.getItem('wt_access_token'));
+    return Boolean(storedValue('wt_access_token'));
   },
 
   async getRFQsWithSource(): Promise<{ rfqs: RFQ[]; isFallback: boolean }> {
@@ -250,6 +388,16 @@ export const apiService = {
     return (await this.getRFQsWithSource()).rfqs;
   },
 
+  async processRFQ(rfqId: string): Promise<Record<string, unknown>> {
+    const res = await axios.post(`${API_BASE}/rfqs/${encodeURIComponent(rfqId)}/process`);
+    return res.data;
+  },
+
+  async setAutomationPause(rfqId: string, body: AutomationPauseBody): Promise<Record<string, unknown>> {
+    const res = await axios.post(`${API_BASE}/internal/rfqs/${encodeURIComponent(rfqId)}/automation`, body);
+    return res.data;
+  },
+
   async getAutomationEvents(status?: string): Promise<AutomationEvent[]> {
     const res = await axios.get(`${API_BASE}/internal/automation-events`, {
       params: { status, limit: 100 },
@@ -257,19 +405,48 @@ export const apiService = {
     return res.data;
   },
 
-  async submitRFQ(raw_text: string): Promise<{ rfq_id: string; status: string; message: string }> {
+  async getExtractionReviews(status = 'PENDING', limit = 100): Promise<ExtractionReviewResponse[]> {
+    const res = await axios.get(`${API_BASE}/internal/extraction-reviews`, { params: { status, limit } });
+    return res.data;
+  },
+
+  async getExtractionReview(reviewId: string): Promise<ExtractionReviewResponse> {
+    const res = await axios.get(`${API_BASE}/internal/extraction-reviews/${encodeURIComponent(reviewId)}`);
+    return res.data;
+  },
+
+  async decideExtractionReview(reviewId: string, body: ExtractionReviewDecisionBody): Promise<Record<string, unknown>> {
+    const res = await axios.post(`${API_BASE}/internal/extraction-reviews/${encodeURIComponent(reviewId)}/decision`, body);
+    return res.data;
+  },
+
+  async getLlmTelemetry(task?: string, limit = 100): Promise<Record<string, unknown>[]> {
+    const res = await axios.get(`${API_BASE}/internal/llm/telemetry`, { params: { task, limit } });
+    return res.data;
+  },
+
+  async getLlmHealth(): Promise<Record<string, unknown>> {
+    const res = await axios.get(`${API_BASE}/internal/llm/health`);
+    return res.data;
+  },
+
+  async getMailboxInbox(mailbox: 'sales' | 'purchasing'): Promise<MailboxInboxResponse> {
+    const res = await axios.get(`${API_BASE}/internal/mailboxes/${mailbox}/inbox`);
+    return res.data;
+  },
+
+  async sendMailboxMessage(mailbox: 'sales' | 'purchasing', body: MailboxMessageBody): Promise<Record<string, unknown>> {
+    const res = await axios.post(`${API_BASE}/internal/mailboxes/${mailbox}/send`, body);
+    return res.data;
+  },
+
+  async submitRFQ(raw_text: string): Promise<IntakeResponse> {
     try {
       const res = await axios.post(`${API_BASE}/rfqs/intake`, { raw_text });
       return res.data;
     } catch (error) {
       if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
-      if (!allowMockFallbacks) throw error;
-      const newId = `WT-${Math.floor(10000 + Math.random() * 90000)}`;
-      return {
-        rfq_id: newId,
-        status: 'Quoted',
-        message: 'RFQ processed successfully via agent pipeline.'
-      };
+      throw error;
     }
   },
 
@@ -279,17 +456,16 @@ export const apiService = {
     const res = await axios.post(`${API_BASE}/attachments`, form);
     return res.data;
   },
-  async submitCustomerRFQ(raw_text: string, customer_name: string, customer_email: string, attachment_ids: string[] = []): Promise<{ rfq_id: string; status: string; message: string }> {
+  async submitCustomerRFQ(raw_text: string, customer_name: string, customer_email: string, attachment_ids: string[] = []): Promise<IntakeResponse> {
     try {
       const res = await axios.post(`${API_BASE}/rfqs/intake`, { raw_text, customer_name, customer_email, attachment_ids });
       return res.data;
     } catch (error) {
       if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
-      if (!allowMockFallbacks) throw error;
-      return this.submitRFQ(raw_text);
+      throw error;
     }
   },
-  async submitPurchaseOrder(quote_id: string, po_number: string, customer_email: string, attachment_ids: string[] = []): Promise<{ status: string; po_number: string }> {
+  async submitPurchaseOrder(quote_id: string, po_number: string, customer_email: string, attachment_ids: string[] = []): Promise<{ status: string; po_number: string; quote_id?: string }> {
     const res = await axios.post(`${API_BASE}/purchase-orders`, {
       quote_id,
       po_number,
@@ -298,7 +474,7 @@ export const apiService = {
     });
     return res.data;
   },
-  async trackShipment(public_token: string): Promise<Shipment> {
+  async trackShipment(public_token: string): Promise<ShipmentTraceResponse> {
     const res = await axios.get(`${API_BASE}/shipments/track/${encodeURIComponent(public_token)}`);
     return res.data;
   },
@@ -310,32 +486,75 @@ export const apiService = {
     const res = await axios.get(`${API_BASE}/internal/shipments`);
     return res.data;
   },
+
+  async createShipment(body: CreateShipmentBody): Promise<{ shipment_id: string; tracking_url: string; status: string; tracking_notification: string }> {
+    const res = await axios.post(`${API_BASE}/internal/shipments`, body);
+    return res.data;
+  },
+
+  async addShipmentEvent(shipmentId: string, body: ShipmentEventBody): Promise<{ status: string; event: Record<string, unknown> }> {
+    const res = await axios.post(`${API_BASE}/internal/shipments/${encodeURIComponent(shipmentId)}/events`, body);
+    return res.data;
+  },
+
+  async registerCarrierTracking(shipmentId: string, body: CarrierTrackingBody): Promise<Record<string, unknown>> {
+    const res = await axios.post(`${API_BASE}/internal/shipments/${encodeURIComponent(shipmentId)}/tracking`, body);
+    return res.data;
+  },
+
+  async refreshCarrierTracking(shipmentId: string): Promise<Record<string, unknown>> {
+    const res = await axios.post(`${API_BASE}/internal/shipments/${encodeURIComponent(shipmentId)}/tracking/refresh`);
+    return res.data;
+  },
+
+  async sendShipmentSms(shipmentId: string, body: ShipmentSmsBody): Promise<Record<string, unknown>> {
+    const res = await axios.post(`${API_BASE}/internal/shipments/${encodeURIComponent(shipmentId)}/sms`, body);
+    return res.data;
+  },
+
+  async quoteFreight(body: FreightQuoteBody): Promise<Record<string, unknown>> {
+    const res = await axios.post(`${API_BASE}/internal/freight/quote`, body);
+    return res.data;
+  },
+
+  async approvePurchaseOrder(quoteId: string, body: PurchaseOrderApprovalRequest): Promise<{ status: string; quote_id: string; rfq_id: string }> {
+    const res = await axios.post(`${API_BASE}/purchase-orders/${encodeURIComponent(quoteId)}/approve`, body);
+    return res.data;
+  },
   async executeInternalCommand(command: InternalCommand, entityId: string, details?: string): Promise<CommandResponse> {
     const res = await axios.post(`${API_BASE}/internal/commands`, { command, entity_id: entityId, details });
     return res.data;
   },
 
-  async searchCatalog(query: string, condition?: string): Promise<Array<Pick<InventoryItem, 'part_number' | 'condition_code' | 'quantity_available' | 'certificate_type' | 'has_full_trace'>>> {
+  async searchCatalogWithSource(query: string, condition?: string): Promise<{ results: Array<Pick<InventoryItem, 'part_number' | 'condition_code' | 'quantity_available' | 'certificate_type' | 'has_full_trace'>>; isFallback: boolean }> {
     try {
       const res = await axios.get(`${API_BASE}/catalog/search`, { params: { query, condition } });
-      return res.data;
+      return { results: res.data, isFallback: false };
     } catch (error) {
       if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
       if (!allowMockFallbacks) throw error;
       const normalizedQuery = query.trim().toLowerCase();
-      return mockInventory
-        .filter(item => !normalizedQuery || item.part_number.toLowerCase().includes(normalizedQuery))
-        .map(({ part_number, condition_code, quantity_available, certificate_type, has_full_trace }) => ({
-          part_number, condition_code, quantity_available, certificate_type, has_full_trace
-        }));
+      return {
+        results: mockInventory
+          .filter(item => !normalizedQuery || item.part_number.toLowerCase().includes(normalizedQuery))
+          .map(({ part_number, condition_code, quantity_available, certificate_type, has_full_trace }) => ({
+            part_number, condition_code, quantity_available, certificate_type, has_full_trace
+          })),
+        isFallback: true,
+      };
     }
+  },
+
+  async searchCatalog(query: string, condition?: string): Promise<Array<Pick<InventoryItem, 'part_number' | 'condition_code' | 'quantity_available' | 'certificate_type' | 'has_full_trace'>>> {
+    return (await this.searchCatalogWithSource(query, condition)).results;
   },
 
   async getRFQDetail(rfq_id: string): Promise<RFQDetailResponse> {
     try {
       const res = await axios.get(`${API_BASE}/rfqs/${rfq_id}`);
-      return res.data;
+      return { ...res.data, isFallback: false };
     } catch (error) {
+      if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
       if (!allowMockFallbacks) throw error;
       const match = mockRFQs.find(r => r.id === rfq_id) || mockRFQs[0];
       const mockLogs: AgentAuditLog[] = [
@@ -396,6 +615,7 @@ export const apiService = {
           }
         ],
         logs: mockLogs,
+        isFallback: true,
         quote_details: {
           quote: {
             id: `QTE-${rfq_id.replace('WT-', '')}`,
@@ -456,12 +676,8 @@ export const apiService = {
       });
       return res.data;
     } catch (error) {
-      if (!allowMockFallbacks) throw error;
-      return {
-        status: 'Sent',
-        quote_id,
-        message: `Quote ${quote_id} approved by ${operator_name}. Outbound email dispatched.`
-      };
+      if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
+      throw error;
     }
   },
 
@@ -480,16 +696,13 @@ export const apiService = {
       });
       return res.data;
     } catch (error) {
-      if (!allowMockFallbacks) throw error;
-      return {
-        status: 'Rejected',
-        quote_id,
-        message: `Quote ${quote_id} rejected by ${operator_name}.`
-      };
+      if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
+      throw error;
     }
   },
-  async recordTraceDecision(rfq_id: string, decision: 'certify' | 'reject' | 'rescan' | 'freeze', reason?: string): Promise<{ decision: string; automation_paused: boolean }> {
-    const res = await axios.post(`${API_BASE}/internal/rfqs/${encodeURIComponent(rfq_id)}/trace-decision`, { decision, reason });
+  async recordTraceDecision(rfq_id: string, decision: TraceDecisionBody['decision'], reason?: string): Promise<{ decision: string; automation_paused: boolean }> {
+    const body: TraceDecisionBody = { decision, reason };
+    const res = await axios.post(`${API_BASE}/internal/rfqs/${encodeURIComponent(rfq_id)}/trace-decision`, body);
     return res.data;
   }
 };
