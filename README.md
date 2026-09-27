@@ -111,6 +111,7 @@ Use the repository test commands in [AGENTS.md](AGENTS.md) and the detailed loca
 
 - [docs/internal-user-qa.md](docs/internal-user-qa.md) — guidance for internal sales, procurement, and operations users
 - [docs/external-user-qa.md](docs/external-user-qa.md) — guidance for external customers
+- [docs/API_UI_MAPPING.md](docs/API_UI_MAPPING.md) — backend routes, role access, frontend bindings, and sample-data boundaries
 - [docs/PRODUCTION_LAUNCH_RUNBOOK.md](docs/PRODUCTION_LAUNCH_RUNBOOK.md) — production launch and operational checklist
 - [docs/PRODUCTION_AUTOMATION_PLAN.md](docs/PRODUCTION_AUTOMATION_PLAN.md) — current production execution plan and risk notes
 - [docs/AUTO_CRAWLER_FINDINGS.md](docs/AUTO_CRAWLER_FINDINGS.md) — local UI verification and outstanding release gates

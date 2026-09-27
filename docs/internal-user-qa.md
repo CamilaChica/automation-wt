@@ -2,7 +2,7 @@
 
 ## 1. What is the internal portal used for?
 
-The internal portal is the operations dashboard for approved Winged Tycoons staff. Depending on assigned access and available services, it provides views for dashboard activity, sales/RFQs, supplier sourcing, procurement, trace records, fulfillment, and audit events. It is an operator workspace, not a guarantee that every displayed record or sample metric is live production data.
+The internal portal is the operations dashboard for approved Winged Tycoons staff. Depending on assigned access and available services, it provides views for dashboard activity, sales/RFQs, supplier sourcing, procurement, trace records, fulfillment, audit events, and employee profile/timekeeping. It is an operator workspace, not a guarantee that every displayed record or sample metric is live production data. See [docs/API_UI_MAPPING.md](API_UI_MAPPING.md) for route roles, view bindings, and sample-data boundaries.
 
 Internal users use it to:
 
@@ -116,3 +116,11 @@ Production is not signed off. The release plan still requires verified shared Po
 ## 17. What do status labels or empty queues mean?
 
 Use the selected RFQ's actual API/detail data to interpret its status. “Pending extraction” means a part number has not been extracted yet; “Intake failed” means downstream quote, sourcing, and trace mutations are disabled. An empty queue may mean there are no records or the data did not load; check for an explicit load error and use the view's read retry only to reload data. It does not reprocess an RFQ.
+
+## 18. How do I update my employee profile or record work hours?
+
+Use the employee profile controls to update your display name or job title, set presence, and clock in or out. A conflicting clock action may return a conflict; do not repeatedly submit it. The work-hours view provides your monthly totals. The HR work-hours endpoint is restricted to admin/manager roles. These endpoints require an authenticated internal session.
+
+## 19. Which internal panels are live data?
+
+Use [docs/API_UI_MAPPING.md](API_UI_MAPPING.md) to check each panel. RFQ queues, supplier offers, shipments, automation events, and profile/timekeeping have API bindings. Some AOG counts, performance estimates, document panels, trace history/KPIs, and fulfillment-stage graphics remain sample/demo content where the mapping says there is no backend read contract. Do not use sample content as an operational decision or customer commitment.

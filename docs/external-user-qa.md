@@ -109,6 +109,8 @@ Use the portal's Contact Us menu or email parts@wingedtycoons.com. Include your 
 
 For a supported quote, enter the quote ID, PO number, and customer email, then upload the signed export certification, signed KYC form, and purchase-order document. The portal requires all three documents before it submits the PO. If you receive an error, contact the team before resubmitting so they can check whether it was already received.
 
+PO submission places the order into internal review; it is not PO approval or shipment confirmation.
+
 ## 17. How do I track a shipment?
 
 Use the shipment tracking form with the tracking token provided for your shipment. Sample routes or sample dashboard telemetry are not live tracking results. If you do not have a tracking token or tracking lookup fails, contact parts@wingedtycoons.com.
@@ -116,3 +118,7 @@ Use the shipment tracking form with the tracking token provided for your shipmen
 ## 18. Which portal languages are available?
 
 The customer portal supports English, French, Spanish, German, Portuguese, Italian, Japanese, Chinese, Korean, Dutch, Arabic, and Hindi. Arabic uses a right-to-left layout. Choose a language with the globe control; a saved preference takes precedence on return visits.
+
+## 19. Does catalog availability guarantee stock or a price?
+
+No. Catalog search returns customer-safe availability information and excludes internal cost, serial numbers, warehouse locations, and supplier contact details. Search results may be sample fallback data when clearly identified as such. Confirm availability, condition, certifications, price, and delivery terms in an official quote.
