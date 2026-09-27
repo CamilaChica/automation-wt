@@ -1,15 +1,16 @@
 from types import SimpleNamespace
+import re
 import sys
 
 import pytest
 
 from models.async_models import Base
 from schemas.rag import ScalingPromptEngineering
-from services.conversation_memory import BufferMemory, SummaryMemory, VectorMemory
+from services.conversation_memory import BufferMemory, SummaryMemory, VectorMemory, llm_summarizer
 from services.document_chunking import DocumentProcessor
 from services.embeddings import EmbeddingBatch, EmbeddingService
 from services.prompt_security import InputSecurityError, PromptSecurityService
-from services.rag_pipeline import RAGPipeline
+from services.rag_pipeline import RAGPipeline, RAGPipelineError
 from services.semantic_evaluation import SemanticEvaluator
 from services.token_counting import TokenCounter
 from services.vector_store import InMemoryVectorStore
@@ -211,6 +212,42 @@ def make_test_embeddings():
     return EmbeddingService([FakeProvider()], retries=1)
 
 
+class FakeStructuredLLMRouter:
+    def __init__(self, *, source_id: str | None = None):
+        self.requests = []
+        self.source_id = source_id
+
+    def extract_structured(self, request, schema):
+        self.requests.append(request)
+        source_id = self.source_id
+        if source_id is None:
+            match = re.search(r"Source ID: ([^\n]+)", request.user_prompt)
+            source_id = match.group(1) if match else ""
+        return schema.model_validate({
+            "status": "answered",
+            "answer": "Part X is available with an FAA 8130-3 certificate.",
+            "claims": [{
+                "statement": "Part X is available with an FAA 8130-3 certificate.",
+                "source_ids": [source_id],
+            }] if source_id else [],
+            "missing_information": [],
+            "clarification_question": None,
+        })
+
+
+def make_rag_pipeline(router):
+    embeddings = make_test_embeddings()
+    pipeline = RAGPipeline(
+        llm_router=router,
+        embedding_service=embeddings,
+        vector_store=InMemoryVectorStore(),
+        document_processor=DocumentProcessor(chunk_size=200, overlap=0, embedding_service=embeddings),
+        evaluator=SemanticEvaluator(embeddings),
+        memory=BufferMemory(),
+    )
+    return pipeline
+
+
 @pytest.mark.asyncio
 async def test_buffer_summary_and_vector_memories():
     character_counter = SimpleNamespace(count=lambda text: len(text))
@@ -258,27 +295,8 @@ async def test_summary_memory_keeps_budget_if_summarization_fails():
 
 @pytest.mark.asyncio
 async def test_rag_pipeline_ingests_retrieves_generates_and_evaluates():
-    class FakeLLMRouter:
-        def __init__(self):
-            self.requests = []
-
-        def complete(self, request):
-            from services.llm_provider import LLMResponse
-
-            self.requests.append(request)
-            return LLMResponse("fake", request.model or "fake-model", "Part X is available with an FAA 8130-3 certificate.", {})
-
-    embeddings = make_test_embeddings()
-    store = InMemoryVectorStore()
-    router = FakeLLMRouter()
-    pipeline = RAGPipeline(
-        llm_router=router,
-        embedding_service=embeddings,
-        vector_store=store,
-        document_processor=DocumentProcessor(chunk_size=200, overlap=0, embedding_service=embeddings),
-        evaluator=SemanticEvaluator(embeddings),
-        memory=BufferMemory(),
-    )
+    router = FakeStructuredLLMRouter()
+    pipeline = make_rag_pipeline(router)
 
     indexed = await pipeline.ingest_aviation_document(
         "Part X is available. One unit includes an FAA 8130-3 certificate.",
@@ -293,10 +311,46 @@ async def test_rag_pipeline_ingests_retrieves_generates_and_evaluates():
 
     assert indexed
     assert response.answer.startswith("Part X is available")
+    assert response.status == "answered"
+    assert response.claims[0].source_ids == [response.retrieved_chunks[0].id]
     assert response.retrieved_chunks[0].metadata["document_type"] == "faa_compliance"
     assert response.evaluation is not None and response.evaluation.passed
     assert "FAA 8130-3" in router.requests[0].user_prompt
+    assert "Role:" in router.requests[0].system_prompt
+    assert "Task:" in router.requests[0].system_prompt
+    assert "Constraints:" in router.requests[0].system_prompt
+    assert "Expected output:" in router.requests[0].system_prompt
     assert len(await pipeline.memory.load()) == 2
+
+
+@pytest.mark.asyncio
+async def test_rag_pipeline_rejects_unretrieved_citations():
+    pipeline = make_rag_pipeline(FakeStructuredLLMRouter(source_id="invented-source"))
+    await pipeline.ingest_aviation_document(
+        "Part X is available.",
+        document_type="aircraft_parts_catalog",
+        source_id="parts-catalog-1",
+    )
+
+    with pytest.raises(RAGPipelineError, match="not retrieved"):
+        await pipeline.query("Is part X available?")
+
+
+@pytest.mark.asyncio
+async def test_summary_llm_uses_typed_output_contract_and_token_budget():
+    class FakeSummaryRouter:
+        def extract_structured(self, request, schema):
+            assert "Role:" in request.system_prompt
+            assert "Task:" in request.system_prompt
+            assert "Constraints:" in request.system_prompt
+            assert "Expected output:" in request.system_prompt
+            assert request.max_tokens == 96
+            assert schema.__name__ == "ConversationSummaryOutput"
+            return schema(summary="Part 060-1234-00: two units requested.", preserved_facts=[], open_questions=[])
+
+    summarize = llm_summarizer(FakeSummaryRouter(), max_tokens=96)
+
+    assert "Part 060-1234-00" in await summarize("The conversation transcript")
 
 
 @pytest.mark.asyncio
