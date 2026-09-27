@@ -225,6 +225,8 @@ export interface ApiRouteContracts {
   'GET /api/catalog/search': { response: CatalogSearchItem[] };
   'GET /api/inventory': { response: InventoryItem[] };
   'GET /api/suppliers': { response: Supplier[] };
+  'GET /api/suppliers/{supplier_id}': { response: Supplier };
+  'POST /api/webhooks/carriers/aftership': { request: unknown; response: Record<string, unknown> };
   'GET /api/quotes/{quote_id}': never;
   'GET /api/fulfillment/stages': never;
   'GET /api/shipments/{shipment_id}': never;

@@ -668,6 +668,11 @@ export const apiService = {
     }
   },
 
+  async getSupplier(supplierId: string): Promise<Supplier> {
+    const res = await axios.get(`${API_BASE}/suppliers/${encodeURIComponent(supplierId)}`);
+    return res.data;
+  },
+
   async approveQuote(quote_id: string, operator_name: string, overrides?: Array<{ quote_item_id: string; unit_price: number }>): Promise<{ status: string; quote_id: string; message: string }> {
     try {
       const res = await axios.post(`${API_BASE}/quotes/${quote_id}/approve`, {
