@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -60,4 +60,54 @@ class PurchaseOrder(Base):
     total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     status: Mapped[str] = mapped_column(String(32), default="Pending_PO_Review", index=True)
     po_document_url: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PromptTechniqueRecord(Base):
+    __tablename__ = "prompt_techniques"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True)
+    description: Mapped[str] = mapped_column(Text)
+    template: Mapped[str] = mapped_column(Text)
+    examples: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PromptSecurityRecord(Base):
+    __tablename__ = "prompt_security_policies"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True)
+    sanitize_input: Mapped[bool] = mapped_column(Boolean, default=True)
+    detect_injection: Mapped[bool] = mapped_column(Boolean, default=True)
+    mask_pii: Mapped[bool] = mapped_column(Boolean, default=True)
+    prevent_jailbreaks: Mapped[bool] = mapped_column(Boolean, default=True)
+    block_injection: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ScalingPromptRecord(Base):
+    __tablename__ = "scaling_prompts"
+    __table_args__ = (UniqueConstraint("name", "version", name="uq_scaling_prompts_name_version"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    template: Mapped[str] = mapped_column(Text)
+    variables: Mapped[list[str]] = mapped_column(JSON, default=list)
+    prompt_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RagVectorRecord(Base):
+    __tablename__ = "rag_vector_records"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    namespace: Mapped[str] = mapped_column(String(256), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(JSON)
+    embedding_provider: Mapped[str] = mapped_column(String(32))
+    embedding_model: Mapped[str] = mapped_column(String(128))
+    record_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
