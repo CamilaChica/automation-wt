@@ -15,8 +15,11 @@ import models.operational_models  # noqa: F401 - register shared operational tab
 
 config = context.config
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-if os.getenv("DATABASE_URL"):
-    config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"].replace("postgresql://", "postgresql+asyncpg://", 1))
+database_url = os.getenv("DATABASE_URL", "").strip()
+if database_url:
+    if database_url.startswith("postgresql://"):
+        database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 target_metadata = Base.metadata
 
 
