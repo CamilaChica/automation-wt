@@ -2,6 +2,8 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
+from sqlalchemy import create_engine
+
 from repositories.review_telemetry_repository import _sync_database_url
 from services.operations_store import OperationsStore, POSTGRES_STORE_METHODS
 from repositories.review_telemetry_repository import PostgresReviewTelemetryRepository
@@ -108,6 +110,27 @@ class TestReviewTelemetryPostgresRouting(unittest.TestCase):
     def test_postgres_adapter_implements_every_store_method(self):
         for method in POSTGRES_STORE_METHODS:
             self.assertTrue(callable(getattr(PostgresReviewTelemetryRepository, method, None)), method)
+
+    def test_readiness_contract_requires_workflow_tables_and_columns(self):
+        engine = create_engine("sqlite:///:memory:")
+        try:
+            with engine.begin() as connection:
+                connection.exec_driver_sql("CREATE TABLE purchase_orders (id TEXT PRIMARY KEY)")
+                connection.exec_driver_sql("CREATE TABLE supplier_inventory_rows (id TEXT PRIMARY KEY)")
+                connection.exec_driver_sql("CREATE TABLE negotiation_sessions (id TEXT PRIMARY KEY)")
+            repository = PostgresReviewTelemetryRepository(engine=engine)
+
+            result = repository.check_operational_schema()
+
+            self.assertFalse(result["ready"])
+            self.assertIn("audit_logs", result["missing_tables"])
+            self.assertIn("supplier_inventory_imports", result["missing_tables"])
+            self.assertIn("negotiation_sessions", result["missing_columns"])
+            self.assertIn("purchase_orders", result["missing_columns"])
+            self.assertEqual(result["missing_columns"]["purchase_orders"][:2], ["attachment_metadata", "customer_email"])
+            self.assertIn("unit_price", result["missing_columns"]["supplier_inventory_rows"])
+        finally:
+            engine.dispose()
 
     def test_nested_repository_transactions_share_one_connection(self):
         connection = object()

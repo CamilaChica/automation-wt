@@ -121,7 +121,7 @@ def test_outbox_dispatch_sends_only_after_claim_transaction_has_closed(monkeypat
     assert events.index("mark_sent") < events.index("db_transaction_end")
 
 
-def test_outbox_retries_only_explicit_provider_throttling(monkeypatch):
+def test_outbox_retries_throttling_and_server_errors_but_quarantines_timeouts(monkeypatch):
     class Store:
         storage_engine = "postgresql"
 
@@ -172,6 +172,16 @@ def test_outbox_retries_only_explicit_provider_throttling(monkeypatch):
     assert ambiguous_store.delivery_state == "MANUAL_REVIEW_REQUIRED"
     assert quote_transitions == ["Pending_Internal_Review"]
     assert rfq_transitions == ["Pending_Internal_Review"]
+
+    server_error_store = Store()
+    monkeypatch.setattr("services.communication_service.operations_store", server_error_store)
+    monkeypatch.setattr(
+        "services.communication_service.send_message",
+        Mock(side_effect=type("HttpError", (Exception,), {"response": SimpleNamespace(status_code=503)})()),
+    )
+    CommunicationService().dispatch_outbox_once()
+    assert server_error_store.retryable is True
+    assert server_error_store.delivery_state == "PENDING"
 
 
 def test_reconciliation_maps_legacy_ids_stably_and_conflict_policy_preserves_target():

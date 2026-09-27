@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -34,6 +35,27 @@ class TestRfqPoWorkflow(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("Three signed documents", response.json()["detail"])
+
+    def test_duplicate_purchase_order_does_not_send_second_notification(self):
+        rfq = db_service.create_rfq("Buyer", "buyer@example.com", "P/N 060-1234-00 qty 1")
+        quote = db_service.create_quote(rfq.id, 100.0, 0.0, 100.0)
+        with patch("api.main.operations_store.record_purchase_order", return_value={
+            "id": "PO-ALREADY-RECORDED", "status": "Pending_PO_Review",
+        }), patch("api.main.communication_service.validate_purchase_order_metadata"), patch(
+            "api.main.communication_service.notify_purchase_order"
+        ) as notify:
+            response = TestClient(app).post(
+                "/api/purchase-orders",
+                json={
+                    "quote_id": quote.id,
+                    "po_number": "PO-1001",
+                    "customer_email": "buyer@example.com",
+                    "attachment_ids": ["ATT-0000000000000001", "ATT-0000000000000002", "ATT-0000000000000003"],
+                },
+            )
+
+        self.assertEqual(response.status_code, 409)
+        notify.assert_not_called()
 
 
 if __name__ == "__main__":

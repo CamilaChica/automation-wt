@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 from enum import StrEnum
-from typing import List
+from typing import Any, Callable, List
 
 from pydantic import BaseModel, Field, model_validator
+
+from services.operations_store import operations_store
 
 
 class NegotiationState(StrEnum):
@@ -74,3 +78,119 @@ class NegotiationSession(BaseModel):
             self.state = NegotiationState.DISCOUNT_REJECTED
             current.state = NegotiationState.DISCOUNT_REJECTED
         return current
+
+
+class SupplierNegotiationService:
+    def __init__(self, schedule_request: Callable[..., Any] | None = None):
+        self.schedule_request = schedule_request
+
+    def _schedule(self, *, recipient: str, supplier_name: str, part_number: str, unit_cost: float, session_id: str, round_number: int, quantity: int, reply_to: str | None) -> Any:
+        schedule = self.schedule_request
+        if schedule is None:
+            from services.communication_service import communication_service
+            schedule = communication_service.schedule_supplier_discount_request
+        return schedule(
+            recipient=recipient,
+            supplier_name=supplier_name,
+            part_number=part_number,
+            unit_cost=unit_cost,
+            source_email_id=session_id,
+            reply_to=reply_to,
+            round_number=round_number,
+            quantity=quantity,
+        )
+
+    def record_supplier_quote(
+        self,
+        *,
+        supplier_email: str,
+        supplier_name: str,
+        part_number: str,
+        quantity: int,
+        unit_cost: float,
+        source_email_id: str,
+        reply_to: str | None = None,
+    ) -> dict[str, Any]:
+        email = supplier_email.strip().lower()
+        part = part_number.strip().upper()
+        if not email or not part or quantity <= 0 or unit_cost <= 0:
+            return {"status": "INVALID_QUOTE"}
+        threshold = max(0.0, float(os.getenv("NEGOTIATION_MIN_LINE_VALUE", "500")))
+        session_payload = operations_store.get_negotiation_session(email, part)
+        if session_payload is None:
+            if quantity * unit_cost < threshold:
+                return {"status": "BELOW_THRESHOLD"}
+            max_rounds = min(5, max(1, int(os.getenv("SUPPLIER_DISCOUNT_MAX_ROUNDS", "3"))))
+            floor_discount = min(90.0, max(0.0, float(os.getenv("NEGOTIATION_FLOOR_DISCOUNT_PERCENT", "10"))))
+            first_discount = min(floor_discount, max(0.0, float(os.getenv("NEGOTIATION_FIRST_DISCOUNT_PERCENT", "5"))))
+            session_id = "NEG-" + hashlib.sha256(f"{email}\0{part}".encode()).hexdigest()[:20].upper()
+            session = NegotiationSession(
+                session_id=session_id,
+                supplier_id=email,
+                part_number=part,
+                initial_unit_cost=unit_cost,
+                minimum_unit_cost=unit_cost * (1 - floor_discount / 100),
+                maximum_rounds=max_rounds,
+            )
+            round_data = session.propose(max(session.minimum_unit_cost, unit_cost * (1 - first_discount / 100)))
+            session_payload = {
+                "session": session.model_dump(mode="json"),
+                "supplier_name": supplier_name,
+                "quantity": quantity,
+                "reply_to": reply_to,
+                "source_email_id": source_email_id,
+            }
+            operations_store.save_negotiation_session(
+                session_id=session_id, supplier_email=email, part_number=part, payload=session_payload,
+            )
+            self._schedule(
+                recipient=email, supplier_name=supplier_name, part_number=part,
+                unit_cost=round_data.requested_unit_cost, session_id=session_id,
+                round_number=round_data.number, quantity=quantity, reply_to=reply_to,
+            )
+            return {"status": "COUNTEROFFER_SENT", "round": round_data.number, "session_id": session_id}
+
+        session = NegotiationSession.model_validate(session_payload["session"])
+        if session.state != NegotiationState.COUNTEROFFER_SENT:
+            return {"status": session.state.value, "session_id": session.session_id}
+        try:
+            current_round = session.rounds[-1]
+            session.record_response(
+                unit_cost,
+                accepted=unit_cost <= current_round.requested_unit_cost,
+                note=f"Supplier reply {source_email_id}",
+            )
+        except ValueError:
+            session.state = NegotiationState.ESCALATED
+            session_payload["session"] = session.model_dump(mode="json")
+            operations_store.save_negotiation_session(
+                session_id=session.session_id, supplier_email=email, part_number=part, payload=session_payload,
+            )
+            return {"status": session.state.value, "session_id": session.session_id}
+
+        next_round = None
+        if session.state == NegotiationState.SUPPLIER_RESPONSE_RECEIVED and len(session.rounds) < session.maximum_rounds:
+            step = min(50.0, max(0.0, float(os.getenv("NEGOTIATION_NEXT_DISCOUNT_PERCENT", "3"))))
+            requested = max(session.minimum_unit_cost, current_round.requested_unit_cost * (1 - step / 100))
+            if requested >= current_round.requested_unit_cost:
+                session.state = NegotiationState.ESCALATED
+            else:
+                next_round = session.propose(requested)
+
+        session_payload["session"] = session.model_dump(mode="json")
+        session_payload["source_email_id"] = source_email_id
+        operations_store.save_negotiation_session(
+            session_id=session.session_id, supplier_email=email, part_number=part, payload=session_payload,
+        )
+        if next_round:
+            self._schedule(
+                recipient=email,
+                supplier_name=str(session_payload.get("supplier_name") or supplier_name),
+                part_number=part,
+                unit_cost=next_round.requested_unit_cost,
+                session_id=session.session_id,
+                round_number=next_round.number,
+                quantity=int(session_payload.get("quantity") or quantity),
+                reply_to=reply_to or session_payload.get("reply_to"),
+            )
+        return {"status": session.state.value, "round": len(session.rounds), "session_id": session.session_id}

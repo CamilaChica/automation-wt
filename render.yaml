@@ -91,10 +91,18 @@ services:
         sync: false
       - key: MAILBOX_MAX_AGE_DAYS
         value: "7"
-      - key: CUSTOMER_FOLLOWUP_DELAY_MINUTES
-        value: "30"
+      - key: CUSTOMER_CHASE_SCHEDULE_DAYS
+        value: "1,3,7"
+      - key: NEGOTIATION_MIN_LINE_VALUE
+        value: "500"
+      - key: NEGOTIATION_FLOOR_DISCOUNT_PERCENT
+        value: "10"
+      - key: NEGOTIATION_FIRST_DISCOUNT_PERCENT
+        value: "5"
+      - key: NEGOTIATION_NEXT_DISCOUNT_PERCENT
+        value: "3"
       - key: SUPPLIER_DISCOUNT_MAX_ROUNDS
-        value: "2"
+        value: "3"
       - key: PURCHASE_ORDER_NOTIFICATION_EMAIL
         value: "camila@wingedtycoons.com"
       - key: CAMILA_NOTIFICATION_EMAIL
@@ -272,4 +280,76 @@ services:
         value: "/var/data/supplier_email_store.db"
       - key: MAILBOX_MAX_AGE_DAYS
         value: "7"
+
+  - type: worker
+    name: winged-outbox-dispatcher
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m services.outbox_dispatcher
+    envVars:
+      - key: WT_ENV
+        value: "production"
+      - key: WT_AUTH_ENV
+        value: "production"
+      - key: DATABASE_URL
+        sync: false
+      - key: OPERATIONAL_POSTGRES_RUNTIME_ENABLED
+        value: "false"
+      - key: EMAIL_SEND_ENABLED
+        value: "true"
+      - key: SALES_EMAIL_USERNAME
+        sync: false
+      - key: SALES_EMAIL_PASSWORD
+        sync: false
+      - key: PURCHASING_EMAIL_USERNAME
+        sync: false
+      - key: PURCHASING_EMAIL_PASSWORD
+        sync: false
+      - key: AZURE_TENANT_ID
+        sync: false
+      - key: AZURE_CLIENT_ID
+        sync: false
+      - key: AZURE_CLIENT_SECRET
+        sync: false
+      - key: GRAPH_MAILBOX_USER_SALES
+        value: "sales@wingedtycoons.com"
+      - key: GRAPH_MAILBOX_USER_PURCHASING
+        value: "purchasing@wingedtycoons.com"
+      - key: OUTBOX_POLL_INTERVAL_SECONDS
+        value: "5"
+
+  - type: worker
+    name: winged-rfq-resume-worker
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m services.rfq_resume_worker
+    envVars:
+      - key: WT_ENV
+        value: "production"
+      - key: WT_AUTH_ENV
+        value: "production"
+      - key: DATABASE_URL
+        sync: false
+      - key: OPERATIONAL_POSTGRES_RUNTIME_ENABLED
+        value: "false"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: LLM_DEFAULT_PROVIDER
+        value: "openai"
+      - key: LLM_LIVE_ENABLED
+        value: "true"
+      - key: EMAIL_SEND_ENABLED
+        value: "true"
+      - key: SALES_EMAIL_USERNAME
+        sync: false
+      - key: SALES_EMAIL_PASSWORD
+        sync: false
+      - key: AZURE_TENANT_ID
+        sync: false
+      - key: AZURE_CLIENT_ID
+        sync: false
+      - key: AZURE_CLIENT_SECRET
+        sync: false
+      - key: GRAPH_MAILBOX_USER_SALES
+        value: "sales@wingedtycoons.com"
 

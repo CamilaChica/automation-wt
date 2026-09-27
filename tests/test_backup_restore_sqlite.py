@@ -42,7 +42,9 @@ class SqliteBackupRestoreSmokeTests(unittest.TestCase):
                     "auth": Path(os.getenv("WT_AUTH_DB")),
                 }
                 backup_sqlite.BACKUP_DIR = Path(os.getenv("SQLITE_BACKUP_DIR"))
-                backup_sqlite.main()
+                with patch.object(backup_sqlite, "upload_to_azure", return_value=None) as upload:
+                    backup_sqlite.main()
+                upload.assert_called_once()
 
                 backup_dirs = [path for path in backup_root.iterdir() if path.is_dir()]
                 self.assertTrue(backup_dirs, "Expected a timestamped backup directory to be created.")

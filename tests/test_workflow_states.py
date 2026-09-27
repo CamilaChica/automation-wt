@@ -4,7 +4,7 @@ from pathlib import Path
 
 from models.db_models import RFQ
 from services.operations_store import OperationsStore
-from services.workflow_states import WorkflowState, canonical_state, validate_transition
+from services.workflow_states import InvalidWorkflowTransition, WorkflowState, canonical_state, validate_transition
 
 
 class TestWorkflowStates(unittest.TestCase):
@@ -15,6 +15,12 @@ class TestWorkflowStates(unittest.TestCase):
     def test_invalid_transition_is_rejected(self):
         with self.assertRaises(ValueError):
             validate_transition("Intake", "Quote_Sent")
+
+    def test_unknown_states_are_rejected(self):
+        with self.assertRaises(InvalidWorkflowTransition):
+            validate_transition("MYSTERY_STATE", "Intake")
+        with self.assertRaises(InvalidWorkflowTransition):
+            validate_transition("Intake", "MYSTERY_STATE")
 
     def test_restored_rfq_can_carry_canonical_state(self):
         with tempfile.TemporaryDirectory() as directory:

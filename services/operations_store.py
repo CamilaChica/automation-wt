@@ -9,7 +9,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from repositories.review_telemetry_repository import PostgresReviewTelemetryRepository
+from repositories.review_telemetry_repository import (
+    PostgresReviewTelemetryRepository,
+    inbound_dedupe_key,
+    inventory_import_record_id,
+    raw_email_record_id,
+)
 
 
 DEFAULT_PATH = Path(__file__).resolve().parent.parent / "data" / "operations.db"
@@ -22,6 +27,16 @@ POSTGRES_STORE_METHODS = (
     "mark_inbound_message_processed",
     "save_inbound_email",
     "release_inbound_message",
+    "save_raw_email",
+    "record_audit_event",
+    "insert_audit_log",
+    "list_audit_logs",
+    "inventory_import_exists",
+    "record_inventory_import",
+    "record_inventory_rows",
+    "record_purchase_order",
+    "get_negotiation_session",
+    "save_negotiation_session",
     "get_operational_record",
     "lock_operational_record",
     "list_operational_records",
@@ -39,6 +54,7 @@ POSTGRES_STORE_METHODS = (
     "update_customer_quote_status",
     "record_automation_event",
     "update_automation_event",
+    "claim_automation_events",
     "claim_carrier_webhook_event",
     "list_automation_events",
     "get_automation_event",
@@ -100,6 +116,16 @@ class OperationsStore:
             self._ensure_column(conn, "automation_events", "attempts", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "automation_events", "max_attempts", "INTEGER NOT NULL DEFAULT 3")
             self._ensure_column(conn, "operator_review_queue", "prompt_version", "TEXT")
+            for column, definition in (
+                ("rfq_id", "TEXT"),
+                ("customer_email", "TEXT"),
+                ("total_amount", "REAL"),
+                ("po_document_url", "TEXT"),
+                ("received_message_id", "TEXT"),
+                ("attachment_metadata", "TEXT"),
+            ):
+                self._ensure_column(conn, "purchase_orders", column, definition)
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_purchase_orders_received_message ON purchase_orders(received_message_id) WHERE received_message_id IS NOT NULL")
             conn.commit()
         finally:
             conn.close()
@@ -120,6 +146,7 @@ class OperationsStore:
                 "This operation is not wired to the production PostgreSQL repository; refusing SQLite fallback."
             )
         connection = sqlite3.connect(self.path)
+        connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
@@ -175,32 +202,46 @@ class OperationsStore:
         finally:
             conn.close()
 
-    def claim_inbound_message(self, message_id: str, mailbox: str) -> bool:
+    def claim_inbound_message(self, message_id: str, mailbox: str, internet_message_id: str | None = None) -> bool:
         if self._postgres:
-            return self._postgres.claim_inbound_message(message_id, mailbox)
+            if internet_message_id is None:
+                return self._postgres.claim_inbound_message(message_id, mailbox)
+            return self._postgres.claim_inbound_message(message_id, mailbox, internet_message_id)
+        secondary_key = inbound_dedupe_key(internet_message_id)
         now = datetime.now(timezone.utc).isoformat()
         conn = self._connect()
         try:
-            cursor = conn.execute(
+            claim = (
                 "INSERT OR IGNORE INTO inbound_message_idempotency (message_id, mailbox, processed_at, status) "
-                "VALUES (?, ?, ?, 'processing')",
-                (message_id, mailbox, now),
+                "VALUES (?, ?, ?, 'processing')"
             )
-            conn.commit()
-            return cursor.rowcount == 1
+            if conn.execute(claim, (message_id, mailbox, now)).rowcount != 1:
+                return False
+            if secondary_key and conn.execute(claim, (secondary_key, mailbox, now)).rowcount != 1:
+                conn.execute(
+                    "UPDATE inbound_message_idempotency SET status = 'duplicate' WHERE message_id = ?",
+                    (message_id,),
+                )
+                return False
+            return True
         finally:
+            conn.commit()
             conn.close()
 
-    def mark_inbound_message_processed(self, message_id: str) -> None:
+    def mark_inbound_message_processed(self, message_id: str, internet_message_id: str | None = None) -> None:
         if self._postgres:
-            self._postgres.mark_inbound_message_processed(message_id)
+            if internet_message_id is None:
+                self._postgres.mark_inbound_message_processed(message_id)
+                return
+            self._postgres.mark_inbound_message_processed(message_id, internet_message_id)
             return
         conn = self._connect()
         try:
-            conn.execute(
-                "UPDATE inbound_message_idempotency SET status = 'processed', processed_at = ? WHERE message_id = ?",
-                (datetime.now(timezone.utc).isoformat(), message_id),
-            )
+            for key in filter(None, (message_id, inbound_dedupe_key(internet_message_id))):
+                conn.execute(
+                    "UPDATE inbound_message_idempotency SET status = 'processed', processed_at = ? WHERE message_id = ?",
+                    (datetime.now(timezone.utc).isoformat(), key),
+                )
             conn.commit()
         finally:
             conn.close()
@@ -213,15 +254,249 @@ class OperationsStore:
             )
         raise RuntimeError("Shared inbound email persistence requires PostgreSQL mode.")
 
-    def release_inbound_message(self, message_id: str) -> None:
+    def release_inbound_message(self, message_id: str, internet_message_id: str | None = None) -> None:
         if self._postgres:
-            self._postgres.release_inbound_message(message_id)
+            if internet_message_id is None:
+                self._postgres.release_inbound_message(message_id)
+                return
+            self._postgres.release_inbound_message(message_id, internet_message_id)
+            return
+        conn = self._connect()
+        try:
+            for key in filter(None, (message_id, inbound_dedupe_key(internet_message_id))):
+                conn.execute(
+                    "DELETE FROM inbound_message_idempotency WHERE message_id = ? AND status = 'processing'",
+                    (key,),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def save_raw_email(
+        self,
+        *,
+        mailbox: str,
+        provider_message_id: str,
+        internet_message_id: str | None = None,
+        conversation_id: str | None = None,
+        sender: str | None = None,
+        subject: str | None = None,
+        received_at: datetime | None = None,
+        body: str = "",
+        raw_mime: bytes | None = None,
+        headers: list[dict[str, Any]] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+        processing_status: str = "received",
+    ) -> str:
+        if self._postgres:
+            return self._postgres.save_raw_email(
+                mailbox=mailbox, provider_message_id=provider_message_id,
+                internet_message_id=internet_message_id, conversation_id=conversation_id,
+                sender=sender, subject=subject, received_at=received_at, body=body,
+                raw_mime=raw_mime, headers=headers, attachments=attachments,
+                processing_status=processing_status,
+            )
+        raw_email_id = raw_email_record_id(mailbox, provider_message_id)
+        conn = self._connect()
+        try:
+            conn.execute(
+                "INSERT INTO raw_emails (id, mailbox, provider_message_id, internet_message_id, conversation_id, "
+                "sender, subject, received_at, body, raw_mime, headers, attachments, processing_status, archived_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (mailbox, provider_message_id) DO UPDATE SET "
+                "processing_status = excluded.processing_status, "
+                "raw_mime = COALESCE(excluded.raw_mime, raw_emails.raw_mime)",
+                (
+                    raw_email_id, mailbox, provider_message_id, internet_message_id, conversation_id,
+                    sender, subject, received_at.isoformat() if received_at else None, body or "",
+                    raw_mime, json.dumps(headers) if headers is not None else None,
+                    json.dumps(attachments) if attachments is not None else None,
+                    processing_status, datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return raw_email_id
+
+    def record_audit_event(self, *, entity_id: str, actor: str, action: str, status: str, payload: dict[str, Any] | None = None) -> str:
+        if self._postgres:
+            return self._postgres.record_audit_event(
+                entity_id=entity_id, actor=actor, action=action, status=status, payload=payload,
+            )
+        audit_id = f"AUD-{uuid.uuid4().hex[:24].upper()}"
+        conn = self._connect()
+        try:
+            conn.execute(
+                "INSERT INTO audit_events (id, entity_id, actor, action, status, payload, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    audit_id, entity_id, actor, action, status,
+                    json.dumps(payload) if payload is not None else None,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return audit_id
+
+    def insert_audit_log(self, *, rfq_id: str, agent_name: str, action_type: str, message: str, status: str, payload_json: str | None, timestamp: datetime) -> dict[str, Any]:
+        if self._postgres:
+            return self._postgres.insert_audit_log(
+                rfq_id=rfq_id, agent_name=agent_name, action_type=action_type, message=message,
+                status=status, payload_json=payload_json, timestamp=timestamp,
+            )
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                "INSERT INTO audit_logs (rfq_id, agent_name, action_type, message, status, payload_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (rfq_id, agent_name, action_type, message, status, payload_json, timestamp.isoformat()),
+            )
+            conn.commit()
+            return {"id": int(cursor.lastrowid), "timestamp": timestamp}
+        finally:
+            conn.close()
+
+    def list_audit_logs(self, rfq_id: str) -> list[dict[str, Any]]:
+        if self._postgres:
+            return self._postgres.list_audit_logs(rfq_id)
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT id, rfq_id, agent_name, action_type, message, status, payload_json, created_at AS timestamp "
+                "FROM audit_logs WHERE rfq_id = ? ORDER BY id", (rfq_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def list_audit_events(self, entity_id: str) -> list[dict[str, Any]]:
+        if self._postgres:
+            raise RuntimeError("Audit event listing is served from operational records in PostgreSQL mode.")
+        conn = self._connect()
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                "SELECT * FROM audit_events WHERE entity_id = ? ORDER BY created_at, rowid",
+                (entity_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [{**dict(row), "payload": json.loads(row["payload"]) if row["payload"] else None} for row in rows]
+
+    def inventory_import_exists(self, source_message_id: str, content_sha256: str) -> bool:
+        if self._postgres:
+            return self._postgres.inventory_import_exists(source_message_id, content_sha256)
+        conn = self._connect()
+        try:
+            return conn.execute(
+                "SELECT 1 FROM supplier_inventory_imports WHERE source_message_id = ? AND content_sha256 = ?",
+                (source_message_id, content_sha256),
+            ).fetchone() is not None
+        finally:
+            conn.close()
+
+    def record_inventory_import(self, **record: Any) -> str:
+        if self._postgres:
+            return self._postgres.record_inventory_import(**record)
+        import_id = inventory_import_record_id(record["source_message_id"], record["content_sha256"])
+        conn = self._connect()
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO supplier_inventory_imports (id, mailbox, source_message_id, sender, filename, "
+                "content_sha256, parser, sheet_name, header_map, rows_total, rows_imported, rows_rejected, "
+                "rejected_rows, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    import_id, record["mailbox"], record["source_message_id"], record.get("sender"),
+                    record["filename"], record["content_sha256"], record["parser"], record.get("sheet_name"),
+                    json.dumps(record.get("header_map")), record.get("rows_total", 0),
+                    record.get("rows_imported", 0), record.get("rows_rejected", 0),
+                    json.dumps(record.get("rejected_rows")), record["status"],
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return import_id
+
+    def record_inventory_rows(self, import_id: str, rows: list[dict[str, Any]]) -> None:
+        if self._postgres:
+            self._postgres.record_inventory_rows(import_id, rows)
+            return
+        conn = self._connect()
+        try:
+            conn.executemany(
+                "INSERT OR REPLACE INTO supplier_inventory_rows "
+                "(id, import_id, row_number, part_number, description, quantity_available, condition_code, "
+                "unit_price, currency, lead_time_days, certificate_type, availability_location, raw_values, status, error, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(
+                    row["id"], import_id, row["row_number"], row.get("part_number"), row.get("description"),
+                    row.get("quantity_available"), row.get("condition_code"), row.get("unit_price"),
+                    row.get("currency"), row.get("lead_time_days"), row.get("certificate_type"),
+                    row.get("availability_location"), json.dumps(row.get("raw_values") or {}),
+                    row["status"], row.get("error"), datetime.now(timezone.utc).isoformat(),
+                ) for row in rows],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def record_purchase_order(self, *, po_id: str, po_number: str, customer_email: str, total_amount: float, status: str, quote_id: str, rfq_id: str, received_message_id: str | None, attachment_metadata: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        if self._postgres:
+            return self._postgres.record_purchase_order(
+                po_id=po_id, po_number=po_number, customer_email=customer_email, total_amount=total_amount,
+                status=status, quote_id=quote_id, rfq_id=rfq_id, received_message_id=received_message_id,
+                attachment_metadata=attachment_metadata or [],
+            )
+        conn = self._connect()
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO purchase_orders "
+                "(id, quote_id, rfq_id, po_number, customer_email, amount, total_amount, currency, status, "
+                "received_message_id, attachment_metadata, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'USD', ?, ?, ?, ?, ?)",
+                (
+                    po_id, quote_id, rfq_id, po_number, customer_email, total_amount, total_amount, status,
+                    received_message_id, json.dumps(attachment_metadata or []),
+                    datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            row = conn.execute("SELECT * FROM purchase_orders WHERE po_number = ?", (po_number,)).fetchone()
+            conn.commit()
+            return dict(row) if row else {}
+        finally:
+            conn.close()
+
+    def get_negotiation_session(self, supplier_email: str, part_number: str) -> dict[str, Any] | None:
+        if self._postgres:
+            return self._postgres.get_negotiation_session(supplier_email, part_number)
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT payload FROM negotiation_sessions WHERE supplier_email = ? AND part_number = ?",
+                (supplier_email.lower(), part_number.upper()),
+            ).fetchone()
+            return json.loads(row["payload"]) if row else None
+        finally:
+            conn.close()
+
+    def save_negotiation_session(self, *, session_id: str, supplier_email: str, part_number: str, payload: dict[str, Any]) -> None:
+        if self._postgres:
+            self._postgres.save_negotiation_session(
+                session_id=session_id, supplier_email=supplier_email, part_number=part_number, payload=payload,
+            )
             return
         conn = self._connect()
         try:
             conn.execute(
-                "DELETE FROM inbound_message_idempotency WHERE message_id = ? AND status = 'processing'",
-                (message_id,),
+                "INSERT INTO negotiation_sessions (id, supplier_email, part_number, payload, updated_at) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(supplier_email, part_number) DO UPDATE SET "
+                "payload = excluded.payload, updated_at = excluded.updated_at",
+                (session_id, supplier_email.lower(), part_number.upper(), json.dumps(payload), datetime.now(timezone.utc).isoformat()),
             )
             conn.commit()
         finally:
@@ -597,6 +872,27 @@ class OperationsStore:
             conn.commit()
         finally:
             conn.close()
+
+    def claim_automation_events(self, *, event_type: str, limit: int = 10) -> list[dict[str, Any]]:
+        if self._postgres:
+            return self._postgres.claim_automation_events(event_type=event_type, limit=limit)
+        claimed = []
+        with self.transaction() as conn:
+            rows = conn.execute(
+                "SELECT id, attempts, max_attempts, entity_id, result FROM automation_events "
+                "WHERE event_type = ? AND status = 'QUEUED' AND attempts < max_attempts "
+                "ORDER BY created_at LIMIT ?",
+                (event_type, min(max(int(limit), 1), 100)),
+            ).fetchall()
+            for row in rows:
+                attempts = int(row["attempts"]) + 1
+                cursor = conn.execute(
+                    "UPDATE automation_events SET status = 'RUNNING', attempts = ?, execution_time = ? WHERE id = ? AND status = 'QUEUED'",
+                    (attempts, datetime.now(timezone.utc).isoformat(), row["id"]),
+                )
+                if cursor.rowcount:
+                    claimed.append({**dict(row), "attempts": attempts})
+        return claimed
 
     def claim_carrier_webhook_event(self, event_id: str) -> bool:
         if self._postgres:

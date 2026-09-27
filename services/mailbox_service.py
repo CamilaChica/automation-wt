@@ -9,16 +9,19 @@ authentication is disabled by Microsoft 365.
 import email
 import base64
 import imaplib
+import logging
 import os
 import re
 import smtplib
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from email.message import EmailMessage
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 from services.graph_client import GraphClient, GraphClientError
+
+logger = logging.getLogger(__name__)
 
 try:
     from azure.identity import ClientSecretCredential
@@ -123,7 +126,7 @@ def _mailbox_user_for_graph(mailbox: str) -> str:
     return mailbox_address
 
 
-def _fetch_graph_inbox_messages(mailbox: str, limit: int = 25) -> list[dict[str, str]]:
+def _fetch_graph_inbox_messages(mailbox: str, limit: int = 25) -> list[dict[str, Any]]:
     mailbox_user = _mailbox_user_for_graph(mailbox)
     token = _graph_access_token()
     headers = {
@@ -134,7 +137,7 @@ def _fetch_graph_inbox_messages(mailbox: str, limit: int = 25) -> list[dict[str,
     cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat().replace("+00:00", "Z")
     url = (
         f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/mailFolders/inbox/messages"
-        f"?$top={limit}&$select=id,from,subject,body,receivedDateTime,hasAttachments&$filter=receivedDateTime ge {cutoff}&$orderby=receivedDateTime desc"
+        f"?$top={limit}&$select=id,internetMessageId,conversationId,internetMessageHeaders,from,subject,body,receivedDateTime,hasAttachments&$filter=receivedDateTime ge {cutoff}&$orderby=receivedDateTime desc"
     )
     response = requests.get(url, headers=headers, timeout=30)
     response.raise_for_status()
@@ -143,9 +146,26 @@ def _fetch_graph_inbox_messages(mailbox: str, limit: int = 25) -> list[dict[str,
     for item in items:
         body = _graph_message_body(item)
         sender = (item.get("from") or {}).get("emailAddress", {}).get("address", "")
+        raw_mime = None
+        message_id = str(item.get("id", ""))
+        if message_id:
+            try:
+                mime_response = requests.get(
+                    f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/messages/{message_id}/$value",
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=30,
+                )
+                mime_response.raise_for_status()
+                raw_mime = mime_response.content
+            except Exception as exc:
+                logger.warning("Graph MIME archive unavailable mailbox=%s message=%s error=%s", mailbox, message_id, type(exc).__name__)
         results.append({
             "mailbox": mailbox,
-            "message_id": str(item.get("id", "")),
+            "message_id": message_id,
+            "internet_message_id": str(item.get("internetMessageId") or "").strip() or None,
+            "conversation_id": str(item.get("conversationId") or "").strip() or None,
+            "headers": item.get("internetMessageHeaders") or [],
+            "raw_mime": raw_mime,
             "from": sender,
             "subject": item.get("subject", ""),
             "date": item.get("receivedDateTime") or item.get("sentDateTime", ""),
@@ -177,13 +197,13 @@ def _fetch_graph_attachments(mailbox_user: str, message_id: str, token: str) -> 
     return attachments
 
 
-def fetch_inbox_messages(mailbox: str, limit: int = 25) -> list[dict[str, str]]:
+def fetch_inbox_messages(mailbox: str, limit: int = 25) -> list[dict[str, Any]]:
     if all(os.getenv(name) for name in ("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET")):
         try:
             return _fetch_graph_inbox_messages(mailbox, limit=limit)
-        except Exception:
+        except Exception as exc:
             # Keep the app resilient if Azure Graph is temporarily unavailable.
-            pass
+            logger.warning("Graph mailbox read failed; falling back to IMAP mailbox=%s error=%s", mailbox, type(exc).__name__)
 
     username, password = _credentials(mailbox)
     client = imaplib.IMAP4_SSL("outlook.office365.com", 993)
@@ -213,6 +233,10 @@ def fetch_inbox_messages(mailbox: str, limit: int = 25) -> list[dict[str, str]]:
             results.append({
                 "mailbox": mailbox,
                 "message_id": message_id.decode(),
+                "internet_message_id": str(message.get("Message-ID") or "").strip() or None,
+                "conversation_id": None,
+                "headers": [{"name": key, "value": str(value)} for key, value in message.items()],
+                "raw_mime": raw_message,
                 "from": message.get("From", ""),
                 "subject": message.get("Subject", ""),
                 "date": message.get("Date", ""),

@@ -7,6 +7,7 @@ import logging
 import time
 import re
 import asyncio
+from contextlib import nullcontext
 from pathlib import Path
 from collections import defaultdict, deque
 from typing import List, Dict, Any, Optional, Literal
@@ -279,6 +280,7 @@ class ApproveRequest(BaseModel):
     operator_name: str = Field("John Doe", description="Authorized agent name approving the quote")
     comments: Optional[str] = None
     items_override: Optional[List[OverrideItem]] = None
+    expected_version: Optional[int] = Field(None, ge=1)
 
 class RejectRequest(BaseModel):
     operator_name: str
@@ -1072,12 +1074,16 @@ async def approve_quote(quote_id: str, request: ApproveRequest, _user: dict = De
     if request.items_override:
         overrides_list = [{"quote_item_id": o.quote_item_id, "unit_price": o.unit_price} for o in request.items_override]
         
-    res = await orchestration_service.approve_and_send_quote(
-        quote_id=quote_id,
-        operator_name=request.operator_name,
-        overrides=overrides_list,
-        comments=request.comments,
-    )
+    try:
+        res = await orchestration_service.approve_and_send_quote(
+            quote_id=quote_id,
+            operator_name=request.operator_name,
+            overrides=overrides_list,
+            comments=request.comments,
+            expected_version=request.expected_version if request.expected_version is not None else quote.version,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     
     # Use the status produced by orchestration; the original object is stale after approval.
     final_status = res.get("status")
@@ -1156,16 +1162,32 @@ async def submit_purchase_order(request: PurchaseOrderRequest, user: dict = Depe
         if supplier_email:
             supplier_groups.setdefault(supplier_email, {"supplier_name": supplier_name, "items": []})["items"].append(internal_item)
 
-    notification = communication_service.notify_purchase_order(
-        recipient=os.getenv("CAMILA_NOTIFICATION_EMAIL", os.getenv("PURCHASE_ORDER_NOTIFICATION_EMAIL", "camila@wingedtycoons.com")),
-        po_number=request.po_number,
-        customer_name=rfq.customer_name,
-        customer_email=customer_email,
-        quote_id=request.quote_id,
-        items=internal_items,
-        review_url=os.getenv("SALES_DASHBOARD_URL") or os.getenv("PUBLIC_APP_URL", "http://localhost:3000"),
-    )
-    orchestration_service.mark_purchase_order_received(rfq.id, request.po_number, request.attachment_ids)
+    transaction = operations_store.transaction() if operations_store.storage_engine == "postgresql" else nullcontext()
+    with transaction:
+        requested_po_id = f"PO-{uuid.uuid4().hex[:20].upper()}"
+        purchase_order = operations_store.record_purchase_order(
+            po_id=requested_po_id,
+            po_number=request.po_number,
+            customer_email=customer_email,
+            total_amount=float(quote.total_amount or 0),
+            status="Pending_PO_Review",
+            quote_id=request.quote_id,
+            rfq_id=rfq.id,
+            received_message_id=None,
+            attachment_metadata=[{"attachment_id": value} for value in request.attachment_ids],
+        )
+        if purchase_order.get("id") and purchase_order["id"] != requested_po_id:
+            raise HTTPException(status_code=409, detail="Purchase order already received.")
+        notification = communication_service.notify_purchase_order(
+            recipient=os.getenv("CAMILA_NOTIFICATION_EMAIL", os.getenv("PURCHASE_ORDER_NOTIFICATION_EMAIL", "camila@wingedtycoons.com")),
+            po_number=request.po_number,
+            customer_name=rfq.customer_name,
+            customer_email=customer_email,
+            quote_id=request.quote_id,
+            items=internal_items,
+            review_url=os.getenv("SALES_DASHBOARD_URL") or os.getenv("PUBLIC_APP_URL", "http://localhost:3000"),
+        )
+        orchestration_service.mark_purchase_order_received(rfq.id, request.po_number, request.attachment_ids)
     return {
         "status": "Pending_PO_Review",
         "po_number": request.po_number,

@@ -19,7 +19,7 @@ Required fields
 - customer_name  (or company)
 - part_number
 
-Quantity defaults to one when the customer does not specify it.
+Quantity and condition remain unset when the customer does not specify them.
 
 If any mandatory field is absent, status is set to NEEDS_CLARIFICATION and
 the field name is added to missing_fields.  The agent NEVER invents values.
@@ -195,6 +195,23 @@ def _extract_quantity(text: str) -> Optional[int]:
     return None
 
 
+def _positive_int(value: Optional[str]) -> Optional[int]:
+    """Parse a model-extracted quantity such as "10" or "10 EA"; None when absent."""
+    match = re.search(r"\d+", str(value or ""))
+    quantity = int(match.group()) if match else 0
+    return quantity if quantity > 0 else None
+
+
+def _price_value(value: Optional[str]) -> Optional[float]:
+    """Parse a model-extracted price such as "$1,250.00"; None when absent."""
+    normalized = re.sub(r"[^0-9.]", "", str(value or ""))
+    try:
+        price = float(normalized)
+    except ValueError:
+        return None
+    return price if price > 0 else None
+
+
 def _extract_condition(text: str) -> tuple:
     """
     Returns (condition_code_or_None, is_ambiguous).
@@ -294,10 +311,11 @@ def _extract_line_items(text: str) -> List[Dict[str, Any]]:
         condition, ambiguous = _extract_condition(segment)
         items.append({
             "requested_part_number": candidate,
-            "quantity": _extract_quantity(segment) or 1,
+            "quantity": _extract_quantity(segment),
+            "quantity_defaulted": _extract_quantity(segment) is None,
             "uom": "EA",
             "aircraft_type": None,
-            "condition_preference": condition if condition and not ambiguous else "NE",
+            "condition_preference": condition if condition and not ambiguous else None,
             "condition_ambiguous": ambiguous,
         })
     return items
@@ -400,7 +418,7 @@ class RFQIntakeAgent(BaseAgent):
                 "required": ["rfq_id", "status", "priority", "missing_fields", "ambiguous_fields"],
             },
             available_tools=[],
-            permissions=[],
+            permissions=["extract_rfq_fields"],
             escalation_rules=[
                 EscalationRule(
                     condition="missing_mandatory_fields",
@@ -419,7 +437,7 @@ class RFQIntakeAgent(BaseAgent):
                 ),
             ],
             prompt_templates={
-                "default": "Analyze the raw customer RFQ text. Extract: customer_name, company, part_number (normalize to uppercase), quantity (integer, default 1 when omitted), condition (NE/NS/OH/AR), required_date, delivery_location, AOG_status, certification_requirements, and additional_requirements. Flag missing mandatory fields (part_number, customer identity). Flag ambiguous condition when multiple codes appear. Set priority: AOG > Urgent > Routine. NEVER invent or guess confirmed fields.",
+                "default": "Analyze the raw customer RFQ text. Extract: customer_name, company, part_number (normalize to uppercase), quantity (integer or null when omitted), condition (NE/NS/OH/AR or null when omitted), required_date, delivery_location, AOG_status, certification_requirements, and additional_requirements. Flag missing mandatory fields (part_number, quantity, customer identity). Flag ambiguous condition when multiple codes appear. Set priority: AOG > Urgent > Routine. NEVER invent or guess confirmed fields.",
                 "rfq_parse": "Normalize the inbound RFQ and return only confirmed fields; escalate when required information is missing or ambiguous.",
             },
         )
@@ -450,7 +468,7 @@ class RFQIntakeAgent(BaseAgent):
         part_number_raw = _extract_part_number(raw_text)
         part_number  = _normalize_part_number(part_number_raw) if part_number_raw else None
         extracted_quantity = _extract_quantity(raw_text)
-        quantity     = extracted_quantity or 1
+        quantity     = extracted_quantity
         quantity_defaulted = extracted_quantity is None
         condition, is_ambiguous_condition = _extract_condition(raw_text)
         if extracted_items:
@@ -483,10 +501,15 @@ class RFQIntakeAgent(BaseAgent):
                 extracted_items = [
                     {
                         "requested_part_number": _normalize_part_number(item.part_number.value or ""),
-                        "quantity": int(item.quantity.value or 1),
+                        "quantity": _positive_int(item.quantity.value),
+                        "quantity_defaulted": _positive_int(item.quantity.value) is None,
                         "uom": item.unit_of_measure.value or "EA",
                         "aircraft_type": None,
-                        "condition_preference": item.condition_code.value or "NE",
+                        "condition_preference": item.condition_code.value,
+                        "condition_defaulted": not item.condition_code.value,
+                        "description": (item.description or "").strip() or None,
+                        "target_price": _price_value(item.target_price.value),
+                        "currency": (item.currency.value or "").strip().upper() or None,
                     }
                     for item in llm_data.items
                     if item.part_number.value and is_valid_extracted_part_number(item.part_number.value)
@@ -497,7 +520,9 @@ class RFQIntakeAgent(BaseAgent):
                 # merging provider extraction results.
                     if extracted_quantity is None:
                         quantity = extracted_items[0]["quantity"]
+                        quantity_defaulted = extracted_items[0]["quantity_defaulted"]
                     else:
+                        extracted_items[0]["quantity_defaulted"] = False
                         extracted_items[0]["quantity"] = extracted_quantity
                         quantity = extracted_quantity
                     condition = extracted_items[0]["condition_preference"]
@@ -506,6 +531,10 @@ class RFQIntakeAgent(BaseAgent):
                     customer_email = (llm_data.customer_email or customer_email or "").strip().lower() or None
         except Exception as exc:
             logger.warning("rfq_llm_extraction_fallback error=%s", type(exc).__name__)
+
+        # ── 2. Priority ─────────────────────────────────────────────────
+        # Computed before any early return so held responses carry it too.
+        priority = _determine_priority(aog_status, raw_text)
 
         is_partsbase = "partsbase.com" in raw_text.lower()
         explicit_partsbase_fallback = bool(
@@ -535,9 +564,6 @@ class RFQIntakeAgent(BaseAgent):
                 escalation_triggered=self.metadata.escalation_rules[0],
             )
 
-        # ── 2. Priority ─────────────────────────────────────────────────
-        priority = _determine_priority(aog_status, raw_text)
-
         # ── 3. Validation ───────────────────────────────────────────────
         missing_fields: List[str] = []
         ambiguous_fields: List[str] = []
@@ -548,6 +574,9 @@ class RFQIntakeAgent(BaseAgent):
 
         if not part_number:
             missing_fields.append("part_number")
+
+        if quantity is None:
+            missing_fields.append("quantity")
 
         if is_ambiguous_condition:
             ambiguous_fields.append("condition")
@@ -577,13 +606,14 @@ class RFQIntakeAgent(BaseAgent):
 
         # ── 6. Build legacy-compatible items list ───────────────────────
         items: list = extracted_items or []
-        if not items and part_number and quantity:
+        if not items and part_number:
             items.append({
                 "requested_part_number": part_number,
                 "quantity": quantity,
                 "uom": "EA",
                 "aircraft_type": None,
-                "condition_preference": condition if (condition and not is_ambiguous_condition) else "NE",
+                "condition_preference": condition if (condition and not is_ambiguous_condition) else None,
+                "quantity_defaulted": quantity is None,
             })
         for item in items:
             item.pop("condition_ambiguous", None)

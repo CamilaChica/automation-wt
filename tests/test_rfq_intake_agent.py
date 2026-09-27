@@ -5,7 +5,7 @@ Unit tests for RFQIntakeAgent covering the six mandatory scenarios:
 
     1. complete_rfq         – all fields present; status = COMPLETE
     2. missing_part_number  – no PN in text; status = NEEDS_CLARIFICATION
-    3. omitted_quantity     – no quantity in text; defaults to one
+    3. omitted_quantity     – no quantity in text; held for clarification
     4. ambiguous_condition  – multiple condition codes; status = NEEDS_CLARIFICATION
     5. aog_request          – AOG keyword triggers AOG priority
     6. malformed_rfq        – garbage/empty input; status = NEEDS_CLARIFICATION
@@ -13,6 +13,7 @@ Unit tests for RFQIntakeAgent covering the six mandatory scenarios:
 
 import asyncio
 import unittest
+from unittest.mock import patch
 from agents.rfq_intake_agent import RFQIntakeAgent
 
 
@@ -99,6 +100,15 @@ class TestRFQIntakeAgent(unittest.TestCase):
         self.assertTrue(res.success, res.error_message)
         self.assertEqual(res.data["customer_email"], "sales@innovation-aero.com")
 
+    def test_partsbase_provider_outage_is_held_without_crashing(self):
+        raw = "From: rfqs@partsbase.com\nSubject: PartsBase Quote Request #21824835\n"
+        with patch("agents.rfq_intake_agent.extract_email_intelligence", side_effect=RuntimeError("offline")):
+            res = self._run(raw)
+
+        self.assertFalse(res.success)
+        self.assertEqual(res.data["priority"], "Routine")
+        self.assertIn("live LLM extraction", res.data["missing_fields"])
+
     def test_multiple_partsbase_rows_keep_quantity_and_condition_per_item(self):
         raw = (
             "From: Sandy Delgado <sales@innovation-aero.com>\n"
@@ -143,22 +153,31 @@ class TestRFQIntakeAgent(unittest.TestCase):
     # ================================================================== #
     # 3. Omitted Quantity
     # ================================================================== #
-    def test_omitted_quantity_defaults_to_one(self):
-        """No quantity in text → complete RFQ with quantity one."""
+    def test_omitted_quantity_is_not_guessed(self):
+        """No quantity in text → clarification with quantity unset."""
         raw = (
             "United Airlines maintenance needs Part Number 456-789-OH. "
             "Condition OH. Required by 2026-10-01. Ship to Chicago O'Hare."
         )
         res = self._run(raw)
 
-        self.assertTrue(res.success)
+        self.assertFalse(res.success)
         d = res.data
-        self.assertEqual(d["status"], "COMPLETE")
-        self.assertEqual(d["quantity"], 1)
+        self.assertEqual(d["status"], "NEEDS_CLARIFICATION")
+        self.assertIn("quantity", d["missing_fields"])
+        self.assertIsNone(d["quantity"])
         self.assertTrue(d["quantity_defaulted"])
-        self.assertEqual(d["items"][0]["quantity"], 1)
+        self.assertIsNone(d["items"][0]["quantity"])
+        self.assertEqual(d["items"][0]["condition_preference"], "OH")
         # Part number still extracted and normalized
         self.assertEqual(d["part_number"], "456-789-OH")
+
+    def test_omitted_condition_is_not_guessed(self):
+        res = self._run("Company: United Airlines\nPart Number: 060-1234-00\nQuantity: 2")
+
+        self.assertTrue(res.success, res.error_message)
+        self.assertIsNone(res.data["condition"])
+        self.assertIsNone(res.data["items"][0]["condition_preference"])
 
     # ================================================================== #
     # 4. Ambiguous Condition

@@ -9,6 +9,7 @@ from models.db_models import RFQ, RFQItem, InventoryItem, SupplierQuote, Quote, 
 from services.operations_store import operations_store
 from services.supplier_database import supplier_db
 from services.workflow_states import canonical_state, validate_transition
+from services.customer_chase_schedule import chase_task_keys
 
 _inventory_lock = threading.Lock()
 
@@ -462,7 +463,18 @@ class MockDatabaseService:
         return None
 
     # RFQ Items Operations
-    def add_rfq_item(self, rfq_id: str, requested_part: str, qty: int, uom: str = "EA", aircraft: str = None, condition: str = "NE") -> RFQItem:
+    def add_rfq_item(
+        self,
+        rfq_id: str,
+        requested_part: str,
+        qty: int,
+        uom: str = "EA",
+        aircraft: str = None,
+        condition: str = "NE",
+        description: Optional[str] = None,
+        target_price: Optional[float] = None,
+        currency: Optional[str] = None,
+    ) -> RFQItem:
         item_id = f"RITM-{uuid.uuid4().hex[:6].upper()}"
         item = RFQItem(
             id=item_id,
@@ -471,7 +483,10 @@ class MockDatabaseService:
             quantity=qty,
             uom=uom,
             aircraft_type=aircraft,
-            condition_preference=condition
+            condition_preference=condition,
+            description=description,
+            target_price=target_price,
+            currency=currency,
         )
         if self._production:
             if not self.get_rfq(rfq_id):
@@ -521,6 +536,9 @@ class MockDatabaseService:
                         rfq_id, str(item["part_number"]), int(item["quantity"]),
                         uom=str(item.get("unit_of_measure") or "EA"),
                         condition=str(item.get("condition_code") or "NE"),
+                        description=item.get("description"),
+                        target_price=item.get("target_price"),
+                        currency=item.get("currency"),
                     )
                     for item in items
                 ]
@@ -534,6 +552,9 @@ class MockDatabaseService:
                 int(item["quantity"]),
                 uom=str(item.get("unit_of_measure") or "EA"),
                 condition=str(item.get("condition_code") or "NE"),
+                description=item.get("description"),
+                target_price=item.get("target_price"),
+                currency=item.get("currency"),
             )
             for item in items
         ]
@@ -542,17 +563,7 @@ class MockDatabaseService:
 
     # Audit Log Operations
     def add_audit_log(self, rfq_id: str, agent_name: str, action: str, message: str, status: str = "SUCCESS", payload: str = None) -> AgentAuditLog:
-        if self._production:
-            with operations_store.transaction():
-                logs = self.get_audit_logs(rfq_id)
-                log = AgentAuditLog(
-                    id=len(logs) + 1, rfq_id=rfq_id, agent_name=agent_name, action_type=action,
-                    message=message, status=status, payload_json=payload, timestamp=datetime.now(timezone.utc),
-                )
-                self._pg_record("audit_logs", f"{rfq_id}:{log.id}", log)
-                return log
         log = AgentAuditLog(
-            id=len(self.audit_logs.get(rfq_id, [])) + 1,
             rfq_id=rfq_id,
             agent_name=agent_name,
             action_type=action,
@@ -561,17 +572,14 @@ class MockDatabaseService:
             payload_json=payload,
             timestamp=datetime.now(timezone.utc)
         )
-        if rfq_id not in self.audit_logs:
-            self.audit_logs[rfq_id] = []
-        self.audit_logs[rfq_id].append(log)
-        self._persist_state()
-        return log
+        persisted = operations_store.insert_audit_log(
+            rfq_id=rfq_id, agent_name=agent_name, action_type=action, message=message,
+            status=status, payload_json=payload, timestamp=log.timestamp,
+        )
+        return log.model_copy(update=persisted)
 
     def get_audit_logs(self, rfq_id: str) -> List[AgentAuditLog]:
-        if self._production:
-            logs = [log for log in self._pg_list("audit_logs", AgentAuditLog) if log.rfq_id == rfq_id]
-            return sorted(logs, key=lambda log: log.id or 0)
-        return self.audit_logs.get(rfq_id, [])
+        return [AgentAuditLog.model_validate(log) for log in operations_store.list_audit_logs(rfq_id)]
 
     # Quote Operations
     def create_quote(
@@ -710,13 +718,15 @@ class MockDatabaseService:
                     with operations_store.transaction():
                         self._pg_record("quotes", quote_id, quote)
                         operations_store.update_customer_quote_status(quote_id, "Expired")
-                        operations_store.cancel_communication_task(f"customer-followup:{quote_id}")
+                        for task_key in chase_task_keys(quote_id):
+                            operations_store.cancel_communication_task(task_key)
             return quote
         quote = self.quotes.get(quote_id)
         if quote and quote.valid_until and quote.status in {"Sent", "Approved"}:
             if quote.valid_until < datetime.now(timezone.utc).date().isoformat():
                 quote.status = "Expired"
-                supplier_db.cancel_communication_task(f"customer-followup:{quote_id}")
+                for task_key in chase_task_keys(quote_id):
+                    supplier_db.cancel_communication_task(task_key)
                 self._persist_state()
         return quote
 
@@ -744,19 +754,20 @@ class MockDatabaseService:
                 self._pg_record("quotes", quote_id, quote)
                 operations_store.update_customer_quote_status(quote_id, status)
             return quote
-        if quote_id in self.quotes:
-            quote = self.quotes[quote_id]
-            if expected_version is not None and quote.version != expected_version:
-                raise ValueError(f"Quote {quote_id} was updated by another operation.")
-            quote.status = status
-            if approved_by:
-                quote.approved_by = approved_by
-                quote.approved_at = datetime.now(timezone.utc)
-            if comments:
-                quote.comments = comments
-            quote.version += 1
-            self._persist_state()
-            return quote
+        with _inventory_lock:
+            if quote_id in self.quotes:
+                quote = self.quotes[quote_id]
+                if expected_version is not None and quote.version != expected_version:
+                    raise ValueError(f"Quote {quote_id} was updated by another operation.")
+                quote.status = status
+                if approved_by:
+                    quote.approved_by = approved_by
+                    quote.approved_at = datetime.now(timezone.utc)
+                if comments:
+                    quote.comments = comments
+                quote.version += 1
+                self._persist_state()
+                return quote
         return None
 
     def create_shipment(self, rfq_id: str, quote_id: Optional[str], customer_email: str, part_numbers: List[str], quantity: int, public_token: str) -> Shipment:

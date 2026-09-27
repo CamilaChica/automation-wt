@@ -129,6 +129,9 @@ class OperatorReviewQueueTests(unittest.TestCase):
             "quantity": 2,
             "condition_code": "NE",
             "unit_of_measure": "EA",
+            "description": None,
+            "target_price": None,
+            "currency": None,
         }])
         update_status.assert_called_once_with("RFQ-SERVICE-1", "Validating")
         complete.assert_called_once_with("REV-SERVICE-1", status="APPROVED")

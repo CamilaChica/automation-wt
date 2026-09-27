@@ -189,11 +189,17 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
     id TEXT PRIMARY KEY,
     customer_id TEXT REFERENCES customers(id),
     quote_id TEXT REFERENCES customer_quotes(id),
+    rfq_id TEXT,
     po_number TEXT NOT NULL UNIQUE,
+    customer_email TEXT,
     po_date TEXT,
     amount REAL NOT NULL,
+    total_amount REAL,
     currency TEXT NOT NULL DEFAULT 'USD',
     status TEXT NOT NULL,
+    po_document_url TEXT,
+    received_message_id TEXT UNIQUE,
+    attachment_metadata TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -281,6 +287,93 @@ CREATE TABLE IF NOT EXISTS carrier_webhook_events (
     received_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS audit_events (
+    id TEXT PRIMARY KEY,
+    entity_id TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    action TEXT NOT NULL,
+    status TEXT NOT NULL,
+    payload TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rfq_id TEXT NOT NULL,
+    agent_name TEXT NOT NULL,
+    action_type TEXT NOT NULL,
+    message TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'SUCCESS',
+    payload_json TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS raw_emails (
+    id TEXT PRIMARY KEY,
+    mailbox TEXT NOT NULL,
+    provider_message_id TEXT NOT NULL,
+    internet_message_id TEXT,
+    conversation_id TEXT,
+    sender TEXT,
+    subject TEXT,
+    received_at TEXT,
+    body TEXT NOT NULL DEFAULT '',
+    raw_mime BLOB,
+    headers TEXT,
+    attachments TEXT,
+    processing_status TEXT NOT NULL DEFAULT 'received',
+    archived_at TEXT NOT NULL,
+    UNIQUE (mailbox, provider_message_id)
+);
+
+CREATE TABLE IF NOT EXISTS supplier_inventory_imports (
+    id TEXT PRIMARY KEY,
+    mailbox TEXT NOT NULL,
+    source_message_id TEXT NOT NULL,
+    sender TEXT,
+    filename TEXT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    parser TEXT NOT NULL,
+    sheet_name TEXT,
+    header_map TEXT,
+    rows_total INTEGER NOT NULL DEFAULT 0,
+    rows_imported INTEGER NOT NULL DEFAULT 0,
+    rows_rejected INTEGER NOT NULL DEFAULT 0,
+    rejected_rows TEXT,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (source_message_id, content_sha256)
+);
+
+CREATE TABLE IF NOT EXISTS supplier_inventory_rows (
+    id TEXT PRIMARY KEY,
+    import_id TEXT NOT NULL REFERENCES supplier_inventory_imports(id) ON DELETE CASCADE,
+    row_number INTEGER NOT NULL,
+    part_number TEXT,
+    description TEXT,
+    quantity_available INTEGER,
+    condition_code TEXT,
+    unit_price REAL,
+    currency TEXT,
+    lead_time_days INTEGER,
+    certificate_type TEXT,
+    availability_location TEXT,
+    raw_values TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (import_id, row_number)
+);
+
+CREATE TABLE IF NOT EXISTS negotiation_sessions (
+    id TEXT PRIMARY KEY,
+    supplier_email TEXT NOT NULL,
+    part_number TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (supplier_email, part_number)
+);
+
 CREATE INDEX IF NOT EXISTS idx_rfqs_status ON rfqs(status);
 CREATE INDEX IF NOT EXISTS idx_supplier_quotes_rfq ON supplier_quotes(rfq_id);
 CREATE INDEX IF NOT EXISTS idx_customer_quotes_rfq ON customer_quotes(rfq_id);
@@ -292,3 +385,8 @@ CREATE INDEX IF NOT EXISTS idx_operator_review_status ON operator_review_queue(s
 CREATE INDEX IF NOT EXISTS idx_operator_review_entity ON operator_review_queue(entity_id);
 CREATE INDEX IF NOT EXISTS idx_llm_telemetry_task_created ON llm_telemetry(task, created_at);
 CREATE INDEX IF NOT EXISTS idx_llm_telemetry_review ON llm_telemetry(review_queue_id);
+CREATE INDEX IF NOT EXISTS idx_audit_events_entity_created ON audit_events(entity_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_rfq_created ON audit_logs(rfq_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_raw_emails_internet_message_id ON raw_emails(internet_message_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_inventory_imports_created ON supplier_inventory_imports(created_at);
+CREATE INDEX IF NOT EXISTS idx_supplier_inventory_rows_part_number ON supplier_inventory_rows(part_number);

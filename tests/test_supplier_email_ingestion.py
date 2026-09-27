@@ -150,6 +150,7 @@ class TestSupplierEmailIngestion(unittest.TestCase):
             "value": [
                 {
                     "id": "msg-1",
+                    "internetMessageId": "<msg-1@example.com>",
                     "from": {"emailAddress": {"address": "quotes@apexaero.com"}},
                     "subject": "Quote for 060-1234-00",
                     "sentDateTime": "2026-09-18T00:00:00Z",
@@ -158,6 +159,7 @@ class TestSupplierEmailIngestion(unittest.TestCase):
             ]
         }
         mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.content = b"From: quotes@apexaero.com\r\n\r\nQuote"
 
         with patch.dict(
             os.environ,
@@ -175,8 +177,11 @@ class TestSupplierEmailIngestion(unittest.TestCase):
         self.assertEqual(messages[0]["from"], "quotes@apexaero.com")
         self.assertIn("060-1234-00", messages[0]["body"])
         mock_get.assert_called()
-        self.assertIn("$select=id,from,subject,body,receivedDateTime,hasAttachments", mock_get.call_args.args[0])
-        self.assertIn("receivedDateTime ge", mock_get.call_args.args[0])
+        graph_url = mock_get.call_args_list[0].args[0]
+        self.assertIn("$select=id,internetMessageId,conversationId", graph_url)
+        self.assertIn("receivedDateTime ge", graph_url)
+        self.assertEqual(messages[0]["internet_message_id"], "<msg-1@example.com>")
+        self.assertEqual(messages[0]["raw_mime"], b"From: quotes@apexaero.com\r\n\r\nQuote")
 
     def test_loader_extracts_part_data_from_html_supplier_email(self):
         html_email = """

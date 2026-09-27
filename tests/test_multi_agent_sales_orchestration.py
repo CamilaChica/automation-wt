@@ -157,7 +157,11 @@ class TestMultiAgentSalesOrchestration(unittest.TestCase):
             self.assertIsNotNone(intake.data)
             structured = RFQIntakeOutput.model_validate(intake.data)
             self.assertTrue(structured.part_number, case["name"])
-            self.assertGreaterEqual(structured.quantity or 0, 1, case["name"])
+            if "quantity" in structured.missing_fields:
+                self.assertIsNone(structured.quantity, case["name"])
+                self.assertFalse(intake.success, case["name"])
+            else:
+                self.assertGreaterEqual(structured.quantity or 0, 1, case["name"])
             self.assertIn(structured.priority, {"AOG", "Urgent", "Routine"})
             if case.get("minimum_items"):
                 self.assertGreaterEqual(len(intake.data.get("items", [])), case["minimum_items"])

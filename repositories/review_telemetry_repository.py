@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
@@ -11,11 +12,34 @@ from contextlib import contextmanager
 from typing import Any
 from urllib.parse import urlsplit
 
-from models.operational_models import InboundEmailRecord, OperationalRecord, SupplierPartRecord, SupplierRecord
+from models.operational_models import (
+    InboundEmailRecord,
+    OperationalRecord,
+    RawEmailRecord,
+    SupplierInventoryImportRecord,
+    SupplierPartRecord,
+    SupplierRecord,
+)
 from schemas.supplier import SupplierOfferEntry, SupplierRegistryEntry
 from sqlalchemy import create_engine, inspect, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Engine
+
+
+def inbound_dedupe_key(internet_message_id: str | None) -> str | None:
+    """Stable idempotency key for an RFC 5322 Message-ID (hashed to fit the key column)."""
+    normalized = str(internet_message_id or "").strip().strip("<>").strip().lower()
+    if not normalized:
+        return None
+    return "imid:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def raw_email_record_id(mailbox: str, provider_message_id: str) -> str:
+    return "RAW-" + uuid.uuid5(uuid.NAMESPACE_URL, f"{mailbox}:{provider_message_id}").hex[:24].upper()
+
+
+def inventory_import_record_id(source_message_id: str, content_sha256: str) -> str:
+    return "INVIMP-" + uuid.uuid5(uuid.NAMESPACE_URL, f"{source_message_id}:{content_sha256}").hex[:24].upper()
 
 
 def _sync_database_url(database_url: str) -> str:
@@ -64,12 +88,35 @@ class PostgresReviewTelemetryRepository:
             "inbound_message_idempotency", "agent_handoffs", "operator_review_queue",
             "llm_telemetry", "automation_events", "carrier_webhook_events", "operations_state",
             "customer_quotes", "customer_quote_items", "operational_records", "suppliers",
-            "supplier_parts", "outbox_messages", "inbound_emails",
+            "supplier_parts", "supplier_offers", "purchase_orders", "outbox_messages",
+            "inbound_emails", "raw_emails", "audit_logs", "supplier_inventory_imports",
+            "supplier_inventory_rows", "negotiation_sessions", "employee_profiles", "employee_time_events",
         }
         with self._read() as connection:
-            existing = set(inspect(connection).get_table_names())
-        missing = sorted(required - existing)
-        return {"ready": not missing, "missing_tables": missing}
+            inspector = inspect(connection)
+            existing = set(inspector.get_table_names())
+            missing_columns: dict[str, list[str]] = {}
+            required_columns = {
+                "purchase_orders": {"id", "po_number", "customer_email", "total_amount", "status", "quote_id", "rfq_id", "received_message_id", "attachment_metadata"},
+                "communications": {"id", "entity_type", "entity_id", "recipient", "sender", "channel", "subject", "message", "message_type", "status"},
+                "audit_logs": {"id", "rfq_id", "agent_name", "action_type", "message", "status", "payload_json", "created_at"},
+                "outbox_messages": {"id", "deduplication_key", "mailbox", "recipient", "subject", "payload", "status", "retry_count", "available_at"},
+                "raw_emails": {"id", "mailbox", "provider_message_id", "internet_message_id", "raw_mime", "attachments", "processing_status"},
+                "supplier_inventory_imports": {"id", "source_message_id", "content_sha256", "rows_total", "rows_imported", "rows_rejected", "status"},
+                "supplier_inventory_rows": {"id", "import_id", "row_number", "part_number", "quantity_available", "unit_price", "status", "raw_values"},
+                "negotiation_sessions": {"id", "supplier_email", "part_number", "payload", "updated_at"},
+                "employee_profiles": {"user_id", "email", "display_name", "job_title", "is_online"},
+                "employee_time_events": {"id", "user_id", "email", "event_type", "occurred_at"},
+            }
+            for table, columns in required_columns.items():
+                if table not in existing:
+                    continue
+                actual_columns = {column["name"] for column in inspector.get_columns(table)}
+                absent = sorted(columns - actual_columns)
+                if absent:
+                    missing_columns[table] = absent
+        missing_tables = sorted(required - existing)
+        return {"ready": not missing_tables and not missing_columns, "missing_tables": missing_tables, "missing_columns": missing_columns}
 
     def load_operations_state(self) -> dict[str, Any] | None:
         with self._read() as connection:
@@ -159,21 +206,36 @@ class PostgresReviewTelemetryRepository:
                     break
             return True
 
-    def claim_inbound_message(self, message_id: str, mailbox: str) -> bool:
+    def claim_inbound_message(self, message_id: str, mailbox: str, internet_message_id: str | None = None) -> bool:
+        """Claim a provider message id and, when present, its RFC 5322 Message-ID.
+
+        Graph ids change when a message moves between folders; the secondary
+        key stops the same email from being processed twice under a new id.
+        """
+        secondary_key = inbound_dedupe_key(internet_message_id)
         with self._begin() as connection:
-            result = connection.execute(text(
+            claim = text(
                 "INSERT INTO inbound_message_idempotency (message_id, mailbox, processed_at, status) "
                 "VALUES (:message_id, :mailbox, now(), 'processing') "
                 "ON CONFLICT (message_id) DO NOTHING RETURNING message_id"
-            ), {"message_id": message_id, "mailbox": mailbox})
-            return result.scalar_one_or_none() is not None
+            )
+            if connection.execute(claim, {"message_id": message_id, "mailbox": mailbox}).scalar_one_or_none() is None:
+                return False
+            if secondary_key and connection.execute(claim, {"message_id": secondary_key, "mailbox": mailbox}).scalar_one_or_none() is None:
+                connection.execute(text(
+                    "UPDATE inbound_message_idempotency SET status = 'duplicate' WHERE message_id = :message_id"
+                ), {"message_id": message_id})
+                return False
+            return True
 
-    def mark_inbound_message_processed(self, message_id: str) -> None:
+    def mark_inbound_message_processed(self, message_id: str, internet_message_id: str | None = None) -> None:
+        keys = [key for key in (message_id, inbound_dedupe_key(internet_message_id)) if key]
         with self._begin() as connection:
-            connection.execute(text(
-                "UPDATE inbound_message_idempotency SET status = 'processed', processed_at = now() "
-                "WHERE message_id = :message_id"
-            ), {"message_id": message_id})
+            for key in keys:
+                connection.execute(text(
+                    "UPDATE inbound_message_idempotency SET status = 'processed', processed_at = now() "
+                    "WHERE message_id = :message_id"
+                ), {"message_id": key})
 
     def save_inbound_email(self, *, mailbox: str, message_id: str, sender: str, subject: str, body: str, processing_status: str = "processed") -> str:
         email_id = f"EML-{uuid.uuid5(uuid.NAMESPACE_URL, message_id).hex[:16].upper()}"
@@ -188,11 +250,137 @@ class PostgresReviewTelemetryRepository:
             ).returning(InboundEmailRecord.id))
             return str(result.scalar_one())
 
-    def release_inbound_message(self, message_id: str) -> None:
+    def release_inbound_message(self, message_id: str, internet_message_id: str | None = None) -> None:
+        keys = [key for key in (message_id, inbound_dedupe_key(internet_message_id)) if key]
+        with self._begin() as connection:
+            for key in keys:
+                connection.execute(text(
+                    "DELETE FROM inbound_message_idempotency WHERE message_id = :message_id AND status = 'processing'"
+                ), {"message_id": key})
+
+    def save_raw_email(
+        self,
+        *,
+        mailbox: str,
+        provider_message_id: str,
+        internet_message_id: str | None,
+        conversation_id: str | None,
+        sender: str | None,
+        subject: str | None,
+        received_at: Any,
+        body: str,
+        raw_mime: bytes | None,
+        headers: list[dict[str, Any]] | None,
+        attachments: list[dict[str, Any]] | None,
+        processing_status: str = "received",
+    ) -> str:
+        raw_email_id = raw_email_record_id(mailbox, provider_message_id)
+        update_values: dict[str, Any] = {"processing_status": processing_status}
+        if raw_mime is not None:
+            update_values["raw_mime"] = raw_mime
+        with self._begin() as connection:
+            result = connection.execute(insert(RawEmailRecord).values(
+                id=raw_email_id, mailbox=mailbox, provider_message_id=provider_message_id,
+                internet_message_id=internet_message_id, conversation_id=conversation_id,
+                sender=sender, subject=subject, received_at=received_at, body=body or "",
+                raw_mime=raw_mime, headers=headers, attachments=attachments,
+                processing_status=processing_status,
+            ).on_conflict_do_update(
+                constraint="uq_raw_emails_mailbox_provider_message",
+                set_=update_values,
+            ).returning(RawEmailRecord.id))
+            return str(result.scalar_one())
+
+    def record_audit_event(self, *, entity_id: str, actor: str, action: str, status: str, payload: dict[str, Any] | None = None) -> str:
+        audit_id = f"AUD-{uuid.uuid4().hex[:24].upper()}"
         with self._begin() as connection:
             connection.execute(text(
-                "DELETE FROM inbound_message_idempotency WHERE message_id = :message_id AND status = 'processing'"
-            ), {"message_id": message_id})
+                "INSERT INTO audit_events (id, entity_id, actor, action, status, payload, created_at) "
+                "VALUES (:id, :entity_id, :actor, :action, :status, CAST(:payload AS JSON), now())"
+            ), {
+                "id": audit_id, "entity_id": entity_id[:64], "actor": actor[:128],
+                "action": action[:128], "status": status[:32],
+                "payload": json.dumps(payload) if payload is not None else None,
+            })
+        return audit_id
+
+    def insert_audit_log(self, *, rfq_id: str, agent_name: str, action_type: str, message: str, status: str, payload_json: str | None, timestamp: Any) -> dict[str, Any]:
+        with self._begin() as connection:
+            row = connection.execute(text(
+                "INSERT INTO audit_logs (rfq_id, agent_name, action_type, message, status, payload_json, created_at) "
+                "VALUES (:rfq_id, :agent_name, :action_type, :message, :status, :payload_json, :created_at) "
+                "RETURNING id, created_at"
+            ), {
+                "rfq_id": rfq_id, "agent_name": agent_name, "action_type": action_type,
+                "message": message, "status": status, "payload_json": payload_json,
+                "created_at": timestamp,
+            }).mappings().one()
+            return {"id": int(row["id"]), "timestamp": row["created_at"]}
+
+    def list_audit_logs(self, rfq_id: str) -> list[dict[str, Any]]:
+        with self._read() as connection:
+            rows = connection.execute(text(
+                "SELECT id, rfq_id, agent_name, action_type, message, status, payload_json, created_at AS timestamp "
+                "FROM audit_logs WHERE rfq_id = :rfq_id ORDER BY id"
+            ), {"rfq_id": rfq_id}).mappings().all()
+            return [dict(row) for row in rows]
+
+    def inventory_import_exists(self, source_message_id: str, content_sha256: str) -> bool:
+        with self._read() as connection:
+            return connection.execute(text(
+                "SELECT 1 FROM supplier_inventory_imports "
+                "WHERE source_message_id = :source AND content_sha256 = :sha"
+            ), {"source": source_message_id, "sha": content_sha256}).scalar_one_or_none() is not None
+
+    def record_inventory_import(self, **record: Any) -> str:
+        import_id = inventory_import_record_id(record["source_message_id"], record["content_sha256"])
+        with self._begin() as connection:
+            connection.execute(
+                insert(SupplierInventoryImportRecord)
+                .values(id=import_id, **record)
+                .on_conflict_do_nothing(constraint="uq_supplier_inventory_imports_source")
+            )
+        return import_id
+
+    def record_inventory_rows(self, import_id: str, rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            return
+        with self._begin() as connection:
+            connection.execute(text(
+                "INSERT INTO supplier_inventory_rows "
+                "(id, import_id, row_number, part_number, description, quantity_available, condition_code, "
+                "unit_price, currency, lead_time_days, certificate_type, availability_location, raw_values, status, error) "
+                "VALUES (:id, :import_id, :row_number, :part_number, :description, :quantity_available, :condition_code, "
+                ":unit_price, :currency, :lead_time_days, :certificate_type, :availability_location, "
+                "CAST(:raw_values AS JSONB), :status, :error) "
+                "ON CONFLICT (import_id, row_number) DO UPDATE SET "
+                "part_number = EXCLUDED.part_number, description = EXCLUDED.description, "
+                "quantity_available = EXCLUDED.quantity_available, condition_code = EXCLUDED.condition_code, "
+                "unit_price = EXCLUDED.unit_price, currency = EXCLUDED.currency, lead_time_days = EXCLUDED.lead_time_days, "
+                "certificate_type = EXCLUDED.certificate_type, availability_location = EXCLUDED.availability_location, "
+                "raw_values = EXCLUDED.raw_values, status = EXCLUDED.status, error = EXCLUDED.error"
+            ), [{
+                **row, "import_id": import_id,
+                "raw_values": json.dumps(row.get("raw_values") or {}),
+            } for row in rows])
+
+    def record_purchase_order(self, *, po_id: str, po_number: str, customer_email: str, total_amount: float, status: str, quote_id: str, rfq_id: str, received_message_id: str | None, attachment_metadata: list[dict[str, Any]]) -> dict[str, Any]:
+        with self._begin() as connection:
+            inserted = connection.execute(text(
+                "INSERT INTO purchase_orders "
+                "(id, po_number, customer_email, total_amount, status, quote_id, rfq_id, received_message_id, attachment_metadata) "
+                "VALUES (:id, :po_number, :customer_email, :total_amount, :status, :quote_id, :rfq_id, :received_message_id, "
+                "CAST(:attachment_metadata AS JSONB)) ON CONFLICT (po_number) DO NOTHING RETURNING *"
+            ), {
+                "id": po_id, "po_number": po_number, "customer_email": customer_email,
+                "total_amount": total_amount, "status": status, "quote_id": quote_id, "rfq_id": rfq_id,
+                "received_message_id": received_message_id,
+                "attachment_metadata": json.dumps(attachment_metadata),
+            }).mappings().first()
+            row = inserted or connection.execute(text(
+                "SELECT * FROM purchase_orders WHERE po_number = :po_number"
+            ), {"po_number": po_number}).mappings().one()
+            return dict(row)
 
     @contextmanager
     def transaction(self):
@@ -623,6 +811,17 @@ class PostgresReviewTelemetryRepository:
                 "result = :result, error = :error WHERE id = :id"
             ), {"status": status, "attempts": attempts, "result": result, "error": error, "id": event_id})
 
+    def claim_automation_events(self, *, event_type: str, limit: int = 10) -> list[dict[str, Any]]:
+        with self._begin() as connection:
+            rows = connection.execute(text(
+                "WITH candidates AS (SELECT id FROM automation_events WHERE event_type = :type AND status = 'QUEUED' "
+                "AND attempts < max_attempts ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT :limit) "
+                "UPDATE automation_events AS events SET status = 'RUNNING', attempts = events.attempts + 1, execution_time = now() "
+                "FROM candidates WHERE events.id = candidates.id RETURNING events.id, events.attempts, events.max_attempts, "
+                "events.entity_id, events.result"
+            ), {"type": event_type, "limit": min(max(int(limit), 1), 100)}).mappings().all()
+            return [dict(row) for row in rows]
+
     def list_automation_events(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
         clause = "WHERE status = :status" if status else ""
         parameters = {"limit": min(max(int(limit), 1), 500)}
@@ -683,6 +882,24 @@ class PostgresReviewTelemetryRepository:
                 "max_retries": max(1, int(max_retries)),
             }).mappings().one()
             return dict(row)
+
+    def get_negotiation_session(self, supplier_email: str, part_number: str) -> dict[str, Any] | None:
+        with self._read() as connection:
+            payload = connection.execute(text(
+                "SELECT payload FROM negotiation_sessions WHERE supplier_email = :email AND part_number = :part"
+            ), {"email": supplier_email.lower(), "part": part_number.upper()}).scalar_one_or_none()
+            return dict(payload) if payload is not None else None
+
+    def save_negotiation_session(self, *, session_id: str, supplier_email: str, part_number: str, payload: dict[str, Any]) -> None:
+        with self._begin() as connection:
+            connection.execute(text(
+                "INSERT INTO negotiation_sessions (id, supplier_email, part_number, payload, updated_at) "
+                "VALUES (:id, :email, :part, CAST(:payload AS JSONB), now()) "
+                "ON CONFLICT (supplier_email, part_number) DO UPDATE SET payload = EXCLUDED.payload, updated_at = now()"
+            ), {
+                "id": session_id, "email": supplier_email.lower(), "part": part_number.upper(),
+                "payload": json.dumps(payload),
+            })
 
     def claim_outbox_messages(self, *, limit: int = 25) -> list[dict[str, Any]]:
         bounded_limit = min(max(int(limit), 1), 100)

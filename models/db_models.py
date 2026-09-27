@@ -10,7 +10,10 @@ class RFQItem(BaseModel):
     quantity: int = Field(description="Requested quantity")
     uom: str = Field("EA", description="Unit of Measure (EA, KIT, ASSY, etc.)")
     aircraft_type: Optional[str] = Field(None, description="E.g., B737, A320")
-    condition_preference: Optional[str] = Field("NE", description="Condition preference: NE (New), NS (New Surplus), OH (Overhauled), AR (As Removed)")
+    condition_preference: Optional[str] = Field(None, description="Condition preference: NE (New), NS (New Surplus), OH (Overhauled), AR (As Removed)")
+    description: Optional[str] = Field(None, description="Customer-provided line description")
+    target_price: Optional[float] = Field(None, description="Customer target unit price, when stated")
+    currency: Optional[str] = Field(None, description="ISO currency of target_price")
 
 class RFQIntakeOutput(BaseModel):
     """Structured output produced by RFQIntakeAgent from an unstructured RFQ text."""

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Float, Integer, JSON, String, Text, func
+from sqlalchemy import DateTime, Float, Integer, JSON, LargeBinary, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from models.async_models import Base
@@ -37,6 +37,9 @@ class RFQItemRecord(Base):
     part_number: Mapped[str] = mapped_column(String(80), index=True)
     quantity: Mapped[int] = mapped_column(Integer)
     condition_code: Mapped[str | None] = mapped_column(String(8))
+    description: Mapped[str | None] = mapped_column(Text)
+    target_price: Mapped[float | None] = mapped_column(Float)
+    currency: Mapped[str | None] = mapped_column(String(3))
     details: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
 
@@ -148,6 +151,45 @@ class InboundEmailRecord(Base):
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     processing_status: Mapped[str] = mapped_column(String(32), default="received")
     extraction_error: Mapped[str | None] = mapped_column(Text)
+
+
+class RawEmailRecord(Base):
+    __tablename__ = "raw_emails"
+    __table_args__ = (UniqueConstraint("mailbox", "provider_message_id", name="uq_raw_emails_mailbox_provider_message"),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    mailbox: Mapped[str] = mapped_column(String(128))
+    provider_message_id: Mapped[str] = mapped_column(String(512))
+    internet_message_id: Mapped[str | None] = mapped_column(String(998), index=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(512))
+    sender: Mapped[str | None] = mapped_column(String(320))
+    subject: Mapped[str | None] = mapped_column(Text)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    body: Mapped[str] = mapped_column(Text, default="")
+    raw_mime: Mapped[bytes | None] = mapped_column(LargeBinary)
+    headers: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
+    attachments: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
+    processing_status: Mapped[str] = mapped_column(String(32), default="received")
+    archived_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SupplierInventoryImportRecord(Base):
+    __tablename__ = "supplier_inventory_imports"
+    __table_args__ = (UniqueConstraint("source_message_id", "content_sha256", name="uq_supplier_inventory_imports_source"),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    mailbox: Mapped[str] = mapped_column(String(128))
+    source_message_id: Mapped[str] = mapped_column(String(512))
+    sender: Mapped[str | None] = mapped_column(String(320))
+    filename: Mapped[str] = mapped_column(Text)
+    content_sha256: Mapped[str] = mapped_column(String(64))
+    parser: Mapped[str] = mapped_column(String(32))
+    sheet_name: Mapped[str | None] = mapped_column(Text)
+    header_map: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    rows_total: Mapped[int] = mapped_column(Integer, default=0)
+    rows_imported: Mapped[int] = mapped_column(Integer, default=0)
+    rows_rejected: Mapped[int] = mapped_column(Integer, default=0)
+    rejected_rows: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AgentHandoffRecord(Base):

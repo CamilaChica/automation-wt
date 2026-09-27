@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from services.db_service import db_service
+from services.customer_question_service import CustomerQuestionService
+from services.customer_chase_schedule import chase_days, chase_task_keys
 from services.email_context import safe_display_text
 from services.email_templates import (
     CustomerFollowupData,
@@ -27,6 +29,8 @@ from services.email_templates import (
 from services.mailbox_service import MAILBOXES, send_message
 from services.operations_store import operations_store
 from services.supplier_database import supplier_db
+
+customer_question_service = CustomerQuestionService()
 
 
 class PartItem(BaseModel):
@@ -506,19 +510,13 @@ class CommunicationService:
         if not quote:
             raise ValueError(f"Quote {quote_id} was not found for customer response.")
         items = db_service.get_quote_items(quote_id)
-        requested = request_text.strip() or "your requested supporting information"
-        item_lines = "\n".join(
-            f"- {item.part_number}: certification {item.certificate_type or 'available upon request'}, "
-            f"trace status {item.compliance_status}, lead time {item.lead_time_days if item.lead_time_days is not None else 'to be confirmed'} days"
-            for item in items
-        )
+        grounded_answer = customer_question_service.answer_from_quote(request_text, quote, items)
+        if not grounded_answer:
+            raise ValueError("The customer question could not be answered from approved quote data.")
         body = (
             f"Dear {safe_display_text(customer_name)},\n\n"
-            f"Thank you for your follow-up regarding quotation {quote_id}. We received your request for: {requested}\n\n"
-            "The currently approved information is:\n"
-            f"{item_lines or '- Supporting quote details are available from our sales team.'}\n\n"
-            "We will provide any additional certificate copies, images, or shipping dimensions that are available in the same email thread. "
-            "Please let us know if you need a specific document or delivery detail.\n\n"
+            f"Thank you for your question regarding quotation {quote_id}. The approved quote records:\n\n"
+            f"{grounded_answer}\n\n"
             "Kind regards,\nWinged Tycoons Aviation Team"
         )
         return self._send(
@@ -537,17 +535,11 @@ class CommunicationService:
         reply_to: Optional[str] = None,
         customer_timezone: str = "UTC",
     ) -> Dict[str, Any]:
-        delay_minutes = int(os.getenv("CUSTOMER_FOLLOWUP_DELAY_MINUTES", "30"))
         try:
             local_zone = timezone.utc if customer_timezone.upper() == "UTC" else ZoneInfo(customer_timezone)
         except Exception as exc:
             raise ValueError(f"Unknown customer timezone: {customer_timezone}") from exc
         local_now = datetime.now(timezone.utc).astimezone(local_zone)
-        due = local_now + timedelta(minutes=delay_minutes)
-        if due.weekday() >= 5 or due.hour < 8 or due.hour >= 18:
-            due += timedelta(days=(7 - due.weekday()) if due.weekday() >= 5 else 1)
-            due = due.replace(hour=9, minute=0, second=0, microsecond=0)
-        due_at = due.astimezone(timezone.utc).isoformat()
         quote = db_service.get_quote(quote_id)
         quote_items = db_service.get_quote_items(quote_id) if quote else []
         part_number = quote_items[0].part_number if quote_items else "the quoted part"
@@ -557,16 +549,34 @@ class CommunicationService:
             part_number=part_number,
             quote_number=quote_id,
         ))
-        return self._schedule_communication_task(
-            task_key=f"customer-followup:{quote_id}",
-            task_type="customer_followup",
-            mailbox="sales",
-            recipient=recipient,
-            subject=template.subject,
-            body=template.body,
-            due_at=due_at,
-            reply_to=reply_to,
-        )
+        scheduled = []
+        for index, days in enumerate(chase_days(), start=1):
+            due = local_now + timedelta(days=days)
+            if due.weekday() >= 5 or due.hour < 8 or due.hour >= 18:
+                due += timedelta(days=(7 - due.weekday()) if due.weekday() >= 5 else 1)
+                due = due.replace(hour=9, minute=0, second=0, microsecond=0)
+            scheduled.append(self._schedule_communication_task(
+                task_key=chase_task_keys(quote_id)[index - 1],
+                task_type="customer_followup",
+                mailbox="sales",
+                recipient=recipient,
+                subject=template.subject,
+                body=template.body,
+                due_at=due.astimezone(timezone.utc).isoformat(),
+                reply_to=reply_to,
+            ))
+        return scheduled[0]
+
+    def cancel_customer_followups(self, quote_id: str) -> None:
+        for task_key in chase_task_keys(quote_id):
+            if operations_store.storage_engine == "postgresql":
+                operations_store.cancel_communication_task(task_key)
+            else:
+                supplier_db.cancel_communication_task(task_key)
+        if operations_store.storage_engine == "postgresql":
+            operations_store.cancel_communication_task(f"customer-followup:{quote_id}")
+        else:
+            supplier_db.cancel_communication_task(f"customer-followup:{quote_id}")
 
     def schedule_supplier_discount_request(
         self,
@@ -620,6 +630,14 @@ class CommunicationService:
             communication_task_id=task.get("id"),
         )
         return result
+
+    def send_manual_message(self, *, mailbox: str, recipient: str, subject: str, body: str, reply_to: str | None = None) -> Dict[str, Any]:
+        if mailbox not in MAILBOXES:
+            raise ValueError("Unknown outbound mailbox.")
+        return self._send(
+            mailbox, recipient, subject, body, reply_to=reply_to,
+            entity_id=f"manual:{mailbox}",
+        )
 
     def _send(
         self,
@@ -709,8 +727,12 @@ class CommunicationService:
                 )
             except Exception as exc:
                 response = getattr(exc, "response", None)
-                status_code = getattr(response, "status_code", None)
-                retryable = status_code == 429
+                status_code = getattr(response, "status_code", None) or getattr(exc, "status_code", None) or getattr(exc, "smtp_code", None)
+                try:
+                    status_code = int(status_code) if status_code is not None else None
+                except (TypeError, ValueError):
+                    status_code = None
+                retryable = status_code == 429 or bool(status_code and 500 <= status_code < 600)
                 delivery_state = operations_store.fail_outbox_message(
                     message["id"], f"{type(exc).__name__}: {exc}", retryable=retryable
                 )
@@ -722,7 +744,7 @@ class CommunicationService:
                         rfq = db_service.get_rfq(quote.rfq_id)
                         if rfq and rfq.status == "Quote_Dispatch_Pending":
                             db_service.update_rfq_status(rfq.id, "Pending_Internal_Review")
-                        operations_store.cancel_communication_task(f"customer-followup:{quote.id}")
+                        self.cancel_customer_followups(quote.id)
                 failed += 1
                 continue
 

@@ -4,6 +4,29 @@ from enum import StrEnum
 
 
 class WorkflowState(StrEnum):
+    INTAKE_LEGACY = "Intake"
+    VALIDATING_LEGACY = "Validating"
+    INVENTORY_LOOKUP_LEGACY = "Inventory_Lookup"
+    SUPPLIER_SOURCING_LEGACY = "Supplier_Sourcing"
+    QUOTE_GENERATION_LEGACY = "Quote_Generation"
+    PENDING_APPROVAL_LEGACY = "Pending_Approval"
+    PENDING_APPROVAL_LOW_MARGIN_LEGACY = "Pending_Approval_Low_Margin"
+    QUOTE_SENT_LEGACY = "Quote_Sent"
+    QUOTE_DISPATCH_PENDING_LEGACY = "Quote_Dispatch_Pending"
+    QUOTE_DISPATCH_FAILED_LEGACY = "Quote_Dispatch_Failed"
+    PENDING_PO_REVIEW_LEGACY = "Pending_PO_Review"
+    PURCHASE_ORDER_RECEIVED_LEGACY = "Purchase_Order_Received"
+    INTAKE_FAILED = "Intake_Failed"
+    INTERNAL_REVIEW_PENDING = "Pending_Internal_Review"
+    COMPLIANCE_REVIEW_BLOCKED = "Blocked_Compliance_Review"
+    VERIFICATION_HALTED = "Verification_Halted"
+    SUPPLIER_SOURCING_FAILED = "Sourcing_Failed"
+    COMPLIANCE_CHECK = "Compliance_Check"
+    COMPLIANCE_BLOCKED = "Compliance_Blocked"
+    COMPLIANCE_WARNING = "Compliance_Warning"
+    PRICING = "Pricing"
+    REJECTED = "Rejected"
+    PO_VALIDATED_LEGACY = "PO_Validated"
     NEW_RFQ = "NEW_RFQ"
     RFQ_VALIDATED = "RFQ_VALIDATED"
     SEARCHING_INVENTORY = "SEARCHING_INVENTORY"
@@ -62,16 +85,21 @@ class InvalidWorkflowTransition(ValueError):
 
 
 def canonical_state(status: str) -> str:
+    if status not in {state.value for state in WorkflowState}:
+        raise InvalidWorkflowTransition(f"Unknown RFQ workflow state '{status}'.")
     return LEGACY_TO_CANONICAL.get(status, status)
 
 
 def validate_transition(current: str, requested: str) -> None:
-    if current == requested:
+    current_state = canonical_state(current)
+    requested_state = canonical_state(requested)
+    if current_state == requested_state:
         return
-    allowed = LEGACY_TRANSITIONS.get(current)
-    if allowed is None:
-        return
-    if requested not in allowed:
+    allowed = set()
+    for legacy_current, targets in LEGACY_TRANSITIONS.items():
+        if canonical_state(legacy_current) == current_state:
+            allowed.update(canonical_state(target) for target in targets)
+    if requested_state not in allowed:
         raise InvalidWorkflowTransition(
             f"Invalid RFQ transition from '{current}' to '{requested}'."
         )

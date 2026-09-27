@@ -235,6 +235,7 @@ class SupplierEmailIngestionService:
             return {
                 "success": True,
                 "supplier_name": supplier_name,
+                "supplier_email": supplier_email,
                 "part_number": part_number,
                 "quantity_available": quantity,
                 "unit_cost": float(unit_cost),

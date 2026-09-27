@@ -2,18 +2,21 @@
 
 import logging
 import os
-import re
 import json
 import time
 import asyncio
+import uuid
+from contextlib import nullcontext
 from datetime import datetime, timezone
+from typing import Any
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from services.mailbox_service import fetch_inbox_messages
-from services.supplier_email_loader import SupplierEmailLoader
+from services.inbound_email_archive import archive_inbound_message
+from services.inbound_message_classifier import classify_inbound_customer_message
 from services.communication_service import communication_service
 from services.supplier_database import supplier_db
 from services.db_service import db_service
@@ -27,25 +30,81 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("winged-tycoons-email-worker")
 
 
+def _review_inbound_customer_message(message: dict[str, Any], reason: str, rfq_id: str | None = None) -> None:
+    message_id = str(message.get("internet_message_id") or message.get("message_id") or "unknown")
+    operations_store.enqueue_operator_review(
+        idempotency_key=f"customer-email-review:{message_id}",
+        task="customer_email_classification",
+        source_text=f"Subject: {message.get('subject', '')}\n\n{message.get('body', '')}",
+        extraction={"category": "manual_review", "rfq_id": rfq_id},
+        reason=reason,
+        prompt_version="customer-email-routing-v1",
+        hold_flags=[reason],
+        entity_id=rfq_id or message_id,
+    )
+
+
+def _record_email_purchase_order(message: dict[str, Any], rfq: Any, quote: Any, po_number: str) -> dict[str, Any]:
+    message_id = str(message.get("internet_message_id") or message.get("message_id") or "")
+    if rfq.status in {"Pending_PO_Review", "Purchase_Order_Received"}:
+        _review_inbound_customer_message(message, "additional_or_duplicate_po_requires_review", rfq.id)
+        return {"status": "Pending_PO_Review", "duplicate_or_additional": True}
+    quote_items = db_service.get_quote_items(quote.id)
+    internal_items = []
+    for item in quote_items:
+        offers = (
+            operations_store.get_supplier_offers(item.part_number, item.quantity)
+            if operations_store.storage_engine == "postgresql"
+            else supplier_db.find_supplier_offers(item.part_number, quantity_needed=item.quantity)
+        )
+        selected = next(
+            (offer for offer in offers if abs(float(offer.get("unit_cost") or 0) - float(item.unit_cost or 0)) < 0.01),
+            offers[0] if offers else None,
+        )
+        internal_items.append({
+            "part_number": item.part_number,
+            "quantity": item.quantity,
+            "unit_price": item.unit_price,
+            "supplier_name": selected.get("supplier_name") if selected else "Internal inventory",
+            "supplier_email": selected.get("supplier_email") if selected else "",
+            "supplier_unit_cost": float(selected.get("unit_cost") or item.unit_cost or 0) if selected else float(item.unit_cost or 0),
+        })
+    attachments = [
+        {"filename": str(item.get("filename") or "attachment"), "content_type": str(item.get("content_type") or ""), "size": len(item.get("content") or b"")}
+        for item in message.get("attachments") or []
+    ]
+    transaction = operations_store.transaction() if operations_store.storage_engine == "postgresql" else nullcontext()
+    with transaction:
+        record = operations_store.record_purchase_order(
+            po_id=f"PO-{uuid.uuid4().hex[:20].upper()}",
+            po_number=po_number,
+            customer_email=rfq.customer_email,
+            total_amount=float(quote.total_amount or 0),
+            status="Pending_PO_Review",
+            quote_id=quote.id,
+            rfq_id=rfq.id,
+            received_message_id=message_id or None,
+            attachment_metadata=attachments,
+        )
+        if record.get("rfq_id") and record.get("rfq_id") != rfq.id:
+            _review_inbound_customer_message(message, "po_number_conflicts_with_another_rfq", rfq.id)
+            return {"status": "Pending_PO_Review", "conflict": True}
+        orchestration_service.mark_purchase_order_received(rfq.id, po_number, [item["filename"] for item in attachments])
+        notification = communication_service.notify_purchase_order(
+            recipient=os.getenv("CAMILA_NOTIFICATION_EMAIL", os.getenv("PURCHASE_ORDER_NOTIFICATION_EMAIL", "camila@wingedtycoons.com")),
+            po_number=po_number,
+            customer_name=rfq.customer_name,
+            customer_email=rfq.customer_email,
+            quote_id=quote.id,
+            items=internal_items,
+            review_url=os.getenv("SALES_DASHBOARD_URL") or os.getenv("PUBLIC_APP_URL", "http://localhost:3000"),
+        )
+    return {"status": "Pending_PO_Review", "po_number": po_number, "quote_id": quote.id, "notification": notification}
+
+
 def _mailboxes_to_poll() -> list[str]:
     """The email worker owns customer RFQs; supplier mail belongs to ingestion worker."""
     return ["sales"]
-
-
-def _missing_supplier_fields(email_text: str, result: dict) -> list[str]:
-    """Identify fields that cannot be safely inferred from a supplier reply."""
-    missing = []
-    if not re.search(r"\$\s*[0-9]|(?:price|cost)\s*[:=]?\s*[0-9]", email_text, re.IGNORECASE):
-        missing.append("unit price and currency")
-    if not re.search(r"(?:qty|quantity|available|in stock|each|pcs?)\b", email_text, re.IGNORECASE):
-        missing.append("quantity available")
-    if not re.search(r"(?:FAA\s*(?:Form\s*)?8130[-\s]?3|EASA\s*Form\s*1|certificate|release tag|CoC)", email_text, re.IGNORECASE):
-        missing.append("release certificate and trace documentation")
-    if not re.search(r"(?:lead\s*time|ship\s*in|delivery|ready to ship|days?)", email_text, re.IGNORECASE):
-        missing.append("lead time or estimated ship date")
-    if not re.search(r"(?:valid until|valid for|expires|expiration)", email_text, re.IGNORECASE):
-        missing.append("quote validity or expiration date")
-    return missing
 
 
 async def _ingest_sales_message(message: dict[str, str]) -> bool:
@@ -62,11 +121,6 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
     if not body and not attachments:
         return True
     sender_email = sender.lower()
-    detail_request = re.search(
-        r"\b(certificate|certification|8130|easa|image|photo|shipping dimensions|dimensions|additional details|more information)\b",
-        f"{message.get('subject', '')} {body}",
-        re.IGNORECASE,
-    )
     existing = next(
         (
             candidate for candidate in reversed(db_service.list_rfqs())
@@ -75,9 +129,20 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
         ),
         None,
     )
-    if existing and detail_request:
-        quote = db_service.get_quote_by_rfq(existing.id)
-        if quote:
+    quote = db_service.get_quote_by_rfq(existing.id) if existing else None
+    if quote:
+        communication_service.cancel_customer_followups(quote.id)
+    classification = classify_inbound_customer_message(message, has_related_quote=bool(quote))
+    if classification["category"] == "purchase_order":
+        if not existing or not quote:
+            _review_inbound_customer_message(message, "email_po_could_not_be_linked_to_an_active_quote")
+            return True
+        po_number = classification["po_number"] or f"PO-EMAIL-{uuid.uuid5(uuid.NAMESPACE_URL, str(message.get('internet_message_id') or message.get('message_id'))).hex[:12].upper()}"
+        _record_email_purchase_order(message, existing, quote, str(po_number))
+        logger.info("Email PO %s routed for review against RFQ %s", po_number, existing.id)
+        return True
+    if classification["category"] == "client_question":
+        try:
             response = communication_service.send_customer_information_response(
                 recipient=sender,
                 customer_name=existing.customer_name,
@@ -89,12 +154,16 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
                 existing.id,
                 "CustomerCommunicationAgent",
                 "customer_detail_response",
-                "Sent an immediate threaded response to a customer quote-detail request.",
+                "Sent a customer response using only facts from the approved quote.",
                 "SUCCESS",
-                json.dumps({"communication_id": response.get("communication_id"), "request": body[:500]}),
+                json.dumps({"communication_id": response.get("communication_id")} ),
             )
-            logger.info("Customer detail reply %s handled for RFQ %s", message.get("message_id", "unknown"), existing.id)
-            return True
+        except Exception as exc:
+            _review_inbound_customer_message(message, f"customer_question_needs_review:{type(exc).__name__}", existing.id)
+        return True
+    if classification["category"] == "other":
+        _review_inbound_customer_message(message, "inbound_message_not_identified_as_an_rfq", existing.id if existing else None)
+        return True
     rfq = db_service.create_rfq(
         customer_name=sender.split("@", 1)[0].replace(".", " ").title(),
         customer_email=sender,
@@ -120,7 +189,6 @@ def run() -> None:
     fetch_limit = int(os.getenv("MAILBOX_FETCH_LIMIT", "100"))
     backup_interval = int(os.getenv("SQLITE_BACKUP_INTERVAL_SECONDS", "86400"))
     last_backup_at = 0.0
-    loader = SupplierEmailLoader()
     while True:
         now = time.time()
         if now - last_backup_at >= backup_interval:
@@ -130,14 +198,6 @@ def run() -> None:
                 logger.info("SQLite backup completed at %s", datetime.now(timezone.utc).isoformat())
             except Exception:
                 logger.exception("SQLite backup failed")
-
-        if operations_store.storage_engine == "postgresql":
-            try:
-                outbox_result = communication_service.dispatch_outbox_once(limit=25)
-                if outbox_result["sent"] or outbox_result["failed"]:
-                    logger.info("Outbox dispatch sent=%s failed=%s", outbox_result["sent"], outbox_result["failed"])
-            except Exception:
-                logger.exception("Transactional outbox dispatch failed")
 
         due_tasks = (
             operations_store.list_due_communication_tasks()
@@ -170,102 +230,46 @@ def run() -> None:
                 logger.info("Mailbox %s: read %d message bodies", mailbox, len(messages))
                 for message in messages:
                     message_id = str(message.get("message_id") or "").strip()
+                    internet_message_id = str(message.get("internet_message_id") or "").strip() or None
                     postgres_mode = operations_store.storage_engine == "postgresql"
-                    if message_id and not postgres_mode and supplier_db.is_email_processed(mailbox, message_id):
+                    body = (message.get("body") or "").strip()
+                    if not body and not message.get("attachments"):
+                        continue
+                    if message_id and not postgres_mode and not operations_store.claim_inbound_message(message_id, mailbox, internet_message_id):
                         logger.info(
-                            "Mailbox %s skipped already processed message %s from=%s subject=%s",
+                            "Mailbox %s skipped duplicate message %s internet_message_id=%s from=%s subject=%s",
                             mailbox,
                             message_id,
+                            internet_message_id or "none",
                             message.get("from", ""),
                             message.get("subject", ""),
                         )
                         continue
-                    body = (message.get("body") or "").strip()
-                    if not body and not message.get("attachments"):
-                        continue
-                    email_text = (
-                        f"From: {message.get('from', '')}\n"
-                        f"Subject: {message.get('subject', '')}\n\n"
-                        f"{body}"
-                    )
-                    if mailbox == "sales":
-                        if postgres_mode and message_id:
-                            with operations_store.transaction():
-                                if not operations_store.claim_inbound_message(message_id, mailbox):
-                                    logger.info("Mailbox %s skipped PostgreSQL-claimed message %s", mailbox, message_id)
-                                    continue
-                                processed = asyncio.run(_ingest_sales_message(message))
-                                if processed:
-                                    operations_store.mark_inbound_message_processed(message_id)
-                                else:
-                                    operations_store.release_inbound_message(message_id)
-                        else:
-                            processed = asyncio.run(_ingest_sales_message(message))
-                        if message_id and processed and not postgres_mode:
-                            supplier_db.save_email(mailbox, message_id, message.get("from", ""), message.get("subject", ""), body)
-                        continue
                     if postgres_mode and message_id:
                         with operations_store.transaction():
-                            if not operations_store.claim_inbound_message(message_id, mailbox):
+                            if not operations_store.claim_inbound_message(message_id, mailbox, internet_message_id):
                                 logger.info("Mailbox %s skipped PostgreSQL-claimed message %s", mailbox, message_id)
                                 continue
-                            result = loader.load_raw_email_text(email_text, mailbox=mailbox, message_id=message_id, attachments=message.get("attachments"))
-                            if (
-                                result.get("success")
-                                or result.get("status") == "Pending_Human_Review"
-                                or "No part number detected" in str(result.get("error", ""))
-                            ):
-                                operations_store.mark_inbound_message_processed(message_id)
+                            archive_inbound_message(message, mailbox)
+                            processed = asyncio.run(_ingest_sales_message(message))
+                            if processed:
+                                operations_store.mark_inbound_message_processed(message_id, internet_message_id)
                             else:
-                                operations_store.release_inbound_message(message_id)
+                                operations_store.release_inbound_message(message_id, internet_message_id)
                     else:
-                        result = loader.load_raw_email_text(email_text, mailbox=mailbox, message_id=message_id or None, attachments=message.get("attachments"))
-                    if (
-                        not result.get("success")
-                        and "No part number detected" in str(result.get("error"))
-                        and any(
-                            str(attachment.get("content_type", "")).lower() == "application/pdf"
-                            or str(attachment.get("filename", "")).lower().endswith(".pdf")
-                            for attachment in message.get("attachments") or []
-                        )
-                        and "@" in str(message.get("from") or "")
-                    ):
-                        clarification = communication_service.request_supplier_body_quote(
-                            recipient=str(message["from"]),
-                            part_reference=str(message.get("subject") or "supplier quotation"),
-                            reply_to=message_id or None,
-                        )
-                        if message_id and not postgres_mode:
+                        try:
+                            archive_inbound_message(message, mailbox)
+                            processed = asyncio.run(_ingest_sales_message(message))
+                            if message_id and processed:
+                                operations_store.mark_inbound_message_processed(message_id, internet_message_id)
+                            elif message_id:
+                                operations_store.release_inbound_message(message_id, internet_message_id)
+                        except Exception:
+                            if message_id:
+                                operations_store.release_inbound_message(message_id, internet_message_id)
+                            raise
+                        if message_id and processed:
                             supplier_db.save_email(mailbox, message_id, message.get("from", ""), message.get("subject", ""), body)
-                        result = {**result, "status": "Unreadable_PDF_Clarification_Sent", "clarification": clarification}
-                    logger.info("Mailbox %s processed message %s -> %s", mailbox, message_id, result)
-                    if result.get("success") and mailbox == "purchasing":
-                        sender = message.get("from", "")
-                        if result.get("unit_cost", 0) and "@" in sender:
-                            discount_task = communication_service.schedule_supplier_discount_request(
-                                recipient=sender,
-                                supplier_name=result["supplier_name"],
-                                part_number=result["part_number"],
-                                unit_cost=float(result["unit_cost"]),
-                                source_email_id=result["source_email_id"],
-                                reply_to=message_id,
-                                quantity=int(result.get("quantity_available") or 1),
-                            )
-                            logger.info("Scheduled supplier discount request -> %s", discount_task)
-                        missing_fields = _missing_supplier_fields(email_text, result)
-                        if missing_fields and "@" in sender:
-                            clarification = communication_service.request_missing_supplier_fields(
-                                recipient=sender,
-                                part_number=result["part_number"],
-                                missing_fields=missing_fields,
-                                reply_to=message_id,
-                            )
-                            logger.info(
-                                "Requested missing supplier fields for %s in thread %s -> %s",
-                                result["part_number"],
-                                message_id,
-                                clarification,
-                            )
             except Exception:
                 logger.exception("Mailbox poll failed for %s", mailbox)
         time.sleep(interval)

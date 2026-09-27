@@ -1,10 +1,13 @@
 import unittest
 import asyncio
+from unittest.mock import patch
 from services.db_service import db_service
 from services.orchestration_service import orchestration_service
 
 class TestRFQQuoteWorkflow(unittest.TestCase):
     def setUp(self):
+        self.email_sending = patch.dict("os.environ", {"EMAIL_SEND_ENABLED": "false"})
+        self.email_sending.start()
         # Reset mock database for clean test isolation
         db_service.rfqs.clear()
         db_service.rfq_items.clear()
@@ -12,6 +15,9 @@ class TestRFQQuoteWorkflow(unittest.TestCase):
         db_service.quote_items.clear()
         db_service.audit_logs.clear()
         db_service.seed_mock_data()
+
+    def tearDown(self):
+        self.email_sending.stop()
 
     def test_scenario_a_clean_flow(self):
         """

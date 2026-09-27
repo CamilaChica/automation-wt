@@ -37,6 +37,15 @@ def _lead_time_days(value: Any) -> Optional[int]:
     return int(match.group()) if match else None
 
 
+def _review_price(value: Any) -> Optional[float]:
+    normalized = re.sub(r"[^0-9.]", "", str(value or ""))
+    try:
+        price = float(normalized)
+    except ValueError:
+        return None
+    return price if price > 0 else None
+
+
 def _is_partsbase_rfq(rfq: Any) -> bool:
     source = f"{getattr(rfq, 'customer_email', '')} {getattr(rfq, 'raw_text', '')}".lower()
     return "partsbase.com" in source
@@ -302,6 +311,9 @@ class OrchestrationService:
                     "quantity": int(item.quantity.value or "0"),
                     "condition_code": item.condition_code.value,
                     "unit_of_measure": item.unit_of_measure.value,
+                    "description": getattr(item, "description", None) or None,
+                    "target_price": _review_price(item.target_price.value),
+                    "currency": (item.currency.value or "").strip().upper() or None,
                 } for item in extraction.items])
                 db_service.update_rfq_status(rfq.id, "Validating")
                 db_service.add_audit_log(
@@ -403,14 +415,18 @@ class OrchestrationService:
                     )
                     for item in intake_data.get("items", []):
                         requested_part = item.get("requested_part_number")
-                        if requested_part:
+                        requested_quantity = item.get("quantity")
+                        if requested_part and isinstance(requested_quantity, int) and requested_quantity > 0:
                             db_service.add_rfq_item(
                                 rfq_id=rfq_id,
                                 requested_part=requested_part,
-                                qty=item.get("quantity", 1),
+                                qty=requested_quantity,
                                 uom=item.get("uom", "EA"),
                                 aircraft=item.get("aircraft_type"),
                                 condition=item.get("condition_preference", "NE"),
+                                description=item.get("description"),
+                                target_price=item.get("target_price"),
+                                currency=item.get("currency"),
                             )
                     db_service.update_rfq_status(rfq_id, "Pending_Internal_Review")
                     db_service.add_audit_log(
@@ -448,7 +464,10 @@ class OrchestrationService:
                     qty=item["quantity"],
                     uom=item.get("uom", "EA"),
                     aircraft=item.get("aircraft_type"),
-                    condition=item.get("condition_preference", "NE")
+                    condition=item.get("condition_preference", "NE"),
+                    description=item.get("description"),
+                    target_price=item.get("target_price"),
+                    currency=item.get("currency"),
                 )
             
             # Log success and update status
@@ -934,6 +953,7 @@ class OrchestrationService:
         operator_name: str,
         overrides: Optional[List[Dict[str, Any]]] = None,
         comments: Optional[str] = None,
+        expected_version: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Processes human approval. Overrides prices if supplied, recalculates totals,
@@ -942,6 +962,11 @@ class OrchestrationService:
         quote = db_service.get_quote(quote_id)
         if not quote:
             return {"error": f"Quote {quote_id} not found."}
+
+        if quote.status in {"Approved", "Pending_Dispatch", "Dispatch_Pending", "Sent"}:
+            return {"error": f"Quote {quote_id} has already been approved or dispatched."}
+
+        expected_version = quote.version if expected_version is None else expected_version
             
         rfq_id = quote.rfq_id
 
@@ -970,6 +995,7 @@ class OrchestrationService:
             quote_id,
             "Approved" if operations_store.storage_engine == "postgresql" else "Pending_Dispatch",
             approved_by=operator_name,
+            expected_version=expected_version,
         )
         current_rfq = db_service.get_rfq(rfq_id)
         if (

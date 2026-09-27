@@ -52,7 +52,7 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
                 "attachments": [{
                     "filename": "inventory.csv",
                     "content_type": "text/csv",
-                    "content": b"Part Number,Quantity,Condition\n060-1234-00,12,NE",
+                    "content": b"Part Number,Quantity,Condition,Unit Price,Lead Time,Certificate\n060-1234-00,12,NE,1100,3 days,FAA 8130-3",
                 }],
             }],
             loader=loader,
@@ -60,9 +60,9 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
         results = worker.poll_once(limit=1)
 
         self.assertTrue(results[0]["success"])
-        self.assertIn("Subject: Quote 060-1234-00", loader.email_text)
-        self.assertIn("Attachment inventory.csv:", loader.email_text)
-        self.assertIn("060-1234-00,12,NE", loader.email_text)
+        self.assertEqual(results[0]["result"]["status"], "Inventory_Table_Imported")
+        self.assertEqual(results[0]["result"]["imports"][0]["rows_imported"], 1)
+        self.assertEqual(loader.email_text, "")
 
     def test_inventory_worker_claim_and_business_processing_share_transaction(self):
         events = []
@@ -78,12 +78,15 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
                 finally:
                     events.append("commit")
 
-            def claim_inbound_message(self, message_id, mailbox):
+            def claim_inbound_message(self, message_id, mailbox, internet_message_id=None):
                 events.append(("claim", message_id, mailbox))
                 return True
 
-            def mark_inbound_message_processed(self, message_id):
+            def mark_inbound_message_processed(self, message_id, internet_message_id=None):
                 events.append(("processed", message_id))
+
+            def release_inbound_message(self, message_id, internet_message_id=None):
+                events.append(("released", message_id))
 
         class RecordingLoader(CapturingLoader):
             def load_raw_email_text(self, email_text, **kwargs):
@@ -106,6 +109,7 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
             patch("services.inventory_ingestion_worker.operations_store", SharedStoreStub()),
             patch("services.inventory_ingestion_worker.supplier_db.is_email_processed", return_value=False),
             patch("services.inventory_ingestion_worker.communication_service.schedule_supplier_discount_request"),
+            patch.object(worker.negotiation_service, "record_supplier_quote", return_value={"status": "BELOW_THRESHOLD"}),
         ):
             result = worker.process_message(message)
 
