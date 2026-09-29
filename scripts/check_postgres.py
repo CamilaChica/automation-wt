@@ -5,16 +5,28 @@ import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from services.database_safety import resolve_database_url, validate_development_database_target
+
+
+LOCAL_ENV_FILE = Path(__file__).resolve().parents[1] / ".env.local"
+
 
 async def main() -> int:
-    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-    database_url = os.getenv("DATABASE_URL", "").strip()
+    database_url = resolve_database_url(LOCAL_ENV_FILE)
     if not database_url:
-        print("DATABASE_URL is not set. Configure it in the project .env file.", file=sys.stderr)
+        print("DATABASE_URL was not found in the process environment or .env.local.", file=sys.stderr)
+        return 1
+    try:
+        validate_development_database_target(database_url, "development")
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
 
     if database_url.startswith("postgresql://"):

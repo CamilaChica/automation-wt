@@ -17,12 +17,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
 from sqlalchemy import MetaData, Table, create_engine, inspect, select, text
 from sqlalchemy.dialects.postgresql import insert
 
 ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(ROOT / ".env")
 BACKUP_ROOT = Path(os.getenv("SQLITE_BACKUP_DIR", str(ROOT / "backups")))
 FILES = {
     "operations": "operations.db",

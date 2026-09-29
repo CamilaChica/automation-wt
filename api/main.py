@@ -16,7 +16,15 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, File, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
+_process_database_url = os.getenv("DATABASE_URL")
 load_dotenv()
+if _process_database_url is None:
+    os.environ.pop("DATABASE_URL", None)
+from services.database_safety import validate_development_database_target
+
+validate_development_database_target(
+    os.getenv("DATABASE_URL", ""), os.getenv("WT_ENV", os.getenv("WT_AUTH_ENV", "development"))
+)
 from config.env_check import validate_production_environment
 
 validate_production_environment()
@@ -37,7 +45,9 @@ from services.twilio_service import twilio_service
 from services.freight_service import FreightRequest, freight_rate_service
 from services.operations_store import operations_store
 from services.persistence_status import persistence_status
-from services.async_database import create_engine_from_environment, preflight_database, search_supplier_inventory, session_scope
+from services.async_database import check_migration_state, create_engine_from_environment, get_async_db, preflight_database, search_supplier_inventory, session_scope
+from repositories.runtime import create_operational_repositories
+from repositories.rfq_repository import RFQRepository
 from services.export_control_service import export_control_service
 from services.attachment_service import AttachmentService
 from services.swarm_runtime import swarm_runtime
@@ -542,6 +552,8 @@ async def ready():
     postgres_url = os.getenv("DATABASE_URL", "").strip()
     production = os.getenv("WT_ENV", os.getenv("WT_AUTH_ENV", "development")).strip().lower() == "production"
     postgres_healthy = False
+    repository_checks = None
+    migration_status = None
     if production and not postgres_url:
         raise HTTPException(status_code=503, detail="DATABASE_URL is required in production.")
     if postgres_url:
@@ -550,19 +562,30 @@ async def ready():
             engine = create_engine_from_environment()
             await preflight_database(engine)
             postgres_healthy = True
+            migration_status = await check_migration_state(engine)
+            async with session_scope(engine) as session:
+                repositories = create_operational_repositories(session)
+                repository_checks = await repositories.check_readiness()
+                if production:
+                    await db_service.list_rfqs_async(repositories)
         except Exception as exc:
             if production:
                 raise HTTPException(status_code=503, detail=f"PostgreSQL not ready: {type(exc).__name__}") from exc
         finally:
             if engine is not None:
                 await engine.dispose()
-    try:
-        db_service.list_rfqs()
-    except Exception as exc:
-        logger.error("readiness_database_check_failed", extra={"error_type": type(exc).__name__})
-        raise HTTPException(status_code=503, detail="Database readiness check failed.") from exc
-    persistence = persistence_status(postgres_healthy=postgres_healthy)
-    postgresql_mirroring = bool(postgres_healthy and persistence["inventory_postgres_mirror_enabled"])
+    if not production:
+        try:
+            db_service.list_rfqs()
+        except Exception as exc:
+            logger.error("readiness_database_check_failed", extra={"error_type": type(exc).__name__})
+            raise HTTPException(status_code=503, detail="Database readiness check failed.") from exc
+    persistence = persistence_status(
+        postgres_healthy=postgres_healthy,
+        repository_checks=repository_checks,
+        migration_status=migration_status,
+    )
+    postgresql_mirroring = bool(persistence["inventory_postgres_mirror_enabled"])
     full_operational_postgresql = bool(persistence.get("full_operational_persistence_ready"))
     if production and not (postgresql_mirroring and full_operational_postgresql):
         raise HTTPException(
@@ -742,7 +765,11 @@ async def upload_attachment(file: UploadFile = File(...), user: dict = Depends(c
     return record.model_dump()
 
 @app.post("/api/rfqs/intake", response_model=IntakeResponse)
-async def submit_rfq(request: IntakeRequest, user: dict = Depends(current_user)):
+async def submit_rfq(
+    request: IntakeRequest,
+    user: dict = Depends(current_user),
+    session=Depends(get_async_db),
+):
     """
     Submits raw unstructured text representing a customer RFQ.
     Triggers parsing and initial pipeline validation.
@@ -761,13 +788,24 @@ async def submit_rfq(request: IntakeRequest, user: dict = Depends(current_user))
         customer_name = "United Aerospace"
         customer_email = "parts@unitedaero.com"
         
-    # Write to DB
-    rfq = db_service.create_rfq(
-        customer_name=customer_name,
-        customer_email=customer_email,
-        raw_text=request.raw_text,
-        thread_id=request.reply_to,
-    )
+    if session is None:
+        rfq = db_service.create_rfq(
+            customer_name=customer_name,
+            customer_email=customer_email,
+            raw_text=request.raw_text,
+            thread_id=request.reply_to,
+        )
+    else:
+        rfq = RFQ(
+            id=f"RFQ-{uuid.uuid4().hex[:6].upper()}",
+            customer_name=customer_name,
+            customer_email=customer_email,
+            status="Intake",
+            raw_text=request.raw_text,
+            thread_id=request.reply_to,
+        )
+        await RFQRepository(session).create_from_payload(rfq.model_dump(mode="json"))
+        await session.commit()
     
     db_service.add_audit_log(
         rfq.id, "GatewayAPI", "intake_submission",
@@ -990,11 +1028,17 @@ async def mailbox_health(
     }
 
 @app.get("/api/rfqs", response_model=List[RFQ])
-async def list_rfqs(user: dict = Depends(current_user)):
+async def list_rfqs(
+    user: dict = Depends(current_user),
+    session=Depends(get_async_db),
+):
     """
     Retrieves all RFQs.
     """
-    rfqs = db_service.list_rfqs()
+    if session is None:
+        rfqs = db_service.list_rfqs()
+    else:
+        rfqs = await db_service.list_rfqs_async(create_operational_repositories(session))
     if user["role"] == "ROLE_CUSTOMER":
         return [rfq for rfq in rfqs if rfq.customer_email.lower() == user["email"].lower()]
     if user["role"] not in ("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"):
@@ -1002,18 +1046,44 @@ async def list_rfqs(user: dict = Depends(current_user)):
     return rfqs
 
 @app.get("/api/rfqs/{rfq_id}")
-async def get_rfq_detail(rfq_id: str, user: dict = Depends(current_user)) -> CustomerRFQDetail | dict:
+async def get_rfq_detail(
+    rfq_id: str,
+    user: dict = Depends(current_user),
+    session=Depends(get_async_db),
+) -> CustomerRFQDetail | dict:
     """
     Retrieves complete status details, items, audit logs, and associated quotes.
     """
-    rfq = db_service.get_rfq(rfq_id)
+    async_repositories = create_operational_repositories(session) if session is not None else None
+    if async_repositories is None:
+        rfq = db_service.get_rfq(rfq_id)
+    else:
+        rfq_payload = await async_repositories.rfq.get_operational_record("rfqs", rfq_id)
+        rfq_record = await async_repositories.rfq.get(rfq_id) if rfq_payload is None else None
+        rfq = RFQ.model_validate(rfq_payload) if rfq_payload is not None else (
+            RFQ(
+                id=rfq_record.id,
+                customer_name=rfq_record.customer_name,
+                customer_email=rfq_record.customer_email,
+                status=rfq_record.status,
+                raw_text=rfq_record.raw_text,
+                thread_id=rfq_record.thread_id,
+                created_at=rfq_record.created_at,
+            ) if rfq_record else None
+        )
     if not rfq:
         raise HTTPException(status_code=404, detail="RFQ not found.")
     if user["role"] == "ROLE_CUSTOMER" and rfq.customer_email.lower() != user["email"].lower():
         raise HTTPException(status_code=403, detail="You can only access your own requests.")
         
-    items = db_service.get_rfq_items(rfq_id)
-    quote = db_service.get_quote_by_rfq(rfq_id)
+    if async_repositories is None:
+        items = db_service.get_rfq_items(rfq_id)
+        quote = db_service.get_quote_by_rfq(rfq_id)
+    else:
+        item_records = await async_repositories.rfq.list_operational_records("rfq_items")
+        items = [RFQItem.model_validate(value) for value in item_records.values() if value.get("rfq_id") == rfq_id]
+        quote_records = await async_repositories.quote.list_operational_records("quotes")
+        quote = next((Quote.model_validate(value) for value in quote_records.values() if value.get("rfq_id") == rfq_id), None)
 
     if user["role"] == "ROLE_CUSTOMER":
         quote_details = None
@@ -1035,7 +1105,10 @@ async def get_rfq_detail(rfq_id: str, user: dict = Depends(current_user)) -> Cus
                         certificate_type=item.certificate_type,
                         compliance_status=item.compliance_status,
                     )
-                    for item in db_service.get_quote_items(quote.id)
+                    for item in (
+                        db_service.get_quote_items(quote.id) if async_repositories is None else
+                        [QuoteItem.model_validate(value) for value in (await async_repositories.quote.list_operational_records("quote_items")).values() if value.get("quote_id") == quote.id]
+                    )
                 ],
             )
         return CustomerRFQDetail(rfq=rfq, items=items, quote_details=quote_details)
@@ -1047,7 +1120,11 @@ async def get_rfq_detail(rfq_id: str, user: dict = Depends(current_user)) -> Cus
     
     quote_details = None
     if quote:
-        quote_items = db_service.get_quote_items(quote.id)
+        quote_items = db_service.get_quote_items(quote.id) if async_repositories is None else [
+            QuoteItem.model_validate(value)
+            for value in (await async_repositories.quote.list_operational_records("quote_items")).values()
+            if value.get("quote_id") == quote.id
+        ]
         quote_details = {
             "quote": quote,
             "items": quote_items

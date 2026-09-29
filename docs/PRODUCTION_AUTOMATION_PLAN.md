@@ -1,56 +1,73 @@
-# Production Release: Pending Items
+# End-User Delivery Plan
 
-**Status: BLOCKED.** Do not enable `OPERATIONAL_POSTGRES_RUNTIME_ENABLED`, apply migrations to production, or declare RFQ delivery healthy until all applicable items below have evidence.
+**Status: BLOCKED.** The latest observed production `/ready` response was HTTP 503. Keep `OPERATIONAL_POSTGRES_RUNTIME_ENABLED=false`, production workers paused, and customer access closed until the gates below pass in order and the release owner approves go-live.
 
-This document lists only outstanding release gates. Local implementation, backend/frontend regression tests, the named agent metadata test, and offline Alembic head/history/SQL generation have been verified; none of those is a production readiness proof. The remaining items require operator approval, an authenticated disposable PostgreSQL target, or deployed mailbox evidence.
+This is the single source of truth for pending delivery work. Other documentation may describe APIs, architecture, test evidence, or safe operating procedures, but must not maintain a second release checklist. Record only sanitized evidence here; never include credentials, tokens, connection strings, or customer data.
 
-## Immediate Security and Access
+**Already verified, not pending:** the canonical Render database reports Alembic revision `0009_prompt_rag_storage`; do not repeat production migration or seed steps. A fresh disposable PostgreSQL database completed migration lifecycle and clean schema parity checks. Four live local PostgreSQL workflow tests and the isolated backend suite passed. Production readiness has not passed. The existing backup export is incomplete, the local PostgreSQL test database has schema drift, and local Playwright still reports 13 failures.
 
-- [ ] Rotate the PostgreSQL password/connection string in Render and local secret storage. A test traceback exposed the configured connection string; do not reuse it.
-- [ ] Restore access to the intended PostgreSQL target from a secure test environment. Local DNS currently cannot resolve the configured Render hostname. Do not infer `localhost` or another host as a production fallback.
-- [ ] Verify the new target identity, deployed Render commit, and worker maintenance/pause procedure before any production write.
+## 1. Secure and Stabilize Production
 
-## Backup and Reconciliation
+- [ ] Verify the reported credential rotation: revoke the exposed PostgreSQL credential and confirm the API and every worker use the replacement. Securely confirm any external deploy-hook callers use the regenerated hook.
+- [ ] Resolve Render configuration drift before Blueprint sync or deployment. Reconcile the Blueprint's `unknown type "static"` error and the observed active build/start/health-check commands with the reviewed service configuration. Keep database migrations out of automatic builds.
+- [ ] Reconcile the complete Render service inventory with the approved topology. Confirm API and worker separation, shared PostgreSQL target, sales-mailbox ownership by the email worker, purchasing-mailbox ownership by inventory ingestion, and the outbox/RFQ-resume worker services. Keep all production workers paused.
+- [ ] Assign the release owner, database approver, rollback owner, incident contact, maintenance window, and rollback trigger. Pin the candidate commit after the remaining code work is complete.
+- [ ] Resolve launch-provider scope and remove conflicting deployment assumptions: select the attachment-storage provider, decide whether Twilio/SMS is in scope, confirm Microsoft Graph mailbox identities/permissions, and select Redis or an approved edge service for distributed rate limiting. Store all secrets in the approved secret manager.
 
-- [ ] Create and verify a PostgreSQL-native backup before changing production schema or data. The local SQLite snapshot and ZIP at `backups/20260926T202815Z` passed SQLite/ZIP integrity checks but are not a PostgreSQL backup.
-- [ ] Review and remove the unintended synthetic test archives `winged-tycoons-backups/winged-tycoons-20260927T150348Z.zip` and `winged-tycoons-backups/winged-tycoons-20260927T151433Z.zip` from Azure Blob Storage after operator confirmation. Both were built from temporary local SQLite test databases, not production data.
-- [ ] Review the archived SQLite source mapping: customers 37, RFQs 439, RFQ items 1, quotes 255, quote items 242, suppliers 3, supplier offers 3, audit events 14, communications 377, scheduled tasks 1, inventory/shipment records 10, and 725 usable runtime operational records after excluding incomplete quote-item payloads.
-- [ ] Resolve duplicate/conflicting records and review the deterministic legacy audit-ID mapping in `scripts/reconcile_sqlite_to_postgres.py`. `ON CONFLICT DO NOTHING` preserves target rows; target-side conflicts cannot be compared until PostgreSQL is reachable.
-- [ ] Review/approve the implemented manual-review reconciliation policy for 241/242 normalized quote items missing source, acquisition cost, margin, and compliance fields. Their original normalized rows are preserved, they are queued for review, omitted from usable runtime items, and affected quotes/RFQs are quarantined.
-- [ ] Review/approve 3 supplier-profile queue entries for records missing legacy contact/address fields; their suppliers/offers are held from approved sourcing pending review.
-- [ ] Run the reconciliation dry-run against the verified target, review its conflict and data-quality report, then use `--apply` only after backup approval and all blocking source gaps are resolved.
-- [ ] Verify source-key parity and row counts after reconciliation; retain the report and a post-migration backup.
+## 2. Prove Backup and Restore
 
-## PostgreSQL Runtime and Outbox
+- [ ] Restore-test the completed September 28 Render export (`2026-09-29T01_43Z.dir.tar.gz`, SHA-256 `B607D5EB1FE52500D28EF9261B7C719BF6F1BBC6B5257370E162D1198084BF44`). Tar extraction succeeded, and PostgreSQL 17.11 read its 216-entry TOC with 39 public tables, matching the 39 public tables on the live database. Provision an owner-approved isolated PostgreSQL 18 target, then verify schema, data integrity, and application-level reads; record protected retention and restore evidence without recording backup contents or credentials.
+- [ ] Do not change production schema or data until the isolated restore and its evidence are approved.
 
-- [ ] Obtain rotated credentials for a disposable PostgreSQL database. The local PostgreSQL 16 service is running, but default local authentication is rejected; do not use the exposed Render credential.
-- [ ] Apply `0008_raw_email_inventory_imports` only to the authenticated disposable PostgreSQL database, then verify upgrade, restart, downgrade/rollback, and ORM/schema parity. Offline head/history/SQL generation passed locally; no database was contacted for that check.
-- [ ] Exercise RFQ/customer/quote/supplier/task reads and writes against real PostgreSQL, including row locks, optimistic versions, inventory reservation concurrency, and transaction rollback.
-- [ ] Test inbound idempotency with two processes and prove claim plus business writes commit or roll back together.
-- [ ] Test outbox deduplication, concurrent claims, retry/backoff, terminal failure, stale-send recovery, and manual resolution of ambiguous delivery against PostgreSQL. Explicit HTTP 429/5xx responses retry; timeouts with uncertain acceptance go to `MANUAL_REVIEW_REQUIRED`. Do not automatically resend when the external provider may already have accepted a message.
-- [ ] Verify that all production supplier, inbound email, and scheduled task paths use shared PostgreSQL, not the local SQLite fallback.
-- [ ] Verify quote/RFQ state stays pending while email is queued and advances to `Quote_Sent` only after the outbox confirms `SENT`.
-- [ ] Keep `OPERATIONAL_POSTGRES_RUNTIME_ENABLED=false` until these integration and concurrency checks pass.
+## 3. Finish PostgreSQL Runtime Cutover
 
-## Render and Mailboxes
+- [ ] Complete PostgreSQL persistence across all operational API, orchestration, communication, and worker paths. The supplier facade, readiness probes, and RFQ-list slice are already routed; replace remaining synchronous `db_service` and SQLite-compatible operational calls, including inventory mirroring and scheduled/inbound paths, with shared PostgreSQL repositories.
+- [ ] Preserve transaction boundaries and workflow behavior for RFQs, suppliers, quotes, inventory, communications, purchase orders, inbound email, scheduled tasks, and outbox delivery. Ensure queued quote email does not advance RFQ state until delivery is confirmed `SENT`.
+- [ ] Prove no operational SQLite fallback is active in the candidate service or any worker. Keep `OPERATIONAL_POSTGRES_RUNTIME_ENABLED=false` until all persistence and reliability gates pass.
+- [ ] For any future database metadata change, create/review the migration and validate upgrade, rollback, and schema parity on a disposable database first. Production is already at `0009_prompt_rag_storage`; do not rerun migrations as a generic deployment action.
 
-- [ ] Confirm the deployed commit and inspect its readiness implementation. The live endpoint currently claims PostgreSQL-primary while reporting `/opt/render/project/src/data/operations.db`; do not accept this as ready.
-- [ ] After deploying the reviewed migration/code, verify `/ready` against the exact deployed commit: DB reachable, all required tables present, full runtime enabled, and no SQLite operational path.
-- [ ] Authenticate with an approved internal account and verify sales and purchasing mailbox health are both `ok`. Unauthenticated `401` is expected and does not pass this gate.
-- [ ] Verify deployed ownership remains isolated: email worker polls `sales`; inventory worker polls `purchasing`.
+## 4. Complete PostgreSQL Reliability Tests
 
-## Customer and Supplier Proof
+- [ ] Run the candidate against an approved disposable PostgreSQL 18 database. The four current live workflow tests passed on local PostgreSQL 16; the pre-existing local `test_db` has schema drift and is not clean migration-parity evidence.
+- [ ] Verify restart durability, transaction rollback, row locking, optimistic-version conflicts, concurrent inventory reservation/claims, and multi-process inbound idempotency.
+- [ ] Verify outbox deduplication, concurrent claims, retry/backoff, terminal failure, stale-send recovery, and manual resolution of ambiguous delivery. Prove an uncertain external send remains `MANUAL_REVIEW_REQUIRED` and is never blindly resent.
+- [ ] Verify supplier reply replay, self-sent message handling, unreadable attachment clarification deduplication, corrected inventory import replay, and exactly-once RFQ resume.
+- [ ] Retain deterministic test evidence and confirm readiness/schema probes reflect the exact candidate schema.
 
-- [ ] Submit one controlled RFQ from an authorized test customer and verify the record, quote, outbox, and communication rows in PostgreSQL.
-- [ ] Capture message ID, sender, RFQ ID, quote ID, outbox ID, communication ID, recipient, and final `transmission_status=SENT`.
-- [ ] Verify the customer mailbox actually receives the quote. The local Playwright test uses mocked APIs and proves UI behavior only.
-- [ ] After disposable PostgreSQL is reachable, run the customer portal flow against the real local API/database and verify persisted RFQ plus outbox rows before production smoke testing.
-- [ ] Submit one supplier reply, replay the same Graph message, and verify only one business effect is committed.
-- [ ] Verify self-sent sales messages are ignored and unreadable supplier PDFs receive at most one same-thread clarification.
-- [ ] Replay a corrected supplier reply against disposable PostgreSQL and verify it updates the row-level import, deduplicates on replay, and resumes matching RFQs once through the durable queue.
+## 5. Approve and Reconcile Operational Data
 
-## Validation and Release
+- [ ] Review SQLite-to-PostgreSQL mappings, source/target row counts, conflicts, duplicate policy, deterministic audit-ID mapping, and quarantine rules.
+- [ ] Decide and document the manual-review disposition for 241 of 242 quote items missing source, acquisition cost, margin, and compliance fields, plus three supplier profiles missing legacy contact/address fields.
+- [ ] Review the two synthetic Azure backup archives and remove them only after explicit owner approval and verified backup restoration.
+- [ ] Run reconciliation dry-run against the identity-verified target; review the full report and resolve blocking gaps. Apply only after backup restore, policy/data-gap decisions, and change approval. Verify source-key parity and row counts, then create and verify a post-reconciliation backup.
 
-- [ ] Run Alembic upgrade/downgrade and backend PostgreSQL integration/concurrency suites against the authenticated disposable database; offline Alembic inspection is not a substitute.
-- [ ] Deploy a pinned reviewed commit, repeat readiness and authenticated mailbox checks, and retain evidence.
-- [ ] Resume workers gradually and monitor duplicate messages, outbox failures, stuck workflows, and actual delivery before signing off.
+## 6. Complete Launch-Scope Product and Frontend Work
+
+- [ ] Confirm the production customer frontend is `apps/web` and align release/browser tests with it; keep `frontend/` as the internal command center unless an internal deployment is explicitly approved.
+- [ ] Resolve the local Playwright failures (last recorded: 63 passed, 13 failed, 2 skipped) and rerun the relevant frontend build, unit, mobile, and browser checks on the pinned candidate.
+- [ ] Decide which unimplemented internal workflows are required for initial delivery. For each required workflow, implement and test: safe `Intake_Failed` retry; quote rejection with comments; purchasing PO review; role-restricted inventory/supplier views; freight quoting; RFQ pause/resume; extraction-review queue; LLM health/telemetry; role-aware mailbox inbox/send; shipment creation, events, tracking, and SMS. Defer and hide any workflow not approved for launch.
+- [ ] Decide whether launch requires a quote collection endpoint, shipment-by-ID endpoint, multi-stage fulfillment milestones, compliance-evidence reads, historical KPIs, carrier maps, or a notification feed. Add backend contracts before building UI against unavailable data; otherwise defer those features.
+- [ ] Keep unsupported estimates, supplier metrics, maps, OCR/document panels, workflow milestones, and catalog fallbacks explicitly marked as sample/demo or remove them from customer-facing screens.
+- [ ] Confirm role boundaries, failure/loading/success feedback, data refresh behavior, mobile usability, privacy/terms, data retention, and export-control procedures for the approved release scope.
+
+## 7. Validate Staging and Obtain Acceptance
+
+- [ ] Deploy the pinned candidate to separate staging API, frontend, and worker services using a disposable PostgreSQL database, approved test storage, controlled mailboxes, and staging domain. Keep production recipients and production data out of tests.
+- [ ] Require staging `/healthz` success, `/ready` HTTP 200, expected Alembic head, all repository/schema probes passing, no SQLite fallback, authenticated healthy sales and purchasing mailboxes, correct worker ownership, and working outbox/RFQ-resume services.
+- [ ] Run a controlled customer RFQ through quote review and actual test-mailbox receipt. Verify persisted RFQ, quote, outbox, communication, and delivery records; retain message/RFQ/quote/outbox/communication IDs and final transmission status.
+- [ ] Test customer questions/chases, supplier reply replay, complete and incomplete inventory imports, exactly-once resume, unreadable-document clarification, PO review and duplicate prevention, compliance blocks, and failed/ambiguous delivery behavior.
+- [ ] Exercise slow-network, timeout, API-failure, confirm/cancel, and repeated-submit behavior with disposable records. Re-run authenticated payload assertions against staging; local mocked browser tests do not count as external delivery evidence.
+- [ ] Obtain written acceptance from intended customer and internal roles for access, attachments, quote/PO review, trace visibility, sample-data disclosures, mobile use, support paths, and operator workflow.
+
+## 8. Approve Production Rollout
+
+- [ ] Obtain release-owner and database-approver sign-off on code review, dependency/security checks, backup/restore, reconciliation, PostgreSQL reliability, staging acceptance, and rollback plan.
+- [ ] Deploy the exact reviewed commit with workers paused. Verify service configuration, database identity, schema revision, data parity, backup status, authenticated mailbox health, and `/ready` HTTP 200 on that deployment.
+- [ ] Enable `OPERATIONAL_POSTGRES_RUNTIME_ENABLED` only after every prior gate passes. Resume workers in stages with a controlled workload; monitor message delivery, duplicates, SQLite writes, stuck workflows/outbox items, manual-review queues, database errors, and worker health.
+- [ ] Pause rollout and follow the agreed rollback procedure if readiness regresses, persistence diverges, messages duplicate, or delivery becomes ambiguous. Do not expand access until the production smoke test passes.
+
+## 9. Hand Off to End Users
+
+- [ ] Create named least-privilege accounts and provide the approved production URL, role-specific onboarding, required RFQ fields, supported document types, quote/PO instructions, sample-data limitations, and support/escalation contacts.
+- [ ] Train operators on approval queues, mailbox ownership, manual delivery review, backup/restore, incident response, and rollback authority.
+- [ ] Archive sanitized approvals, deployment commit, backup/restore evidence, reconciliation report, staging/customer acceptance, readiness and mailbox checks, delivery evidence, and support ownership. Monitor the first live transactions before declaring delivery complete.

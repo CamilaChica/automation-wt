@@ -21,7 +21,7 @@ from models.operational_models import (
     SupplierRecord,
 )
 from schemas.supplier import SupplierOfferEntry, SupplierRegistryEntry
-from sqlalchemy import create_engine, inspect, select, text, update
+from sqlalchemy import create_engine, inspect, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Engine
 
@@ -249,6 +249,14 @@ class PostgresReviewTelemetryRepository:
                       "processing_status": processing_status},
             ).returning(InboundEmailRecord.id))
             return str(result.scalar_one())
+
+    def is_inbound_email_processed(self, mailbox: str, message_id: str) -> bool:
+        with self._read() as connection:
+            status = connection.execute(select(InboundEmailRecord.processing_status).where(
+                InboundEmailRecord.mailbox == mailbox,
+                InboundEmailRecord.message_id == message_id,
+            )).scalar_one_or_none()
+            return status == "processed"
 
     def release_inbound_message(self, message_id: str, internet_message_id: str | None = None) -> None:
         keys = [key for key in (message_id, inbound_dedupe_key(internet_message_id)) if key]
@@ -984,10 +992,15 @@ class PostgresReviewTelemetryRepository:
 
     def list_suppliers(self) -> list[dict[str, Any]]:
         with self._read() as connection:
-            rows = connection.execute(select(SupplierRecord).order_by(SupplierRecord.company_name)).scalars().all()
-            return [{"id": row.id, "company_name": row.company_name, "email": row.email,
-                     "phone": row.phone, "approval_status": row.approval_status,
-                     "itar_certified": row.itar_certified} for row in rows]
+            rows = connection.execute(select(
+                SupplierRecord.id,
+                SupplierRecord.company_name,
+                SupplierRecord.email,
+                SupplierRecord.phone,
+                SupplierRecord.approval_status,
+                SupplierRecord.itar_certified,
+            ).order_by(SupplierRecord.company_name)).mappings().all()
+            return [dict(row) for row in rows]
 
     def save_supplier_offer(self, *, supplier_name: str, supplier_email: str | None = None, part_number: str = "", quantity_available: int | None = None, unit_cost: float | None = None, certificate_type: str | None = None, lead_time_days: int | None = None, approval_status: str = "Pending", condition_code: str | None = None, source_email_id: str | None = None, confidence: float = 1.0, description: str = "", availability_location: str | None = None, warranty_terms: str | None = None, trace_documents: list[str] | None = None, currency: str = "USD") -> dict[str, Any]:
         with self._begin() as connection:
@@ -1082,3 +1095,10 @@ class PostgresReviewTelemetryRepository:
                 "UPDATE communication_tasks SET attempts = attempts + 1, status = CASE WHEN attempts + 1 >= max_attempts THEN 'dead_letter' ELSE 'pending' END, "
                 "last_error = :error, due_at = now() + LEAST(interval '1 hour', interval '5 seconds' * power(2, GREATEST(attempts, 0))) WHERE id = :id"
             ), {"error": str(error)[:1000], "id": task_id})
+
+    def list_dead_letter_communication_tasks(self) -> list[dict[str, Any]]:
+        with self._read() as connection:
+            rows = connection.execute(text(
+                "SELECT * FROM communication_tasks WHERE status = 'dead_letter' ORDER BY created_at DESC"
+            )).mappings().all()
+            return [dict(row) for row in rows]

@@ -7,9 +7,33 @@ from sqlalchemy import create_engine
 from repositories.review_telemetry_repository import _sync_database_url
 from services.operations_store import OperationsStore, POSTGRES_STORE_METHODS
 from repositories.review_telemetry_repository import PostgresReviewTelemetryRepository
+from services.supplier_database import _LazySupplierDatabase
 
 
 class TestReviewTelemetryPostgresRouting(unittest.TestCase):
+    def test_supplier_database_facade_routes_offer_writes_to_postgres(self):
+        postgres = Mock()
+        postgres.storage_engine = "postgresql"
+        postgres.save_supplier_offer.return_value = {"id": "SPO-PG-1"}
+        with (
+            patch("services.operations_store.operations_store", postgres),
+            patch("services.supplier_database.SupplierDatabase") as sqlite_database,
+        ):
+            database = _LazySupplierDatabase()
+            result = database.save_supplier_offer(
+                supplier_name="Disposable Supplier",
+                supplier_email="sales@example.test",
+                part_number="TEST-PART-1",
+            )
+
+        self.assertEqual(result["id"], "SPO-PG-1")
+        postgres.save_supplier_offer.assert_called_once_with(
+            supplier_name="Disposable Supplier",
+            supplier_email="sales@example.test",
+            part_number="TEST-PART-1",
+        )
+        sqlite_database.assert_not_called()
+
     def test_database_url_is_converted_to_sync_psycopg2_driver(self):
         self.assertEqual(
             _sync_database_url("postgresql://user:pass@db.example/app"),

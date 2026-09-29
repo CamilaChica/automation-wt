@@ -12,7 +12,15 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+_process_database_url = os.getenv("DATABASE_URL")
 load_dotenv()
+if _process_database_url is None:
+    os.environ.pop("DATABASE_URL", None)
+from services.database_safety import validate_development_database_target
+
+validate_development_database_target(
+    os.getenv("DATABASE_URL", ""), os.getenv("WT_ENV", os.getenv("WT_AUTH_ENV", "development"))
+)
 
 from services.mailbox_service import fetch_inbox_messages
 from services.inbound_email_archive import archive_inbound_message

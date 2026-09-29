@@ -49,6 +49,23 @@ class _PostgresRecordMap(MutableMapping):
             return default
 
 class MockDatabaseService:
+    async def list_rfqs_async(self, repositories) -> List[RFQ]:
+        records = await repositories.rfq.list_operational_records("rfqs")
+        if records:
+            return [RFQ.model_validate(payload) for payload in records.values()]
+        return [
+            RFQ(
+                id=record.id,
+                customer_name=record.customer_name,
+                customer_email=record.customer_email,
+                status=record.status,
+                raw_text=record.raw_text,
+                thread_id=record.thread_id,
+                created_at=record.created_at,
+            )
+            for record in await repositories.rfq.list()
+        ]
+
     def __getattr__(self, name):
         if name == "_production":
             return operations_store.storage_engine == "postgresql"

@@ -7,7 +7,12 @@ import os
 from services.operations_store import operations_store
 
 
-def persistence_status(*, postgres_healthy: bool = False) -> dict[str, object]:
+def persistence_status(
+    *,
+    postgres_healthy: bool = False,
+    repository_checks: dict[str, bool] | None = None,
+    migration_status: dict[str, object] | None = None,
+) -> dict[str, object]:
     postgres_mirror_enabled = os.getenv("INVENTORY_INGESTION_POSTGRES_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
     operational_engine = getattr(operations_store, "storage_engine", "sqlite")
     adapter_complete = operational_engine == "postgresql"
@@ -17,7 +22,14 @@ def persistence_status(*, postgres_healthy: bool = False) -> dict[str, object]:
         "missing_tables": ["operational schema check unavailable"] if adapter_complete and postgres_healthy else [],
     }
     runtime_cutover_enabled = os.getenv("OPERATIONAL_POSTGRES_RUNTIME_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
-    postgres_primary = bool(adapter_complete and postgres_healthy and schema_status["ready"] and runtime_cutover_enabled)
+    required_repositories = {"inventory", "rfq", "supplier", "quote"}
+    checks = repository_checks or {}
+    repositories_ready = all(checks.get(name) is True for name in required_repositories)
+    migration_ready = bool(migration_status and migration_status.get("ready") is True)
+    postgres_primary = bool(
+        adapter_complete and postgres_healthy and schema_status["ready"]
+        and repositories_ready and migration_ready and runtime_cutover_enabled
+    )
     return {
         "operational_store": (
             "postgresql_store_adapter_runtime_incomplete"
@@ -28,7 +40,13 @@ def persistence_status(*, postgres_healthy: bool = False) -> dict[str, object]:
         "postgres_store_adapter_complete": adapter_complete,
         "operational_schema_ready": bool(schema_status["ready"]),
         "operational_schema_missing_tables": schema_status["missing_tables"],
-        "inventory_postgres_mirror_enabled": postgres_mirror_enabled and postgres_healthy,
+        "database_migration_status": migration_status or {"ready": False, "error": "not checked"},
+        "postgres_repository_checks": {
+            name: checks.get(name, False) for name in sorted(required_repositories)
+        },
+        "inventory_postgres_mirror_enabled": (
+            postgres_mirror_enabled and postgres_healthy and checks.get("inventory") is True
+        ),
         "postgres_primary_migration_required": not postgres_primary,
         "full_operational_persistence_ready": postgres_primary,
         "storage_engine": "postgresql" if postgres_primary else operational_engine,

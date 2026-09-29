@@ -26,6 +26,7 @@ POSTGRES_STORE_METHODS = (
     "claim_inbound_message",
     "mark_inbound_message_processed",
     "save_inbound_email",
+    "is_inbound_email_processed",
     "release_inbound_message",
     "save_raw_email",
     "record_audit_event",
@@ -81,6 +82,7 @@ POSTGRES_STORE_METHODS = (
     "list_due_communication_tasks",
     "update_communication_task",
     "retry_communication_task",
+    "list_dead_letter_communication_tasks",
     "cancel_communication_task",
 )
 
@@ -253,6 +255,19 @@ class OperationsStore:
                 body=body, processing_status=processing_status,
             )
         raise RuntimeError("Shared inbound email persistence requires PostgreSQL mode.")
+
+    def is_inbound_email_processed(self, mailbox: str, message_id: str) -> bool:
+        if self._postgres:
+            return self._postgres.is_inbound_email_processed(mailbox, message_id)
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT processing_status FROM inbound_emails WHERE mailbox = ? AND message_id = ?",
+                (mailbox, message_id),
+            ).fetchone()
+            return bool(row and row["processing_status"] == "processed")
+        finally:
+            conn.close()
 
     def release_inbound_message(self, message_id: str, internet_message_id: str | None = None) -> None:
         if self._postgres:
@@ -606,6 +621,18 @@ class OperationsStore:
         if not self._postgres:
             raise RuntimeError("Shared communication tasks require PostgreSQL mode.")
         self._postgres.retry_communication_task(task_id, error)
+
+    def list_dead_letter_communication_tasks(self) -> list[dict[str, Any]]:
+        if self._postgres:
+            return self._postgres.list_dead_letter_communication_tasks()
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM communication_tasks WHERE status = 'dead_letter' ORDER BY created_at DESC"
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
 
     def cancel_communication_task(self, task_key: str) -> None:
         if self._postgres:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import os
 import unittest
+import uuid
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -45,7 +46,7 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
         loader = CapturingLoader()
         worker = InventoryIngestionWorker(
             fetch_messages=lambda mailbox, limit: [{
-                "message_id": "supplier-message-1",
+                "message_id": f"supplier-message-{uuid.uuid4().hex}",
                 "from": "quotes@aero.example",
                 "subject": "Quote 060-1234-00 - FAA 8130-3",
                 "body": "Quantity available: 12\nUnit price: $1,100.00\nLead time: 3 days",

@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.operational_models import QuoteItemRecord, QuoteRecord
+from models.operational_models import OperationalRecord, QuoteItemRecord, QuoteRecord
 
 
 class QuoteRepository:
@@ -17,6 +17,12 @@ class QuoteRepository:
         result = await self.session.scalars(select(QuoteRecord).where(QuoteRecord.rfq_id == rfq_id))
         return list(result)
 
+    async def list_operational_records(self, domain: str) -> dict[str, dict]:
+        result = await self.session.scalars(
+            select(OperationalRecord).where(OperationalRecord.domain == domain)
+        )
+        return {record.record_id: dict(record.payload) for record in result}
+
     async def create(self, **values) -> QuoteRecord:
         record = QuoteRecord(**values)
         self.session.add(record)
@@ -26,5 +32,13 @@ class QuoteRepository:
     async def add_item(self, **values) -> QuoteItemRecord:
         record = QuoteItemRecord(**values)
         self.session.add(record)
+        await self.session.flush()
+        return record
+
+    async def set_status(self, quote_id: str, status: str) -> QuoteRecord | None:
+        record = await self.get(quote_id)
+        if record is None:
+            return None
+        record.status = status
         await self.session.flush()
         return record

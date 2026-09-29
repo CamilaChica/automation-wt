@@ -23,7 +23,7 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 | `GET /api/rfqs/{rfq_id}` | Authenticated; customer ownership checked | Path `rfq_id` | RFQ, items and optional quote detail; internal response also includes audit logs. `useRFQDetail` / `useQuotes(rfqId)`. There is no quote collection endpoint. |
 | `POST /api/rfqs/{rfq_id}/process` | Admin/manager/sales/purchasing | Path `rfq_id` | Orchestration result. Procurement can start processing an RFQ in `Intake`; failed-intake reset/retry is not supported. |
 | `POST /api/quotes/{quote_id}/approve` | Admin/manager/sales | `ApproveRequest` | Approval/dispatch result. Customer Dashboard uses `useDispatchQuote`; Sales issues a quote. |
-| `POST /api/quotes/{quote_id}/reject` | Admin/manager/sales | `RejectRequest` | Rejection result. Service method is available; no quote-collection view exists. |
+| `POST /api/quotes/{quote_id}/reject` | Admin/manager/sales | `RejectRequest` | Rejection result. Sales Command rejects the selected quote with an audited reason. There is no quote-collection view. |
 | `POST /api/purchase-orders` | Authenticated; customer quote ownership checked | `PurchaseOrderRequest` with exactly three attachment IDs | `Pending_PO_Review`, PO and quote IDs. Customer Portal uses `useCreatePurchaseOrder`; this is not quote approval. |
 | `POST /api/purchase-orders/{quote_id}/approve` | Admin/manager/purchasing | `PurchaseOrderApprovalRequest` | PO review state, quote ID, RFQ ID. No current view is bound to this endpoint. |
 | `GET /api/attachments/{attachment_id}` | Authenticated and authorized | Path `attachment_id` | Binary attachment download. Sales/document preview. |
@@ -88,17 +88,6 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 | `GET /api/internal/work-hours?month=YYYY-MM` | Internal/admin/manager/sales/purchasing | Month query | Current employee hours and daily totals. |
 | `GET /api/internal/hr/work-hours?month=YYYY-MM` | Admin/manager | Month query | HR report with employee totals. |
 
-## Employee profile and time tracking
-
-| Method and path | Access | Request | Response / UI mapping |
-| --- | --- | --- | --- |
-| `GET /api/internal/profile` | Internal/admin/manager/sales/purchasing | None | `EmployeeProfile`; EmployeeProfilePanel. |
-| `PATCH /api/internal/profile` | Internal/admin/manager/sales/purchasing | Display name and job title | Updated `EmployeeProfile`. |
-| `PUT /api/internal/profile/presence` | Internal/admin/manager/sales/purchasing | Online flag | Updated `EmployeeProfile`. |
-| `POST /api/internal/profile/clock` | Internal/admin/manager/sales/purchasing | `clock_in` / `clock_out` | Updated `EmployeeProfile`; conflicts return 409. |
-| `GET /api/internal/work-hours?month=YYYY-MM` | Internal/admin/manager/sales/purchasing | Month query | Employee totals and daily seconds. |
-| `GET /api/internal/hr/work-hours?month=YYYY-MM` | Admin/manager | Month query | HR report with employee totals. |
-
 ## View mapping and non-API content
 
 | View | Live bindings | Remaining sample/demo content |
@@ -115,3 +104,7 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 - The backend does not expose `GET /api/v1/quotes`, `POST /api/v1/quotes/{id}/dispatch`, `GET /api/v1/fulfillment/stages`, or `GET /api/shipments/{id}`. Existing quote data comes from `GET /api/rfqs/{rfq_id}` and quote dispatch from `POST /api/quotes/{quote_id}/approve`.
 - `useFulfillmentStages` derives a single human-readable stage from each persisted shipment status. It does not claim that the backend returned a multi-stage milestone history or inventory reservation.
 - Compliance evidence and historical KPI endpoints do not exist. Those panels remain visibly sample until backend read contracts and persisted data are added.
+
+## Delivery Plan
+
+The API/UI contract inventory and sample-data boundaries are documented above. All remaining implementation and end-user release actions, in execution order, are maintained only in [PRODUCTION_AUTOMATION_PLAN.md](PRODUCTION_AUTOMATION_PLAN.md).

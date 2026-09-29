@@ -2,24 +2,31 @@
 
 from __future__ import annotations
 
-import os
 import asyncio
+import os
 import socket
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from decimal import Decimal
-from typing import AsyncIterator
+from pathlib import Path
 from urllib.parse import urlsplit
 
-from sqlalchemy import or_, select
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+from sqlalchemy import or_, select, text
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from models.async_models import AviationPart, Base, SupplierQuote
+from services.database_safety import resolve_database_url, validate_development_database_target
 
 
 def _database_url() -> str:
     value = os.getenv("DATABASE_URL", "").strip()
+    if not value:
+        value = resolve_database_url(Path(__file__).resolve().parents[1] / ".env.local")
     fallback = os.getenv("DATABASE_URL_FALLBACK", "").strip()
     if value and fallback:
         parsed_host = urlsplit(value.replace("postgresql+asyncpg://", "postgresql://", 1)).hostname
@@ -37,6 +44,9 @@ def create_engine_from_environment() -> AsyncEngine:
     url = _database_url()
     if not url:
         raise RuntimeError("DATABASE_URL is required for the async PostgreSQL persistence layer.")
+    validate_development_database_target(
+        url, os.getenv("WT_ENV", os.getenv("WT_AUTH_ENV", "development"))
+    )
     return create_async_engine(url, pool_pre_ping=True, pool_recycle=1800)
 
 
@@ -68,6 +78,25 @@ async def preflight_database(engine: AsyncEngine | None = None) -> None:
             await engine.dispose()
 
 
+async def check_migration_state(engine: AsyncEngine) -> dict[str, object]:
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    expected = sorted(ScriptDirectory.from_config(config).get_heads())
+    try:
+        async with engine.connect() as connection, connection.begin():
+            if connection.dialect.name == "postgresql":
+                await connection.exec_driver_sql("SET TRANSACTION READ ONLY")
+            result = await connection.execute(text("SELECT version_num FROM alembic_version"))
+            current = sorted(result.scalars().all())
+        return {
+            "ready": current == expected,
+            "current": current,
+            "expected": expected,
+            "error": None,
+        }
+    except SQLAlchemyError as exc:
+        return {"ready": False, "current": [], "expected": expected, "error": type(exc).__name__}
+
+
 @asynccontextmanager
 async def session_scope(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -78,6 +107,20 @@ async def session_scope(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
         except Exception:
             await session.rollback()
             raise
+
+
+async def get_async_db() -> AsyncIterator[AsyncSession | None]:
+    enabled = os.getenv("USE_ASYNC_REPOS", "false").strip().lower() in {"1", "true", "yes", "on"}
+    if not enabled:
+        yield None
+        return
+    engine = create_engine_from_environment()
+    try:
+        await preflight_database(engine)
+        async with session_scope(engine) as session:
+            yield session
+    finally:
+        await engine.dispose()
 
 
 async def create_schema(engine: AsyncEngine) -> None:

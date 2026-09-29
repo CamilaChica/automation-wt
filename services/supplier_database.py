@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import sqlite3
@@ -410,18 +412,126 @@ class SupplierDatabase:
 
 
 class _LazySupplierDatabase:
-    """Defer SQLite initialization until a service actually uses supplier state."""
+    """Defer supplier persistence initialization until a service uses it."""
 
     def __init__(self) -> None:
-        self._instance: SupplierDatabase | None = None
+        self._instance: SupplierDatabase | PostgresSupplierDatabase | None = None
 
-    def _get(self) -> SupplierDatabase:
+    def _get(self) -> SupplierDatabase | PostgresSupplierDatabase:
         if self._instance is None:
-            self._instance = SupplierDatabase()
+            from services.operations_store import operations_store
+
+            if operations_store.storage_engine == "postgresql":
+                self._instance = PostgresSupplierDatabase(operations_store)
+            else:
+                self._instance = SupplierDatabase()
         return self._instance
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._get(), name)
+
+
+class PostgresSupplierDatabase:
+    def __init__(self, operations_store) -> None:
+        self.operations_store = operations_store
+
+    def upsert_supplier(
+        self,
+        supplier_name: str,
+        supplier_email: Optional[str] = None,
+        phone: Optional[str] = None,
+        approval_status: str = "Pending",
+    ) -> str:
+        return self.operations_store.upsert_supplier(
+            supplier_name, supplier_email, phone, approval_status
+        )
+
+    def save_email(
+        self,
+        mailbox: str,
+        message_id: str,
+        sender: str,
+        subject: str,
+        body: str,
+        received_at: Optional[str] = None,
+    ) -> str:
+        return self.operations_store.save_inbound_email(
+            mailbox=mailbox,
+            message_id=message_id,
+            sender=sender,
+            subject=subject,
+            body=body,
+            processing_status="processed",
+        )
+
+    def is_email_processed(self, mailbox: str, message_id: str) -> bool:
+        return self.operations_store.is_inbound_email_processed(mailbox, message_id)
+
+    def save_supplier_offer(self, **offer: Any) -> Dict[str, Any]:
+        return self.operations_store.save_supplier_offer(**offer)
+
+    def find_supplier_offers(
+        self, part_number: str, quantity_needed: int = 1
+    ) -> List[Dict[str, Any]]:
+        return self.operations_store.get_supplier_offers(part_number, quantity_needed)
+
+    def get_supplier_offers_for_part(self, part_number: str) -> List[Dict[str, Any]]:
+        return self.find_supplier_offers(part_number)
+
+    def search_supplier_offers(
+        self, query: str, condition: str | None = None
+    ) -> List[Dict[str, Any]]:
+        return self.operations_store.search_supplier_offers(query, condition)
+
+    def list_suppliers(self) -> List[Dict[str, Any]]:
+        return self.operations_store.list_suppliers()
+
+    def schedule_communication_task(
+        self,
+        task_key: str,
+        task_type: str,
+        mailbox: str,
+        recipient: str,
+        subject: str,
+        body: str,
+        due_at: str,
+        reply_to: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        due = datetime.fromisoformat(due_at.replace("Z", "+00:00")) if isinstance(due_at, str) else due_at
+        return self.operations_store.schedule_communication_task(
+            task_key=task_key,
+            task_type=task_type,
+            mailbox=mailbox,
+            recipient=recipient,
+            subject=subject,
+            body=body,
+            due_at=due,
+            reply_to=reply_to,
+        )
+
+    def list_due_communication_tasks(
+        self, now: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        timestamp = datetime.fromisoformat(now.replace("Z", "+00:00")) if now else None
+        return self.operations_store.list_due_communication_tasks(timestamp)
+
+    def mark_communication_task_sent(self, task_id: str) -> None:
+        self.operations_store.update_communication_task(task_id, status="sent")
+
+    def mark_communication_task_failed(self, task_id: str) -> None:
+        self.operations_store.retry_communication_task(task_id, "dispatch failed")
+
+    def mark_communication_task_retry(self, task_id: str, error: str) -> None:
+        self.operations_store.retry_communication_task(task_id, error)
+
+    def list_dead_letter_tasks(self) -> List[Dict[str, Any]]:
+        return self.operations_store.list_dead_letter_communication_tasks()
+
+    def cancel_communication_task(self, task_key: str) -> None:
+        self.operations_store.cancel_communication_task(task_key)
+
+    def reset_supplier_data(self) -> None:
+        raise RuntimeError("Supplier data reset is disabled for shared PostgreSQL production storage.")
 
 
 supplier_db = _LazySupplierDatabase()

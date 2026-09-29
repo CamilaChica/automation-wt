@@ -12,10 +12,10 @@ from dotenv import load_dotenv
 
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
-load_dotenv(os.path.join(ROOT, ".env"), override=True)
 
 
 def main() -> None:
+    load_dotenv(os.path.join(ROOT, ".env"), override=True)
     if len(sys.argv) != 2:
         raise SystemExit("Usage: python scripts/test_carrier_webhook.py <webhook-url>")
     webhook_url = sys.argv[1]

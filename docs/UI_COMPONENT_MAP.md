@@ -1,4 +1,4 @@
-# UI Pending Work Checklist
+# UI Delivery Status
 
 Updated 2026-09-22 after the accessibility and operational-transparency pass.
 
@@ -16,23 +16,4 @@ Updated 2026-09-22 after the accessibility and operational-transparency pass.
 
 ## Pending UI Work
 
-### High priority
-
-- Replace hardcoded dashboard metrics, charts, OCR/CV results, trace checklists, customer cards, and telemetry with authenticated API data.
-- Complete backend command semantics beyond audit recording for quote assembly, PO issuance, packaging, stamp generation, and supplier document audit.
-- Add durable document-status and attachment-to-RFQ records so trace/document actions survive process restarts.
-- Restrict mock fallbacks to development/test builds and show an environment-level mock banner when enabled.
-
-### Medium priority
-
-- Add typed response interfaces for remaining supplier offers, view-local payloads, and service methods that still use broad types.
-- Make CustomerDashboard filters, document previews, certificate downloads, and shipment/radar links API-backed.
-- Replace static `REAL TIME DATA` labels with API-backed status or `SIMULATED DATA` labels wherever data remains illustrative.
-- Add API-backed supplier matching and quote assembly to the sourcing matrix.
-- Add durable fulfillment workflow endpoints for QA, packaging, airworthiness, and shipment events.
-
-### Production gate
-
-- Migrate RFQ, quote, communication, PO, and audit operational state from the SQLite-compatible store to PostgreSQL.
-- Run the full frontend build, unit suite, Playwright discovery, and all E2E projects after backend command contracts are deployed.
-- Verify live Graph mailbox ingestion, PostgreSQL persistence, attachment storage, outbound email, supplier chasing, and PO notification in Render.
+All remaining UI and product work is ordered in [PRODUCTION_AUTOMATION_PLAN.md](PRODUCTION_AUTOMATION_PLAN.md). This document retains completed-work context and does not maintain a second pending checklist.

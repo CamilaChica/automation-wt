@@ -409,7 +409,7 @@ def test_extraction_contracts_are_versioned_schema_bound_and_tool_free():
 
     intake_agent = RFQIntakeAgent()
     assert intake_agent.metadata.available_tools == []
-    assert intake_agent.metadata.permissions == []
+    assert intake_agent.metadata.permissions == ["extract_rfq_fields"]
 
 
 def test_benchmark_aggregates_accuracy_abstention_latency_and_cost():

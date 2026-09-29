@@ -21,7 +21,15 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+_process_database_url = os.getenv("DATABASE_URL")
 load_dotenv(ROOT / ".env")
+if _process_database_url is None:
+    os.environ.pop("DATABASE_URL", None)
+from services.database_safety import validate_development_database_target
+
+validate_development_database_target(
+    os.getenv("DATABASE_URL", ""), os.getenv("WT_ENV", os.getenv("WT_AUTH_ENV", "development"))
+)
 
 from services.communication_service import communication_service
 from services.document_parser import build_email_context

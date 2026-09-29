@@ -3,31 +3,27 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
-
-from dotenv import load_dotenv
+from urllib.parse import urlsplit
 
 from alembic import context
-from sqlalchemy import inspect, pool, text
+from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from models.async_models import Base
 import models.operational_models  # noqa: F401 - register shared operational tables
+from services.alembic_safety import is_read_only_alembic_command, validate_alembic_target
+from services.database_safety import resolve_database_url
 
 config = context.config
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-database_url = os.getenv("DATABASE_URL", "").strip()
-if database_url:
-    if database_url.startswith("postgresql://"):
-        database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
+database_url = resolve_database_url(Path(__file__).resolve().parents[1] / ".env.local")
+if not database_url:
+    raise RuntimeError("Set DATABASE_URL in the process environment; Alembic does not load .env.")
+if database_url.startswith("postgresql://"):
+    database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+elif database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql+asyncpg://", 1)
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 target_metadata = Base.metadata
-
-
-def _widen_existing_version_table(connection) -> None:
-    if connection.dialect.name != "postgresql":
-        return
-    if inspect(connection).has_table("alembic_version"):
-        connection.execute(text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"))
 
 
 def run_migrations_offline() -> None:
@@ -43,20 +39,24 @@ def run_migrations_offline() -> None:
 
 
 async def run_migrations_online() -> None:
+    command = getattr(getattr(config, "cmd_opts", None), "cmd", None)
+    validate_alembic_target(command, database_url)
     connectable = async_engine_from_config(config.get_section(config.config_ini_section, {}), prefix="sqlalchemy.", poolclass=pool.NullPool)
-    async with connectable.connect() as connection:
-        await connection.run_sync(_widen_existing_version_table)
-        await connection.commit()
-        await connection.run_sync(
-            lambda sync_connection: context.configure(
-                connection=sync_connection,
-                target_metadata=target_metadata,
-                version_table_column_length=255,
-            )
-        )
-        async with connection.begin():
-            await connection.run_sync(lambda _: context.run_migrations())
-    await connectable.dispose()
+    try:
+        async with connectable.connect() as connection:
+            async with connection.begin():
+                if is_read_only_alembic_command(command) and connection.dialect.name == "postgresql":
+                    await connection.exec_driver_sql("SET TRANSACTION READ ONLY")
+                await connection.run_sync(
+                    lambda sync_connection: context.configure(
+                        connection=sync_connection,
+                        target_metadata=target_metadata,
+                        version_table_column_length=255,
+                    )
+                )
+                await connection.run_sync(lambda _: context.run_migrations())
+    finally:
+        await connectable.dispose()
 
 
 if context.is_offline_mode():
