@@ -3,6 +3,19 @@ import { seedSession } from './helpers/session';
 
 test('procurement interface supports supplier-matching workflow', async ({ page }) => {
   await seedSession(page, 'internal');
+  await page.route('**/api/rfqs', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([{ id: 'WT-SOURCING-1', customer_name: 'Sourcing Test', customer_email: 'sourcing@example.com', status: 'Supplier_Sourcing', part_number: 'PN-SOURCING-1', raw_text: 'Need one part', created_at: new Date().toISOString() }]),
+  }));
+  await page.route('**/api/supplier-offers**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([
+      { id: 'OFFER-1', rfq_item_id: 'ITEM-1', supplier_name: 'SUPPLIER A', part_number: 'PN-SOURCING-1', unit_cost: 1200, quantity_available: 4, lead_time_days: 2, certificate_type: 'FAA 8130-3', condition: 'NE' },
+      { id: 'OFFER-2', rfq_item_id: 'ITEM-1', supplier_name: 'SUPPLIER B', part_number: 'PN-SOURCING-1', unit_cost: 1300, quantity_available: 3, lead_time_days: 3, certificate_type: 'CoC', condition: 'NE' },
+    ]),
+  }));
   await page.goto('/');
 
   await page.locator('aside button').filter({ hasText: 'Proc Command' }).first().click();

@@ -10,8 +10,8 @@ test.describe('internal command center shell', () => {
     await expect(logo).toBeVisible();
     await expect(page.getByRole('link', { name: 'Winged Tycoons Executive Dashboard' })).toHaveAttribute('href', '/');
 
-    await page.getByRole('button', { name: 'AGENT LOGS' }).click();
-    await expect(page.getByText('MULTI-AGENT REASONING TIMELINE')).toBeVisible();
+    await page.getByRole('button', { name: 'Open notifications and agent activity' }).click();
+    await expect(page.getByRole('heading', { name: 'AGENT ACTIVITY LOG' })).toBeVisible();
   });
 
   test('keeps navigation usable at tablet width', async ({ page }) => {
@@ -20,6 +20,7 @@ test.describe('internal command center shell', () => {
     await page.goto('/');
 
     await expect(page.getByAltText('Winged Tycoons Logo')).toBeVisible();
+    await page.getByRole('button', { name: 'Open navigation menu' }).click();
     await page.getByRole('button', { name: /Sales Command/ }).click();
     await expect(page.getByText('GLOBAL RFQ INBOX')).toBeVisible();
   });

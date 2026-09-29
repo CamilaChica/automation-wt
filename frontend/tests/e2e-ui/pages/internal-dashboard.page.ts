@@ -18,7 +18,7 @@ export class InternalDashboardPage {
   }
 
   async openAuditFeed() {
-    await this.page.getByRole('button', { name: 'AGENT LOGS' }).click();
-    await expect(this.page.getByText('MULTI-AGENT REASONING TIMELINE')).toBeVisible();
+    await this.page.getByRole('button', { name: 'Open notifications and agent activity' }).click();
+    await expect(this.page.getByRole('heading', { name: 'AGENT ACTIVITY LOG' })).toBeVisible();
   }
 }

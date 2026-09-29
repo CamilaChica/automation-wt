@@ -7,12 +7,14 @@ test('admin interface audits logs and triggers hard freeze', async ({ page }) =>
   await page.route('**/api/internal/rfqs/*/trace-decision', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ decision: 'freeze', automation_paused: true }) }));
   await page.goto('/');
 
-  await page.getByRole('button', { name: 'AGENT LOGS' }).click();
-  await expect(page.getByText('RFQIntakeAgent')).toBeVisible();
-  await page.locator('div.fixed.inset-0.z-50 button').first().click();
+  await page.getByRole('button', { name: 'Open notifications and agent activity' }).click();
+  await expect(page.getByRole('heading', { name: 'AGENT ACTIVITY LOG' })).toBeVisible();
+  await expect(page.getByText(/Milo · RFQ Intake/)).toBeVisible();
+  await page.getByRole('button', { name: 'Close audit log' }).click();
 
   await page.locator('aside button').filter({ hasText: 'Trace Vault' }).first().click();
   await expect(page.getByText('DOCUMENT REVIEW & VERIFICATION TERMINAL')).toBeVisible();
+  page.on('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: 'HARD FREEZE ORDER' }).click();
 
   await expect(page.getByText(/Trace decision freeze recorded|Order hard freeze active/).first()).toBeVisible();

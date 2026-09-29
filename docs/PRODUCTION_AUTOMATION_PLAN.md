@@ -4,7 +4,7 @@
 
 This is the single source of truth for pending delivery work. Other documentation may describe APIs, architecture, test evidence, or safe operating procedures, but must not maintain a second release checklist. Record only sanitized evidence here; never include credentials, tokens, connection strings, or customer data.
 
-**Already verified, not pending:** the canonical Render database reports Alembic revision `0009_prompt_rag_storage`; do not repeat production migration or seed steps. A fresh disposable PostgreSQL database completed migration lifecycle and clean schema parity checks. Four live local PostgreSQL workflow tests and the isolated backend suite passed. Production readiness has not passed. The existing backup export is incomplete, the local PostgreSQL test database has schema drift, and local Playwright still reports 13 failures.
+**Already verified, not pending:** the canonical Render database reports Alembic revision `0009_prompt_rag_storage`; do not repeat production migration or seed steps. A fresh disposable PostgreSQL database completed migration lifecycle and clean schema parity checks. Four live local PostgreSQL workflow tests and the isolated backend suite passed. The current local frontend run passed 93 E2E tests with 2 skipped, and the mobile responsiveness diagnostic passed all 54 checks. These mocked/local results are not staging evidence. Production readiness has not passed. The existing backup export is incomplete, and the local PostgreSQL test database has schema drift.
 
 ## 1. Secure and Stabilize Production
 
@@ -44,7 +44,8 @@ This is the single source of truth for pending delivery work. Other documentatio
 ## 6. Complete Launch-Scope Product and Frontend Work
 
 - [ ] Confirm the production customer frontend is `apps/web` and align release/browser tests with it; keep `frontend/` as the internal command center unless an internal deployment is explicitly approved.
-- [ ] Resolve the local Playwright failures (last recorded: 63 passed, 13 failed, 2 skipped) and rerun the relevant frontend build, unit, mobile, and browser checks on the pinned candidate.
+- [x] Resolve the existing local Playwright failures. Latest full configured E2E run: 93 passed, 2 skipped, 0 failed; the mobile responsiveness diagnostic passed 54 checks. These results were produced locally with mocked API routes.
+- [ ] Pin the release candidate and rerun the frontend build, unit, mobile, and browser checks against that exact commit; then run the separately required staging and customer-acceptance gates below.
 - [x] Implement and locally test the existing API-backed internal workflows: quote rejection with comments; purchasing PO review; role-restricted inventory/supplier views; freight quoting; RFQ pause/resume; extraction-review queue; LLM health/telemetry; role-aware mailbox inbox/send; shipment creation, events, tracking, and SMS. These changes are in the internal `frontend/` command center, not the production customer frontend in `apps/web`; mocked/local test evidence does not replace staging or customer acceptance.
 - [x] Define and implement a safe, auditable reset for `Intake_Failed` RFQs. Admin/manager reset requires an audited reason, returns the RFQ to `Intake`, and never processes it implicitly; the operator must invoke Process separately. `NEEDS_HUMAN_REVIEW` cannot use this reset and must be resolved through its review queue.
 - [ ] Decide whether launch requires a quote collection endpoint, shipment-by-ID endpoint, multi-stage fulfillment milestones, compliance-evidence reads, historical KPIs, carrier maps, or a notification feed. Add backend contracts before building UI against unavailable data; otherwise defer those features.

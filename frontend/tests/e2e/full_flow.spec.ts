@@ -55,7 +55,7 @@ test('zero-human-in-the-loop autonomous flow across all interfaces', async ({ pa
   await seedSession(page, 'customer');
   await page.goto('/customer-portal');
   await expect(page.getByText('Customer parts portal')).toBeVisible();
-  const quoteForm = page.getByRole('form', { name: 'Request a quote form' });
+  const quoteForm = page.getByRole('form', { name: 'Request a quote' });
 
   await page.getByPlaceholder('e.g., Global Airlines').fill('Global Airlines');
   await quoteForm.getByPlaceholder('e.g., buyer@airline.com').fill('mro.ops@globalairlines.com');
@@ -82,6 +82,7 @@ test('zero-human-in-the-loop autonomous flow across all interfaces', async ({ pa
   await page.goto('/');
 
   await page.locator('aside button').filter({ hasText: 'Sales Command' }).first().click();
+  page.on('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: 'ISSUE QUOTE' }).click();
   await expect(page.getByText(/issued to Global Airlines/i)).toBeVisible();
 

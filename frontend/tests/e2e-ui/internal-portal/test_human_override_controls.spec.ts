@@ -14,6 +14,7 @@ test('approves a quote with an explicit override payload', async ({ page }) => {
   await seedInternalSession(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Sales Command' }).click();
+  page.on('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: 'ISSUE QUOTE' }).click();
 
   await expect(page.getByText(/issued to Global Airlines/i)).toBeVisible();

@@ -20,6 +20,6 @@ test.describe('internal branding and navigation', () => {
     const dashboard = new InternalDashboardPage(page);
     await dashboard.open();
     await expect(page.getByAltText('Winged Tycoons Logo')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'AGENT LOGS' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Open notifications and agent activity' })).toBeVisible();
   });
 });

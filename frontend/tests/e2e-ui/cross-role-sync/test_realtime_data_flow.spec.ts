@@ -13,13 +13,14 @@ test('customer submission is visible to staff through shared API state', async (
   await customerPage.route('**/api/catalog/search**', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
   await customerPage.route('**/api/rfqs/intake', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ rfq_id: internalRfq.id, status: internalRfq.status, message: 'RFQ received' }) }));
   await customerPage.goto('/customer-portal');
-  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByPlaceholder('e.g., Global Airlines').fill('Global Airlines');
-  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByPlaceholder('e.g., buyer@airline.com').fill('buyer@example.com');
-  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByPlaceholder('e.g., BACB30LU-4').fill('XYZ123');
-  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByLabel('Quantity', { exact: true }).fill('2');
-  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByLabel('Target condition').selectOption('NE');
-  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByLabel(/I confirm this request/).check();
-  await customerPage.getByRole('form', { name: 'Request a quote form' }).getByRole('button', { name: 'Send request' }).click();
+  const quoteForm = customerPage.getByRole('form', { name: 'Request a quote' });
+  await quoteForm.getByPlaceholder('e.g., Global Airlines').fill('Global Airlines');
+  await quoteForm.getByPlaceholder('e.g., buyer@airline.com').fill('buyer@example.com');
+  await quoteForm.getByPlaceholder('e.g., BACB30LU-4').fill('XYZ123');
+  await quoteForm.getByLabel('Quantity', { exact: true }).fill('2');
+  await quoteForm.getByLabel('Target condition').selectOption('NE');
+  await quoteForm.getByLabel(/I confirm this request/).check();
+  await quoteForm.getByRole('button', { name: 'Send request' }).click();
 
   await staffPage.route('**/api/rfqs', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([internalRfq]) }));
   await staffPage.route(`**/api/rfqs/${internalRfq.id}`, route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(internalRfqDetail) }));

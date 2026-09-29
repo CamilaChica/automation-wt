@@ -34,7 +34,7 @@ test('customer uploads parts list and submits urgent request', async ({ page }) 
   await seedSession(page, 'customer');
   await page.goto('/customer-portal');
   await expect(page.getByText('Customer parts portal')).toBeVisible();
-  const quoteForm = page.getByRole('form', { name: 'Request a quote form' });
+  const quoteForm = page.getByRole('form', { name: 'Request a quote' });
   await page.getByPlaceholder('e.g., Global Airlines').fill('Delta MRO Services');
   await quoteForm.getByPlaceholder('e.g., buyer@airline.com').fill('procurement@delta-mro.com');
   await quoteForm.getByPlaceholder('e.g., BACB30LU-4').fill('AOG-9981');

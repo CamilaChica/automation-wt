@@ -9,12 +9,12 @@ test('renders automation event data in the audit drawer without refresh', async 
   await page.route('**/api/internal/automation-events**', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(eventFeed) }));
   await seedInternalSession(page);
   await page.goto('/');
-  await page.getByRole('button', { name: 'AGENT LOGS' }).click();
+  await page.getByRole('button', { name: 'Open notifications and agent activity' }).click();
   await expect(page.getByText('Demand risk LOW')).toBeVisible();
 
   eventFeed = [{ ...automationEvent, status: 'FAILED', error: 'Provider timeout', result: undefined }];
   await page.waitForTimeout(100);
   await page.reload();
-  await page.getByRole('button', { name: 'AGENT LOGS' }).click();
+  await page.getByRole('button', { name: 'Open notifications and agent activity' }).click();
   await expect(page.getByText('Provider timeout')).toBeVisible();
 });
