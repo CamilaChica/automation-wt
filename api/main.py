@@ -30,7 +30,7 @@ from config.env_check import validate_production_environment
 validate_production_environment()
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from models.db_models import RFQ, RFQItem, Quote, QuoteItem, AgentAuditLog, Supplier
+from models.db_models import InventoryItem, RFQ, RFQItem, Quote, QuoteItem, AgentAuditLog, Supplier
 from services.db_service import db_service
 from services.orchestration_service import (
     ReviewDecisionConflict,
@@ -1110,11 +1110,23 @@ async def get_rfq_detail(
     if async_repositories is None:
         items = db_service.get_rfq_items(rfq_id)
         quote = db_service.get_quote_by_rfq(rfq_id)
+        quote_items = db_service.get_quote_items(quote.id) if quote else []
     else:
-        item_records = await async_repositories.rfq.list_operational_records("rfq_items")
-        items = [RFQItem.model_validate(value) for value in item_records.values() if value.get("rfq_id") == rfq_id]
-        quote_records = await async_repositories.quote.list_operational_records("quotes")
-        quote = next((Quote.model_validate(value) for value in quote_records.values() if value.get("rfq_id") == rfq_id), None)
+        item_records = await async_repositories.records.list_by_payload_value(
+            "rfq_items", "rfq_id", rfq_id
+        )
+        items = [RFQItem.model_validate(value) for value in item_records.values()]
+        quote_records = await async_repositories.records.list_by_payload_value(
+            "quotes", "rfq_id", rfq_id
+        )
+        quote = next((Quote.model_validate(value) for value in quote_records.values()), None)
+        quote_item_records = (
+            await async_repositories.records.list_by_payload_value(
+                "quote_items", "quote_id", quote.id
+            )
+            if quote else {}
+        )
+        quote_items = [QuoteItem.model_validate(value) for value in quote_item_records.values()]
 
     if user["role"] == "ROLE_CUSTOMER":
         quote_details = None
@@ -1136,10 +1148,7 @@ async def get_rfq_detail(
                         certificate_type=item.certificate_type,
                         compliance_status=item.compliance_status,
                     )
-                    for item in (
-                        db_service.get_quote_items(quote.id) if async_repositories is None else
-                        [QuoteItem.model_validate(value) for value in (await async_repositories.quote.list_operational_records("quote_items")).values() if value.get("quote_id") == quote.id]
-                    )
+                    for item in quote_items
                 ],
             )
         return CustomerRFQDetail(rfq=rfq, items=items, quote_details=quote_details)
@@ -1147,15 +1156,14 @@ async def get_rfq_detail(
     if user["role"] not in ("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"):
         raise HTTPException(status_code=403, detail="Insufficient permissions.")
 
-    logs = db_service.get_audit_logs(rfq_id)
+    logs = (
+        db_service.get_audit_logs(rfq_id)
+        if async_repositories is None
+        else await db_service.get_audit_logs_async(async_repositories, rfq_id)
+    )
     
     quote_details = None
     if quote:
-        quote_items = db_service.get_quote_items(quote.id) if async_repositories is None else [
-            QuoteItem.model_validate(value)
-            for value in (await async_repositories.quote.list_operational_records("quote_items")).values()
-            if value.get("quote_id") == quote.id
-        ]
         quote_details = {
             "quote": quote,
             "items": quote_items
@@ -1332,11 +1340,21 @@ async def approve_purchase_order(
     return {"status": "Purchase_Order_Received", "quote_id": quote_id, "rfq_id": rfq.id}
 
 @app.get("/api/shipments/track/{public_token}")
-async def track_shipment(public_token: str):
+async def track_shipment(public_token: str, session=Depends(get_async_db)):
     """Return customer-safe shipment status using an opaque tracking token."""
-    shipment = db_service.get_shipment_by_token(public_token)
+    repositories = create_operational_repositories(session) if session is not None else None
+    shipment = (
+        db_service.get_shipment_by_token(public_token)
+        if repositories is None
+        else await db_service.get_shipment_by_token_async(repositories, public_token)
+    )
     if not shipment:
         raise HTTPException(status_code=404, detail="Shipment not found.")
+    events = (
+        db_service.get_shipment_events(shipment.id)
+        if repositories is None
+        else await db_service.get_shipment_events_async(repositories, shipment.id)
+    )
     return {
         "shipment_id": shipment.id,
         "status": shipment.status,
@@ -1345,7 +1363,7 @@ async def track_shipment(public_token: str):
         "carrier": shipment.carrier,
         "tracking_number": shipment.tracking_number,
         "estimated_delivery": shipment.estimated_delivery,
-        "events": [event.model_dump(mode="json") for event in db_service.get_shipment_events(shipment.id)],
+        "events": [event.model_dump(mode="json") for event in events],
     }
 
 @app.post("/api/internal/shipments")
@@ -1381,8 +1399,11 @@ async def create_shipment(
 @app.get("/api/internal/shipments")
 async def list_shipments(
     _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+    session=Depends(get_async_db),
 ):
-    return db_service.list_shipments()
+    if session is None:
+        return db_service.list_shipments()
+    return await db_service.list_shipments_async(create_operational_repositories(session))
 
 @app.post("/api/internal/shipments/{shipment_id}/events")
 async def add_shipment_event(
@@ -1476,7 +1497,12 @@ async def carrier_webhook(request: Request):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 @app.get("/api/catalog/search", response_model=List[CatalogItem])
-async def search_catalog(query: str = "", condition: Optional[str] = None, _user: dict = Depends(require_roles("ROLE_CUSTOMER", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"))):
+async def search_catalog(
+    query: str = "",
+    condition: Optional[str] = None,
+    _user: dict = Depends(require_roles("ROLE_CUSTOMER", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
+    session=Depends(get_async_db),
+):
     """Public, customer-safe catalog availability search.
 
     Deliberately omits internal costs, serial numbers, and warehouse locations.
@@ -1490,7 +1516,19 @@ async def search_catalog(query: str = "", condition: Optional[str] = None, _user
         raise HTTPException(status_code=400, detail="Condition must be NE, FN, NS, OH, SVC, RP, AR, or IN.")
     results = []
     seen_parts: set[tuple[str, str]] = set()
-    for item in db_service.inventory.values():
+    if session is None:
+        inventory_items = list(db_service.inventory.values())
+        supplier_offers = (
+            operations_store.search_supplier_offers(query, normalized_condition or None)
+            if operations_store.storage_engine == "postgresql"
+            else supplier_db.search_supplier_offers(query, normalized_condition or None)
+        )
+    else:
+        repositories = create_operational_repositories(session)
+        inventory_records = await repositories.records.list("inventory")
+        inventory_items = [InventoryItem.model_validate(value) for value in inventory_records.values()]
+        supplier_offers = await repositories.supplier.search_offers(query, normalized_condition or None)
+    for item in inventory_items:
         if normalized_query and normalized_query not in item.part_number.lower():
             continue
         if normalized_condition and item.condition_code.upper() != normalized_condition:
@@ -1526,15 +1564,11 @@ async def search_catalog(query: str = "", condition: Optional[str] = None, _user
                 ))
         except Exception:
             logger.exception("postgres_catalog_search_failed")
-    supplier_offers = (
-        operations_store.search_supplier_offers(query, normalized_condition or None)
-        if operations_store.storage_engine == "postgresql"
-        else supplier_db.search_supplier_offers(query, normalized_condition or None)
-    )
     for offer in supplier_offers:
         key = (str(offer.get("part_number", "")).upper(), str(offer.get("condition_code") or "NE").upper())
         if key in seen_parts:
             continue
+        seen_parts.add(key)
         results.append(CatalogItem(
             part_number=key[0],
             condition_code=key[1],
@@ -1545,22 +1579,34 @@ async def search_catalog(query: str = "", condition: Optional[str] = None, _user
     return results
 
 @app.get("/api/inventory")
-async def get_inventory(_user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING"))):
+async def get_inventory(
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+    session=Depends(get_async_db),
+):
     """
     Fetch mock internal stock inventory.
     """
-    return list(db_service.inventory.values())
+    if session is None:
+        return list(db_service.inventory.values())
+    records = await create_operational_repositories(session).records.list("inventory")
+    return [InventoryItem.model_validate(payload) for payload in records.values()]
 
 @app.get("/api/suppliers", response_model=List[Supplier])
-async def list_suppliers(_user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING"))):
+async def list_suppliers(
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+    session=Depends(get_async_db),
+):
     """
     Returns the full supplier directory with contact information.
     """
-    rows = (
-        operations_store.list_suppliers()
-        if operations_store.storage_engine == "postgresql"
-        else supplier_db.list_suppliers()
-    )
+    if session is None:
+        rows = (
+            operations_store.list_suppliers()
+            if operations_store.storage_engine == "postgresql"
+            else supplier_db.list_suppliers()
+        )
+    else:
+        rows = await create_operational_repositories(session).supplier.list_suppliers()
     return [
         Supplier(
             id=row["id"],
@@ -1568,6 +1614,11 @@ async def list_suppliers(_user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE
             contact_name=row["company_name"],
             phone=row["phone"] or "",
             email=row["email"] or "",
+            address_line1="",
+            city="",
+            state_province="",
+            postal_code="",
+            country="US",
             approval_status=row["approval_status"],
             itar_certified=bool(row.get("itar_certified", 0)),
             account_manager=None,
@@ -1579,21 +1630,30 @@ async def list_suppliers(_user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE
 async def list_supplier_offers(
     part_number: str = "",
     _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING", "ROLE_SALES")),
+    session=Depends(get_async_db),
 ):
     if not part_number.strip():
         return []
-    return (
-        operations_store.get_supplier_offers(part_number.strip().upper(), quantity_needed=1)
-        if operations_store.storage_engine == "postgresql"
-        else supplier_db.find_supplier_offers(part_number.strip().upper(), quantity_needed=1)
-    )
+    if session is not None:
+        return await create_operational_repositories(session).supplier.offers_for_part(
+            part_number.strip().upper(), quantity_needed=1
+        )
+    return operations_store.get_supplier_offers(part_number.strip().upper(), quantity_needed=1) if operations_store.storage_engine == "postgresql" else supplier_db.find_supplier_offers(part_number.strip().upper(), quantity_needed=1)
 
 @app.get("/api/suppliers/{supplier_id}", response_model=Supplier)
-async def get_supplier(supplier_id: str, _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING"))):
+async def get_supplier(
+    supplier_id: str,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+    session=Depends(get_async_db),
+):
     """
     Returns a single supplier's full contact and compliance profile.
     """
-    supplier = db_service.suppliers.get(supplier_id)
+    if session is None:
+        supplier = db_service.suppliers.get(supplier_id)
+    else:
+        profile = await create_operational_repositories(session).supplier.get_profile(supplier_id)
+        supplier = Supplier.model_validate(profile) if profile else None
     if not supplier:
         raise HTTPException(status_code=404, detail=f"Supplier '{supplier_id}' not found.")
     return supplier

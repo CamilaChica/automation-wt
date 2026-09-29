@@ -185,7 +185,13 @@ def test_outbox_retries_throttling_and_server_errors_but_quarantines_timeouts(mo
 
 
 def test_reconciliation_maps_legacy_ids_stably_and_conflict_policy_preserves_target():
-    from scripts.reconcile_sqlite_to_postgres import assert_apply_has_complete_source, reconciliation_warnings, target_rows
+    from scripts.reconcile_sqlite_to_postgres import (
+        assert_apply_has_complete_source,
+        assert_reconciliation_safe,
+        assert_disposition_approval,
+        reconciliation_warnings,
+        target_rows,
+    )
 
     source = {
         "customers": [],
@@ -202,11 +208,14 @@ def test_reconciliation_maps_legacy_ids_stably_and_conflict_policy_preserves_tar
         ], "communications": [], "inbound_emails": [], "communication_tasks": [],
         "snapshot_inventory": [], "snapshot_shipments": [], "snapshot_shipment_events": [],
     }
-    first = target_rows(source)
-    second = target_rows(source)
+    target_supplier = [{"id": "SUP-TARGET", "email": "supplier@example.test"}]
+    first = target_rows(source, target_suppliers=target_supplier)
+    second = target_rows(source, target_suppliers=target_supplier)
 
     assert first["supplier_parts"][0]["id"] == second["supplier_parts"][0]["id"]
-    assert first["supplier_parts"][0]["supplier_id"] == "SUP-1"
+    assert first["supplier_parts"][0]["supplier_id"] == "SUP-TARGET"
+    assert not any(row["id"] == "SUP-TARGET" for row in first["suppliers"])
+    assert first["quarantine_supplier_profiles"][0]["matched_supplier_id"] == "SUP-TARGET"
     assert len({row["id"] for row in first["audit_events"]}) == 2
     records = {(row["domain"], row["record_id"]): row["payload"] for row in first["operational_records"]}
     assert {"suppliers", "rfqs", "rfq_items", "quotes"} <= {domain for domain, _record_id in records}
@@ -217,7 +226,12 @@ def test_reconciliation_maps_legacy_ids_stably_and_conflict_policy_preserves_tar
     assert any(item["table"] == "suppliers" and item["severity"] == "review" for item in warnings)
     assert records[("rfqs", "RFQ-NORMALIZED")]["status"] == "Pending_Internal_Review"
     assert records[("quotes", "QUOTE-NORMALIZED")]["status"] == "Pending_Internal_Review"
-    assert ("quote_items", "QI-NORMALIZED") not in records
+    incomplete_item = records[("quote_items", "QI-NORMALIZED")]
+    assert incomplete_item["source"] == "Legacy"
+    assert incomplete_item["unit_cost"] == 0.0
+    assert incomplete_item["margin_percent"] == 0.0
+    assert incomplete_item["compliance_status"] == "Needs_Review"
+    assert incomplete_item["reconciliation_review_required"] is True
     assert len(first["operator_review_queue"]) == 2
     try:
         assert_apply_has_complete_source([{"severity": "blocking", "table": "unknown", "count": 1}])
@@ -225,4 +239,139 @@ def test_reconciliation_maps_legacy_ids_stably_and_conflict_policy_preserves_tar
         assert "incomplete source data" in str(exc)
     else:
         raise AssertionError("Incomplete quote data must prevent reconciliation apply")
-    assert "on_conflict_do_nothing" in Path("scripts/reconcile_sqlite_to_postgres.py").read_text(encoding="utf-8")
+    assert_reconciliation_safe(target_key_collisions=0, schema_truncations=0, foreign_key_violations=0)
+    for failures in (
+        {"target_key_collisions": 1, "schema_truncations": 0, "foreign_key_violations": 0},
+        {"target_key_collisions": 0, "schema_truncations": 1, "foreign_key_violations": 0},
+        {"target_key_collisions": 0, "schema_truncations": 0, "foreign_key_violations": 1},
+    ):
+        try:
+            assert_reconciliation_safe(**failures)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(f"Unsafe reconciliation was allowed: {failures}")
+    review_warnings = [{"severity": "review", "table": "suppliers", "count": 1}]
+    for approved, reference in ((False, "REL-123"), (True, ""), (True, "secret value")):
+        try:
+            assert_disposition_approval(
+                review_warnings, approved=approved, approval_reference=reference
+            )
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Review-bearing apply must require explicit approval and a sanitized reference")
+    assert_disposition_approval(
+        review_warnings, approved=True, approval_reference="REL-123"
+    )
+
+
+def test_reconciliation_quarantines_orphan_quote_items_and_skips_exact_duplicates():
+    from scripts.reconcile_sqlite_to_postgres import target_rows
+
+    source = {
+        "customers": [],
+        "rfqs": [{"id": "RFQ-VALID", "customer_email": "buyer@example.test", "customer_name": "Buyer"}],
+        "snapshot_rfqs": [], "rfq_items": [], "snapshot_rfq_items": [],
+        "customer_quotes": [
+            {"id": "QUOTE-VALID", "rfq_id": "RFQ-VALID", "total_amount": 20},
+            {"id": "QUOTE-ORPHAN", "rfq_id": "RFQ-MISSING", "total_amount": 10},
+        ],
+        "snapshot_quotes": [], "snapshot_quote_items": [],
+        "customer_quote_items": [
+            {"id": "QI-1", "quote_id": "QUOTE-VALID", "part_number": "PN-1", "description": "Part", "quantity": 1, "unit_price": 20},
+            {"id": "QI-2", "quote_id": "QUOTE-VALID", "part_number": "PN-1", "description": "Part", "quantity": 1, "unit_price": 20},
+            {"id": "QI-3", "quote_id": "QUOTE-VALID", "part_number": "PN-1", "description": "Part", "quantity": 1, "unit_price": 20, "details": {"unit_cost": 12}},
+            {"id": "QI-ORPHAN", "quote_id": "QUOTE-ORPHAN", "part_number": "PN-2", "quantity": 1, "unit_price": 10},
+        ],
+        "suppliers": [], "snapshot_suppliers": [], "supplier_parts": [],
+        "snapshot_audit_logs": [], "communications": [], "inbound_emails": [],
+        "communication_tasks": [], "snapshot_inventory": [], "snapshot_shipments": [],
+        "snapshot_shipment_events": [],
+    }
+
+    mapped = target_rows(source)
+    records = {(row["domain"], row["record_id"]): row["payload"] for row in mapped["operational_records"]}
+
+    assert ("quote_items", "QI-1") in records
+    assert ("quote_items", "QI-2") not in records
+    assert ("quote_items", "QI-3") in records
+    assert len(mapped["quarantine_quote_items"]) == 1
+    assert mapped["quarantine_quote_items"][0]["source_id"] == "QI-ORPHAN"
+    assert mapped["quarantine_quote_items"][0]["is_active"] is False
+    assert mapped["_reconciliation"]["skipped_duplicate_line_items"] == 1
+
+
+def test_reconciliation_supplier_match_preserves_target_and_quarantines_unmatched_offer():
+    from scripts.reconcile_sqlite_to_postgres import target_rows
+
+    source = {
+        "customers": [], "rfqs": [], "snapshot_rfqs": [], "rfq_items": [], "snapshot_rfq_items": [],
+        "customer_quotes": [], "snapshot_quotes": [], "customer_quote_items": [], "snapshot_quote_items": [],
+        "suppliers": [{"id": "SUP-MATCH", "company_name": "Supplier", "email": "quotes@acme.example", "tax_id": "12-345"}],
+        "snapshot_suppliers": [{"id": "SUP-MATCH", "company_name": "Supplier", "email": "quotes@acme.example", "tax_id": "12-345", "contact_name": "Buyer", "address_line1": "1 Main"}],
+        "supplier_parts": [{"id": "PART-1", "supplier_id": "SUP-MATCH", "supplier_name": "Supplier", "supplier_email": "quotes@acme.example", "part_number": "PN-1"},
+                           {"id": "PART-2", "supplier_id": "SUP-UNKNOWN", "supplier_name": "Unknown", "supplier_email": "unknown@vendor.example", "part_number": "PN-2"}],
+        "snapshot_audit_logs": [], "communications": [], "inbound_emails": [], "communication_tasks": [],
+        "snapshot_inventory": [], "snapshot_shipments": [], "snapshot_shipment_events": [],
+    }
+
+    mapped = target_rows(source, target_suppliers=[{"id": "LIVE-SUP", "email": "ap@acme.example", "tax_id": "12345"}])
+    supplier_records = {(row["domain"], row["record_id"]) for row in mapped["operational_records"] if row["domain"] == "suppliers"}
+
+    assert not any(row["id"] == "LIVE-SUP" for row in mapped["suppliers"])
+    assert ("suppliers", "LIVE-SUP") not in supplier_records
+    assert mapped["supplier_parts"][0]["supplier_id"] == "LIVE-SUP"
+    assert len(mapped["quarantine_supplier_profiles"]) == 1
+    quarantine = mapped["quarantine_supplier_profiles"][0]
+    assert quarantine["source_id"] == "SUP-UNKNOWN"
+    assert quarantine["is_active"] is False
+    assert quarantine["payload"]["related_supplier_parts"][0]["id"] == "PART-2"
+
+
+def test_reconciliation_preflight_reports_schema_collisions_and_foreign_keys():
+    from sqlalchemy import MetaData, create_engine, text
+
+    from scripts.reconcile_sqlite_to_postgres import (
+        foreign_key_violations,
+        schema_truncation_warnings,
+        target_key_collisions,
+    )
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE parents (id VARCHAR(4) PRIMARY KEY)"))
+        connection.execute(text("INSERT INTO parents (id) VALUES ('P1')"))
+        connection.execute(text("CREATE TABLE children (id VARCHAR(8) PRIMARY KEY, parent_id VARCHAR(4) REFERENCES parents(id))"))
+        metadata = MetaData()
+        rows = {
+            "parents": [{"id": "P1"}, {"id": "PARENT-LONG", "unmapped": "value"}],
+            "children": [{"id": "C1", "parent_id": "MISSING"}],
+        }
+
+        assert len(schema_truncation_warnings(connection, metadata, rows)) == 3
+        assert sum(item["count"] for item in target_key_collisions(connection, metadata, rows)) == 1
+        assert sum(item["count"] for item in foreign_key_violations(connection, metadata, rows)) == 1
+    engine.dispose()
+
+
+def test_reconciliation_dry_run_transaction_rolls_back_and_apply_commits():
+    from scripts.reconcile_sqlite_to_postgres import finish_transaction
+
+    class Transaction:
+        committed = False
+        rolled_back = False
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            self.rolled_back = True
+
+    dry_run = Transaction()
+    apply = Transaction()
+
+    assert finish_transaction(dry_run, apply=False) == "rolled_back"
+    assert dry_run.rolled_back and not dry_run.committed
+    assert finish_transaction(apply, apply=True) == "committed"
+    assert apply.committed and not apply.rolled_back

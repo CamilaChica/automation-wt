@@ -7,8 +7,10 @@ selected backup and confirming DATABASE_URL points at the intended target.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -19,6 +21,7 @@ from typing import Any
 
 from sqlalchemy import MetaData, Table, create_engine, inspect, select, text
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import IntegrityError
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKUP_ROOT = Path(os.getenv("SQLITE_BACKUP_DIR", str(ROOT / "backups")))
@@ -98,7 +101,81 @@ def _date(value: Any) -> Any:
     return value
 
 
-def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+def _line_item_signature(row: dict[str, Any]) -> str:
+    fields = (
+        "quote_id", "rfq_item_id", "part_number", "description", "quantity",
+        "condition", "certification", "unit_price", "lead_time", "attachments",
+    )
+    details = row.get("details") if isinstance(row.get("details"), dict) else row
+    signature = {key: row.get(key) for key in fields}
+    for key in ("source", "unit_cost", "margin_percent", "certificate_type", "compliance_status"):
+        if key in row or key in details:
+            signature[f"detail:{key}"] = details.get(key, row.get(key))
+    return json.dumps(signature, sort_keys=True, default=str)
+
+
+def _quarantine_id(prefix: str, source_id: Any, row: dict[str, Any]) -> str:
+    identity = str(source_id or json.dumps(row, sort_keys=True, default=str))
+    return f"{prefix}-{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:32].upper()}"
+
+
+def _tax_id(value: Any) -> str:
+    return "".join(character for character in str(value or "").upper() if character.isalnum())
+
+
+def _email_domain(value: Any) -> str:
+    email = str(value or "").strip().lower()
+    if "@" not in email:
+        return ""
+    domain = email.rsplit("@", 1)[1].strip().rstrip(".")
+    if domain in {
+        "gmail.com", "googlemail.com", "yahoo.com", "outlook.com", "hotmail.com",
+        "live.com", "icloud.com", "aol.com", "proton.me", "protonmail.com",
+    }:
+        return ""
+    return domain
+
+
+def match_supplier_ids(
+    source_suppliers: list[dict[str, Any]], target_suppliers: list[dict[str, Any]],
+) -> tuple[dict[str, str], set[str]]:
+    """Match source IDs only to unique tax-ID or corporate-domain identities."""
+    target_by_tax: dict[str, set[str]] = {}
+    target_by_domain: dict[str, set[str]] = {}
+    for target in target_suppliers:
+        target_id = str(target.get("id") or "")
+        tax_id = _tax_id(target.get("tax_id"))
+        domain = _email_domain(target.get("email"))
+        if target_id and tax_id:
+            target_by_tax.setdefault(tax_id, set()).add(target_id)
+        if target_id and domain:
+            target_by_domain.setdefault(domain, set()).add(target_id)
+
+    matches: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for source in source_suppliers:
+        source_id = str(source.get("id") or "")
+        tax_id = _tax_id(source.get("tax_id"))
+        domain = _email_domain(source.get("email"))
+        candidates = target_by_tax.get(tax_id, set()) if tax_id else set()
+        if len(candidates) == 1:
+            matches[source_id] = next(iter(candidates))
+        elif len(candidates) > 1:
+            ambiguous.add(source_id)
+            continue
+        elif domain:
+            candidates = target_by_domain.get(domain, set())
+            if len(candidates) == 1:
+                matches[source_id] = next(iter(candidates))
+            elif len(candidates) > 1:
+                ambiguous.add(source_id)
+    return matches, ambiguous
+
+
+def target_rows(
+    source: dict[str, list[dict[str, Any]]],
+    target_suppliers: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     customers: dict[str, dict[str, Any]] = {}
     for row in source["customers"]:
         customers[str(row["id"])] = {
@@ -137,14 +214,49 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
                           "quantity": int(row.get("quantity") or 1), "condition_code": row.get("condition_code") or row.get("condition_preference"), "details": details})
 
     snapshot_quote_item_ids = {str(row.get("id")) for row in source["snapshot_quote_items"] if row.get("id")}
+    source_quote_rows = source["customer_quotes"] + source["snapshot_quotes"]
+    source_quote_by_id = {str(row.get("id")): row for row in source_quote_rows if row.get("id")}
+    valid_rfq_ids = set(rfqs)
+    accepted_quote_item_rows: list[tuple[dict[str, Any], bool]] = []
+    quarantine_quote_items: list[dict[str, Any]] = []
+    line_item_signatures: set[str] = set()
+    skipped_duplicate_line_items = 0
+    # Prefer complete operational snapshots over normalized legacy rows.
+    for row, is_snapshot in [
+        *((row, True) for row in source["snapshot_quote_items"]),
+        *((row, False) for row in source["customer_quote_items"]),
+    ]:
+        signature = _line_item_signature(row)
+        if signature in line_item_signatures:
+            skipped_duplicate_line_items += 1
+            continue
+        line_item_signatures.add(signature)
+        quote_id = str(row.get("quote_id") or "")
+        parent_quote = source_quote_by_id.get(quote_id)
+        rfq_id = str(row.get("rfq_id") or (parent_quote or {}).get("rfq_id") or "")
+        if not parent_quote or not rfq_id or rfq_id not in valid_rfq_ids:
+            item_id = str(row.get("id") or _quarantine_id("QI", None, row))
+            quarantine_quote_items.append({
+                "id": _quarantine_id("QQI", item_id, row), "source_id": item_id,
+                "quote_id": quote_id or None, "rfq_id": rfq_id or None,
+                "payload": row,
+                "reason": "Quote item has no valid parent RFQ and is excluded from operational quote items.",
+                "is_active": False,
+            })
+            continue
+        accepted_quote_item_rows.append((row, is_snapshot))
+
+    accepted_customer_quote_items = [
+        row for row, is_snapshot in accepted_quote_item_rows if not is_snapshot
+    ]
     incomplete_quote_items = [
-        row for row in source["customer_quote_items"]
-        if str(row.get("id")) not in snapshot_quote_item_ids
+        row for row, _is_snapshot in accepted_quote_item_rows
+        if str(row.get("id") or "") not in snapshot_quote_item_ids
     ]
     incomplete_quote_ids = {str(row.get("quote_id")) for row in incomplete_quote_items if row.get("quote_id")}
 
     quotes_by_id: dict[str, dict[str, Any]] = {}
-    for row in source["customer_quotes"] + source["snapshot_quotes"]:
+    for row in source_quote_rows:
         quote_id = str(row["id"])
         original_status = row.get("status") or "Draft"
         quote_status = "Pending_Internal_Review" if quote_id in incomplete_quote_ids else original_status
@@ -157,9 +269,11 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
         if rfq_id in rfqs:
             rfqs[rfq_id]["reconciliation_original_status"] = rfqs[rfq_id]["status"]
             rfqs[rfq_id]["status"] = "Pending_Internal_Review"
+            rfqs[rfq_id]["automation_paused"] = True
+            rfqs[rfq_id]["pause_reason"] = "Legacy quote items require operator review."
 
     customer_quotes_by_id: dict[str, dict[str, Any]] = {}
-    for row in source["customer_quotes"] + source["snapshot_quotes"]:
+    for row in source_quote_rows:
         quote_id = str(row["id"])
         item_rows = [item for item in source["customer_quote_items"] if str(item.get("quote_id")) == quote_id]
         first_item = item_rows[0] if item_rows else {}
@@ -177,7 +291,7 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
         }
 
     customer_quote_items_by_id: dict[str, dict[str, Any]] = {}
-    for row in source["customer_quote_items"]:
+    for row in accepted_customer_quote_items:
         item_id = str(row["id"])
         attachments = row.get("attachments") or ""
         customer_quote_items_by_id[item_id] = {
@@ -191,13 +305,16 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
         }
 
     quote_items_by_id: dict[str, dict[str, Any]] = {}
-    for row in source["customer_quote_items"] + source["snapshot_quote_items"]:
-        item_id = str(row["id"])
+    for row, _is_snapshot in accepted_quote_item_rows:
+        item_id = str(row.get("id") or _quarantine_id("QI", None, row))
         quote_items_by_id[item_id] = {
             "id": item_id, "quote_id": str(row["quote_id"]),
             "part_number": row.get("part_number") or "UNKNOWN", "quantity": int(row.get("quantity") or 1),
             "unit_price": row.get("unit_price") or 0,
-            "details": {key: value for key, value in row.items() if key not in {"id", "quote_id", "part_number", "quantity", "unit_price"}},
+            "details": row.get("details") if isinstance(row.get("details"), dict) else {
+                key: value for key, value in row.items()
+                if key not in {"id", "quote_id", "part_number", "quantity", "unit_price"}
+            },
         }
 
     review_records: dict[str, dict[str, Any]] = {}
@@ -224,45 +341,87 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
             hold_flags=["source", "unit_cost", "margin_percent", "compliance_status"],
         )
 
-    suppliers: dict[str, dict[str, Any]] = {}
-    full_supplier_profile_ids = {str(row.get("id")) for row in source["snapshot_suppliers"] if row.get("id")}
-    suppliers_requiring_review: set[str] = set()
+    source_supplier_profiles: dict[str, dict[str, Any]] = {}
     for row in source["suppliers"]:
-        supplier_id = str(row["id"])
-        approval_status = row.get("approval_status") or "Pending"
-        if supplier_id not in full_supplier_profile_ids:
-            approval_status = "Pending_Internal_Review"
-            suppliers_requiring_review.add(supplier_id)
-            add_review(
-                f"sqlite-reconcile:supplier:{supplier_id}", entity_id=supplier_id, source_payload=row,
-                reason="Supplier registry row lacks a complete legacy contact/address profile.",
-                hold_flags=["contact_name", "phone", "address_line1", "city", "state_province", "postal_code"],
-            )
-        suppliers[supplier_id] = {
-            "id": supplier_id, "company_name": row.get("company_name") or "Unknown Supplier",
-            "email": row.get("email"), "phone": row.get("phone"),
-            "approval_status": approval_status,
-            "itar_certified": bool(row.get("itar_certified", 0)), "source": row.get("source") or "legacy_sqlite",
+        if row.get("id"):
+            source_supplier_profiles[str(row["id"])] = dict(row)
+    for row in source["snapshot_suppliers"]:
+        if row.get("id"):
+            source_supplier_profiles.setdefault(str(row["id"]), {}).update(row)
+    for offer in source["supplier_parts"]:
+        source_id = str(offer.get("supplier_id") or f"SUP-{hashlib.sha256(str(offer.get('supplier_email') or offer.get('id') or '').encode('utf-8')).hexdigest()[:24].upper()}")
+        if source_id and source_id not in source_supplier_profiles:
+            source_supplier_profiles[source_id] = {
+                "id": source_id, "company_name": offer.get("supplier_name") or "Unknown Supplier",
+                "email": offer.get("supplier_email"),
+            }
+
+    full_supplier_profile_ids = {str(row.get("id")) for row in source["snapshot_suppliers"] if row.get("id")}
+    source_profile_rows = list(source_supplier_profiles.values())
+    supplier_matches, ambiguous_supplier_ids = match_supplier_ids(source_profile_rows, target_suppliers or [])
+    supplier_target_ids: dict[str, str | None] = {}
+    suppliers: dict[str, dict[str, Any]] = {}
+    suppliers_requiring_review: set[str] = set()
+    quarantine_supplier_profiles: dict[str, dict[str, Any]] = {}
+    supplier_by_email: dict[str, str] = {}
+    source_supplier_parts: dict[str, list[dict[str, Any]]] = {}
+    for row in source["supplier_parts"]:
+        source_supplier_id = str(row.get("supplier_id") or "")
+        if source_supplier_id:
+            source_supplier_parts.setdefault(source_supplier_id, []).append(row)
+
+    for source_id, row in source_supplier_profiles.items():
+        target_id = supplier_matches.get(source_id)
+        is_complete = source_id in full_supplier_profile_ids
+        supplier_target_ids[source_id] = target_id or (source_id if is_complete else None)
+        email = str(row.get("email") or "").strip().lower()
+        if email:
+            supplier_by_email[email] = supplier_target_ids[source_id] or ""
+        if target_id and is_complete:
+            continue
+        if is_complete:
+            suppliers[source_id] = {
+                "id": source_id, "company_name": row.get("company_name") or "Unknown Supplier",
+                "email": row.get("email"), "phone": row.get("phone"),
+                "approval_status": row.get("approval_status") or "Pending",
+                "itar_certified": bool(row.get("itar_certified", 0)),
+                "source": row.get("source") or "legacy_sqlite",
+            }
+            continue
+
+        suppliers_requiring_review.add(source_id)
+        related_parts = source_supplier_parts.get(source_id, [])
+        reason = (
+            "Supplier identity matches a live supplier; the incomplete source profile is quarantined and the live supplier record is not updated."
+            if source_id in supplier_matches
+            else "Supplier profile is incomplete or its target identity is ambiguous; it is staged inactive for operator review."
+        )
+        quarantine_supplier_profiles[source_id] = {
+            "id": _quarantine_id("QSP", source_id, row), "source_id": source_id,
+            "matched_supplier_id": target_id,
+            "payload": {**row, "related_supplier_parts": related_parts},
+            "reason": reason, "is_active": False,
         }
+        add_review(
+            f"sqlite-reconcile:supplier:{source_id}", entity_id=source_id, source_payload=row,
+            reason=reason,
+            hold_flags=["contact_name", "phone", "address_line1", "city", "state_province", "postal_code"],
+        )
 
     supplier_parts_by_key: dict[str, dict[str, Any]] = {}
-    supplier_by_email = {str(row.get("email") or "").lower(): row for row in suppliers.values()}
+    quarantined_offer_count = 0
     for row in source["supplier_parts"]:
-        email = str(row.get("supplier_email") or "").lower()
-        supplier = suppliers.get(str(row.get("supplier_id") or "")) or supplier_by_email.get(email)
-        if not supplier:
-            supplier_id = str(row.get("supplier_id") or f"SUP-{uuid.uuid5(uuid.NAMESPACE_URL, str(row.get('id') or '')).hex[:16].upper()}")[:64]
-            supplier = {"id": supplier_id, "company_name": row.get("supplier_name") or "Unknown Supplier",
-                        "email": row.get("supplier_email"), "phone": None, "approval_status": row.get("approval_status") or "Pending",
-                        "itar_certified": False, "source": "legacy_sqlite"}
-            suppliers[supplier_id] = supplier
-            if email:
-                supplier_by_email[email] = supplier
+        source_supplier_id = str(row.get("supplier_id") or "")
+        email = str(row.get("supplier_email") or "").strip().lower()
+        supplier_id = supplier_target_ids.get(source_supplier_id) if source_supplier_id else supplier_by_email.get(email)
+        if not supplier_id:
+            quarantined_offer_count += 1
+            continue
         source_id = row.get("source_email_id")
         stable_source = str(source_id or row.get("id") or "")
         offer_id = f"SPO-{uuid.uuid5(uuid.NAMESPACE_URL, stable_source).hex[:24].upper()}"
         supplier_parts_by_key[offer_id] = {
-            "id": offer_id, "supplier_id": supplier["id"], "part_number": str(row.get("part_number") or "UNKNOWN").upper(),
+            "id": offer_id, "supplier_id": supplier_id, "part_number": str(row.get("part_number") or "UNKNOWN").upper(),
             "condition_code": row.get("condition_code"), "description": row.get("description"),
             "quantity_available": row.get("quantity_available"), "unit_cost": row.get("unit_cost"),
             "currency": row.get("currency") or "USD", "certificate_type": row.get("certificate_type"),
@@ -270,7 +429,7 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
             "warranty_terms": row.get("warranty_terms"),
             "trace_documents": row.get("trace_documents") if isinstance(row.get("trace_documents"), str) else json.dumps(row.get("trace_documents") or []),
             "source_email_id": source_id, "confidence": row.get("confidence"),
-            "approval_status": "Pending_Internal_Review" if supplier["id"] in suppliers_requiring_review else row.get("approval_status") or "Pending",
+            "approval_status": "Pending_Internal_Review" if source_supplier_id in suppliers_requiring_review else row.get("approval_status") or "Pending",
         }
 
     audits = []
@@ -335,8 +494,6 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
         ("rfqs", source["snapshot_rfqs"]),
         ("rfq_items", source["snapshot_rfq_items"]),
         ("quotes", source["snapshot_quotes"]),
-        ("quote_items", source["snapshot_quote_items"]),
-        ("suppliers", source["snapshot_suppliers"]),
         ("inventory", source["snapshot_inventory"]),
         ("shipments", source["snapshot_shipments"]),
         ("shipment_events", source["snapshot_shipment_events"]),
@@ -361,8 +518,12 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
             record["created_at"] = row["created_at"]
         record.setdefault("workflow_state", row["status"])
         record.setdefault("version", 1)
-        record.setdefault("automation_paused", False)
-        record.setdefault("pause_reason", None)
+        if row["id"] in incomplete_rfq_ids:
+            record["automation_paused"] = True
+            record["pause_reason"] = "Legacy quote items require operator review."
+        else:
+            record.setdefault("automation_paused", False)
+            record.setdefault("pause_reason", None)
         put_operational("rfqs", row["id"], record)
 
     snapshot_rfq_items_by_id = {str(row.get("id")): row for row in source["snapshot_rfq_items"] if row.get("id")}
@@ -392,22 +553,24 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
 
     snapshot_quote_items_by_id = {str(row.get("id")): row for row in source["snapshot_quote_items"] if row.get("id")}
     for row in quote_items_by_id.values():
-        if row["id"] not in snapshot_quote_items_by_id:
-            continue
+        is_incomplete = row["id"] not in snapshot_quote_items_by_id
         details = row.get("details") or {}
         record = dict(snapshot_quote_items_by_id.get(row["id"], {}))
         record.update({
             "id": row["id"], "quote_id": row["quote_id"], "rfq_item_id": details.get("rfq_item_id", ""),
             "part_number": row["part_number"], "description": details.get("description") or row["part_number"],
-            "quantity": row["quantity"], "uom": details.get("uom", "EA"),
-            "unit_price": row["unit_price"], "source": details.get("source", "Legacy"),
-            "unit_cost": details.get("unit_cost", 0.0), "margin_percent": details.get("margin_percent", 0.0),
+            "quantity": row["quantity"], "uom": details.get("uom") or "EA",
+            "unit_price": row["unit_price"], "source": details.get("source") or "Legacy",
+            "unit_cost": details.get("unit_cost") if details.get("unit_cost") is not None else 0.0,
+            "margin_percent": details.get("margin_percent") if details.get("margin_percent") is not None else 0.0,
             "certificate_type": details.get("certification") or details.get("certificate_type") or "Unavailable",
             "condition": details.get("condition"), "lead_time_days": details.get("lead_time"),
-            "compliance_status": details.get("compliance_status", "Needs_Review"),
+            "compliance_status": details.get("compliance_status") or "Needs_Review",
         })
         attachments = details.get("attachments", [])
         record["attachments"] = decode_json(attachments, []) if isinstance(attachments, str) else attachments
+        if is_incomplete:
+            record["reconciliation_review_required"] = True
         put_operational("quote_items", row["id"], record)
 
     snapshot_suppliers_by_id = {str(row.get("id")): row for row in source["snapshot_suppliers"] if row.get("id")}
@@ -443,6 +606,15 @@ def target_rows(source: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[
         "audit_events": audits, "communications": list(communications_by_id.values()),
         "inbound_emails": inbound_emails, "communication_tasks": tasks,
         "operator_review_queue": list(review_records.values()), "operational_records": records,
+        "quarantine_quote_items": quarantine_quote_items,
+        "quarantine_supplier_profiles": list(quarantine_supplier_profiles.values()),
+        "_reconciliation": {
+            "skipped_duplicate_line_items": skipped_duplicate_line_items,
+            "quarantined_quote_items": len(quarantine_quote_items),
+            "quarantined_supplier_profiles": len(quarantine_supplier_profiles),
+            "quarantined_supplier_offers": quarantined_offer_count,
+            "ambiguous_supplier_matches": len(ambiguous_supplier_ids),
+        },
     }
 
 
@@ -458,7 +630,7 @@ def reconciliation_warnings(source: dict[str, list[dict[str, Any]]]) -> list[dic
             "severity": "review",
             "table": "customer_quote_items",
             "count": len(incomplete_quote_items),
-            "reason": "SQLite normalized quote rows do not contain source, acquisition cost, margin, or compliance fields required to recreate QuoteItem runtime payloads. The policy preserves normalized rows, queues raw values for operator review, excludes incomplete items from usable runtime records, and quarantines related quote/RFQ states.",
+            "reason": "SQLite normalized quote rows lack source, acquisition cost, margin, or compliance fields. Valid-parent lines receive conservative defaults and a review hold; orphan lines are staged inactive in quarantine.",
         })
 
     complete_supplier_ids = {str(row.get("id")) for row in source["snapshot_suppliers"] if row.get("id")}
@@ -466,7 +638,7 @@ def reconciliation_warnings(source: dict[str, list[dict[str, Any]]]) -> list[dic
     if incomplete_suppliers:
         warnings.append({
             "severity": "review", "table": "suppliers", "count": len(incomplete_suppliers),
-            "reason": "Supplier registry rows do not carry the full supplier contact/address profile required by the legacy Supplier model. The policy queues raw rows for operator review and places supplier/offer approval on hold.",
+            "reason": "Supplier registry rows lack a complete contact/address profile. Unmatched profiles are staged inactive in quarantine; matched live suppliers are not overwritten and related offer foreign keys map to the live ID.",
         })
     return warnings
 
@@ -478,6 +650,28 @@ def assert_apply_has_complete_source(warnings: list[dict[str, Any]]) -> None:
             "Reconciliation apply is blocked by incomplete source data: "
             + "; ".join(f"{item['table']}={item['count']}" for item in blockers)
         )
+
+
+def assert_disposition_approval(warnings: list[dict[str, Any]], *, approved: bool, approval_reference: str) -> None:
+    review_items = [warning for warning in warnings if warning["severity"] == "review"]
+    if not review_items:
+        return
+    if not approved or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", approval_reference.strip()):
+        raise RuntimeError(
+            "Reconciliation apply requires --approve-disposition-policy and a sanitized --approval-reference."
+        )
+
+
+def assert_reconciliation_safe(*, target_key_collisions: int, schema_truncations: int, foreign_key_violations: int) -> None:
+    failures = {
+        "target_key_collisions": target_key_collisions,
+        "schema_truncations": schema_truncations,
+        "foreign_key_violations": foreign_key_violations,
+    }
+    blocking = {name: count for name, count in failures.items() if count > 0}
+    if blocking:
+        detail = ", ".join(f"{name}={count}" for name, count in blocking.items())
+        raise RuntimeError(f"Reconciliation safety checks failed; transaction must roll back: {detail}")
 
 
 def preflight_database(url: str, attempts: int = 5) -> None:
@@ -498,66 +692,272 @@ def preflight_database(url: str, attempts: int = 5) -> None:
         engine.dispose()
 
 
-def upsert_rows(connection, metadata: MetaData, table_name: str, rows: list[dict[str, Any]], apply: bool) -> tuple[int, int]:
+def target_supplier_identities(connection, metadata: MetaData) -> list[dict[str, Any]]:
+    suppliers_table = reflected_table(connection, metadata, "suppliers")
+    result = connection.execute(select(suppliers_table)).mappings()
+    identities = {str(row["id"]): dict(row) for row in result}
+    operational_table = reflected_table(connection, metadata, "operational_records")
+    profile_rows = connection.execute(
+        select(operational_table.c.record_id, operational_table.c.payload)
+        .where(operational_table.c.domain == "suppliers")
+    ).mappings()
+    for row in profile_rows:
+        profile = decode_json(row["payload"], {})
+        target = identities.setdefault(str(row["record_id"]), {"id": str(row["record_id"])})
+        target["tax_id"] = profile.get("tax_id") or profile.get("tax_identifier")
+        target["email"] = target.get("email") or profile.get("email")
+    return list(identities.values())
+
+
+def reflected_table(connection, metadata: MetaData, table_name: str) -> Table:
+    if table_name in metadata.tables:
+        return metadata.tables[table_name]
+    return Table(table_name, metadata, autoload_with=connection)
+
+
+def schema_truncation_warnings(connection, metadata: MetaData, rows: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for table_name, records in rows.items():
+        if not records:
+            continue
+        table = reflected_table(connection, metadata, table_name)
+        columns = {column.name: column for column in table.columns}
+        for row in records:
+            for key, value in row.items():
+                column = columns.get(key)
+                if column is None:
+                    warnings.append({"table": table_name, "column": key, "reason": "mapped column is absent from target schema"})
+                elif isinstance(value, str) and column.type.length and len(value) > column.type.length:
+                    warnings.append({"table": table_name, "column": key, "reason": "value exceeds target column length"})
+    return warnings
+
+
+def target_key_collisions(connection, metadata: MetaData, rows: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    collisions: list[dict[str, Any]] = []
+    inspector = inspect(connection)
+    for table_name, records in rows.items():
+        if not records:
+            continue
+        table = reflected_table(connection, metadata, table_name)
+        unique_keys: set[tuple[str, ...]] = set()
+        primary_key = tuple(column.name for column in table.primary_key.columns)
+        if primary_key:
+            unique_keys.add(primary_key)
+        for constraint in inspector.get_unique_constraints(table_name):
+            columns = tuple(constraint.get("column_names") or ())
+            if columns:
+                unique_keys.add(columns)
+        for index in inspector.get_indexes(table_name):
+            columns = tuple(index.get("column_names") or ())
+            if index.get("unique") and columns and all(isinstance(name, str) for name in columns) and not (index.get("dialect_options") or {}).get("postgresql_where"):
+                unique_keys.add(columns)
+
+        for key_columns in unique_keys:
+            if any(any(column not in row for column in key_columns) for row in records):
+                continue
+            source_keys = [tuple(row[column] for column in key_columns) for row in records]
+            source_counts: dict[tuple[Any, ...], int] = {}
+            for key in source_keys:
+                if any(value is None for value in key):
+                    continue
+                source_counts[key] = source_counts.get(key, 0) + 1
+            duplicate_count = sum(count - 1 for count in source_counts.values() if count > 1)
+            columns = [table.c[name] for name in key_columns]
+            target_keys: set[tuple[Any, ...]] = set()
+            distinct_keys = list(source_counts)
+            for start in range(0, len(distinct_keys), 500):
+                batch = distinct_keys[start:start + 500]
+                if len(columns) == 1:
+                    statement = select(*columns).where(columns[0].in_([key[0] for key in batch]))
+                else:
+                    from sqlalchemy import tuple_
+                    statement = select(*columns).where(tuple_(*columns).in_(batch))
+                target_keys.update(tuple(row) for row in connection.execute(statement).all())
+            collision_count = duplicate_count + len(set(source_counts) & target_keys)
+            if collision_count:
+                collisions.append({
+                    "table": table_name, "key": list(key_columns), "count": collision_count,
+                })
+    return collisions
+
+
+def foreign_key_violations(connection, metadata: MetaData, rows: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    violations: list[dict[str, Any]] = []
+    for table_name, records in rows.items():
+        if not records:
+            continue
+        child = reflected_table(connection, metadata, table_name)
+        for constraint in child.foreign_key_constraints:
+            child_names = tuple(element.parent.name for element in constraint.elements)
+            parent_names = tuple(element.column.name for element in constraint.elements)
+            parent_name = next(iter(constraint.elements)).column.table.name
+            parent = reflected_table(connection, metadata, parent_name)
+            candidates = [
+                tuple(row[name] for name in child_names)
+                for row in records
+                if all(row.get(name) is not None for name in child_names)
+            ]
+            if not candidates:
+                continue
+            mapped_parent_keys = {
+                tuple(row.get(name) for name in parent_names)
+                for row in rows.get(parent_name, [])
+                if all(row.get(name) is not None for name in parent_names)
+            }
+            unresolved = set(candidates) - mapped_parent_keys
+            found: set[tuple[Any, ...]] = set()
+            parent_columns = [parent.c[name] for name in parent_names]
+            for start in range(0, len(unresolved), 500):
+                batch = list(unresolved)[start:start + 500]
+                if len(parent_columns) == 1:
+                    statement = select(*parent_columns).where(parent_columns[0].in_([key[0] for key in batch]))
+                else:
+                    from sqlalchemy import tuple_
+                    statement = select(*parent_columns).where(tuple_(*parent_columns).in_(batch))
+                found.update(tuple(row) for row in connection.execute(statement).all())
+            missing_count = sum(1 for key in candidates if key not in mapped_parent_keys and key not in found)
+            if missing_count:
+                violations.append({"table": table_name, "constraint": constraint.name, "count": missing_count})
+    return violations
+
+
+def insert_rows(connection, metadata: MetaData, table_name: str, rows: list[dict[str, Any]]) -> int:
     if not rows:
-        return 0, 0
-    table = metadata.tables.get(table_name) or Table(table_name, metadata, autoload_with=connection)
+        return 0
+    table = reflected_table(connection, metadata, table_name)
     allowed = {column.name for column in table.columns}
-    filtered = [{key: value for key, value in row.items() if key in allowed} for row in rows]
+    if any(set(row) - allowed for row in rows):
+        raise RuntimeError(f"Target schema would truncate mapped columns in {table_name}; refusing reconciliation.")
     primary_keys = [column.name for column in table.primary_key.columns]
     if not primary_keys:
         raise RuntimeError(f"Target table {table_name} has no primary key; refusing reconciliation.")
-    if not apply:
-        return len(filtered), len(filtered)
-    for start in range(0, len(filtered), 250):
-        statement = insert(table).values(filtered[start:start + 250])
-        statement = statement.on_conflict_do_nothing(index_elements=primary_keys)
+    for start in range(0, len(rows), 250):
+        statement = insert(table).values(rows[start:start + 250])
         connection.execute(statement)
-    return len(filtered), len(filtered)
+    return len(rows)
 
 
-def reconcile(backup: Path, *, apply: bool, url: str | None) -> dict[str, Any]:
+def verify_source_key_parity(connection, metadata: MetaData, rows: dict[str, list[dict[str, Any]]]) -> None:
+    for table_name, records in rows.items():
+        if not records:
+            continue
+        table = reflected_table(connection, metadata, table_name)
+        key_columns = tuple(column.name for column in table.primary_key.columns)
+        if not key_columns:
+            raise RuntimeError(f"Target table {table_name} has no primary key; refusing parity verification.")
+        expected = {
+            tuple(row[column] for column in key_columns)
+            for row in records
+        }
+        columns = [table.c[name] for name in key_columns]
+        if len(columns) == 1:
+            found = {
+                (value,)
+                for value in connection.execute(
+                    select(columns[0]).where(columns[0].in_([key[0] for key in expected]))
+                ).scalars()
+            }
+        else:
+            from sqlalchemy import tuple_
+            found = {
+                tuple(row)
+                for row in connection.execute(
+                    select(*columns).where(tuple_(*columns).in_(list(expected)))
+                ).all()
+            }
+        missing = expected - found
+        if missing:
+            raise RuntimeError(f"Post-reconciliation parity failed for {table_name}: {len(missing)} source keys missing.")
+
+
+def finish_transaction(transaction, *, apply: bool) -> str:
+    if apply:
+        transaction.commit()
+        return "committed"
+    transaction.rollback()
+    return "rolled_back"
+
+
+def reconcile(
+    backup: Path, *, apply: bool, url: str | None,
+    approve_disposition_policy: bool = False, approval_reference: str = "",
+) -> dict[str, Any]:
     source = read_source(backup)
-    rows = target_rows(source)
     warnings = reconciliation_warnings(source)
     summary: dict[str, Any] = {
         "backup": str(backup), "mode": "apply" if apply else "dry-run",
         "tables": {}, "warnings": warnings,
     }
-    if apply:
-        assert_apply_has_complete_source(warnings)
     if not url:
         raise RuntimeError("DATABASE_URL is required for reconciliation. No local fallback is inferred.")
     preflight_database(url)
     engine = create_engine(url, pool_pre_ping=True)
+    connection = None
+    transaction = None
     try:
         metadata = MetaData()
-        with engine.begin() as connection:
-            existing = set(inspect(connection).get_table_names())
+        connection = engine.connect()
+        transaction = connection.begin()
+        existing = set(inspect(connection).get_table_names())
+        target_suppliers = target_supplier_identities(connection, metadata)
+        rows = target_rows(source, target_suppliers=target_suppliers)
+        mapping_metrics = rows.pop("_reconciliation")
+        for table_name in rows:
+            if table_name not in existing:
+                raise RuntimeError(f"Target PostgreSQL table is missing: {table_name}. Apply the reviewed quarantine migration first.")
+
+        truncation_warnings = schema_truncation_warnings(connection, metadata, rows)
+        collisions = target_key_collisions(connection, metadata, rows)
+        fk_violations = foreign_key_violations(connection, metadata, rows)
+        summary.update({
+            "mapping": mapping_metrics,
+            "schema_truncations": truncation_warnings,
+            "target_key_collisions": collisions,
+            "foreign_key_violations": fk_violations,
+            "tables": {
+                name: {"source_keys": len(records), "status": "ready" if apply else "would_insert"}
+                for name, records in rows.items()
+            },
+        })
+        assert_reconciliation_safe(
+            target_key_collisions=sum(item["count"] for item in collisions),
+            schema_truncations=len(truncation_warnings),
+            foreign_key_violations=sum(item["count"] for item in fk_violations),
+        )
+        if mapping_metrics["ambiguous_supplier_matches"]:
+            raise RuntimeError(
+                "Reconciliation safety checks failed; transaction must roll back: "
+                f"ambiguous_supplier_matches={mapping_metrics['ambiguous_supplier_matches']}"
+            )
+        if apply:
+            assert_apply_has_complete_source(warnings)
+            assert_disposition_approval(
+                warnings,
+                approved=approve_disposition_policy,
+                approval_reference=approval_reference,
+            )
+            if any(warning["severity"] == "review" for warning in warnings):
+                summary["disposition_approval_reference"] = approval_reference.strip()
             for table_name, records in rows.items():
-                if table_name not in existing:
-                    raise RuntimeError(f"Target PostgreSQL table is missing: {table_name}. Apply reviewed migrations first.")
-                source_count, _ = upsert_rows(connection, metadata, table_name, records, apply)
-                summary["tables"][table_name] = {"source_keys": source_count, "status": "upserted" if apply else "would_upsert"}
-            if apply:
-                for table_name, records in rows.items():
-                    table = metadata.tables.get(table_name) or Table(table_name, metadata, autoload_with=connection)
-                    pk = [column.name for column in table.primary_key.columns]
-                    if records:
-                        keys = [tuple(row[name] for name in pk) for row in records]
-                        if len(pk) == 1:
-                            found = set(connection.execute(select(table.c[pk[0]]).where(table.c[pk[0]].in_([key[0] for key in keys]))).scalars())
-                            missing = sorted({key[0] for key in keys} - found)
-                        else:
-                            stmt = select(*[table.c[name] for name in pk])
-                            found = {tuple(key) for key in connection.execute(stmt).all()}
-                            missing = sorted(set(keys) - found)
-                        if missing:
-                            raise RuntimeError(f"Post-reconciliation parity failed for {table_name}: {len(missing)} source keys missing")
-                summary["parity"] = "passed"
-            else:
-                connection.rollback()
+                inserted = insert_rows(connection, metadata, table_name, records)
+                summary["tables"][table_name] = {"source_keys": inserted, "status": "inserted"}
+            connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+            verify_source_key_parity(connection, metadata, rows)
+            summary["parity"] = "passed"
+        summary["transaction"] = finish_transaction(transaction, apply=apply)
+    except IntegrityError as exc:
+        if transaction is not None and transaction.is_active:
+            transaction.rollback()
+        raise RuntimeError(
+            "Reconciliation aborted and transaction rolled back after a database constraint violation."
+        ) from exc
+    except Exception:
+        if transaction is not None and transaction.is_active:
+            transaction.rollback()
+        raise
     finally:
+        if connection is not None:
+            connection.close()
         engine.dispose()
     return summary
 
@@ -565,7 +965,9 @@ def reconcile(backup: Path, *, apply: bool, url: str | None) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backup-dir", type=Path, default=None, help="Timestamped backup directory; defaults to newest local backup")
-    parser.add_argument("--apply", action="store_true", help="Apply upserts. Without this option, runs a read-only dry run.")
+    parser.add_argument("--apply", action="store_true", help="Insert reconciled rows and commit. Without this option, runs a rolled-back dry run.")
+    parser.add_argument("--approve-disposition-policy", action="store_true", help="Confirm the release owner's approved disposition for flagged quote items and supplier profiles.")
+    parser.add_argument("--approval-reference", default="", help="Sanitized approval/ticket reference required with --apply when review records exist.")
     parser.add_argument("--plan-only", action="store_true", help="Print source row counts without requiring PostgreSQL connectivity.")
     args = parser.parse_args()
     try:
@@ -575,14 +977,21 @@ def main() -> int:
         if args.plan_only:
             print(json.dumps({
                 "backup": str(backup), "mode": "plan-only",
-                "source_tables": {name: len(rows) for name, rows in mapped.items()},
+                "source_tables": {name: len(rows) for name, rows in mapped.items() if name != "_reconciliation"},
+                "mapping": mapped["_reconciliation"],
                 "warnings": reconciliation_warnings(source),
             }, indent=2))
             return 0
         url = os.getenv("DATABASE_URL", "").strip()
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
-        result = reconcile(backup, apply=args.apply, url=url or None)
+        result = reconcile(
+            backup,
+            apply=args.apply,
+            url=url or None,
+            approve_disposition_policy=args.approve_disposition_policy,
+            approval_reference=args.approval_reference,
+        )
         print(json.dumps(result, indent=2, default=str))
         return 0
     except Exception as exc:

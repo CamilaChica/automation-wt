@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import io
+import asyncio
 import os
 import unittest
 import uuid
-from contextlib import contextmanager
-from unittest.mock import patch
+from contextlib import asynccontextmanager, contextmanager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from services.communication_service import CommunicationService
 from services.db_service import db_service
@@ -99,7 +101,7 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
             loader=RecordingLoader(),
         )
         worker.postgres_enabled = False
-        worker._resume_waiting_rfqs = lambda _part_number: None
+        worker._enqueue_waiting_rfqs = lambda _part_number: None
         message = {
             "message_id": "supplier-shared-1",
             "from": "quotes@aero.example",
@@ -119,6 +121,61 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
         self.assertLess(events.index(("claim", "supplier-shared-1", "purchasing")), events.index(("ingest", "supplier-shared-1")))
         self.assertLess(events.index(("ingest", "supplier-shared-1")), events.index(("processed", "supplier-shared-1")))
         self.assertLess(events.index(("processed", "supplier-shared-1")), events.index("commit"))
+
+    def test_postgres_inventory_resume_uses_scoped_async_repository_reads(self):
+        events = []
+        rfqs = [
+            SimpleNamespace(id="RFQ-MATCH", status="Supplier_Sourcing"),
+            SimpleNamespace(id="RFQ-NO-MATCH", status="Supplier_Sourcing"),
+            SimpleNamespace(id="RFQ-OTHER-STATE", status="Intake"),
+        ]
+        records = SimpleNamespace(list_by_payload_value=AsyncMock(side_effect=[
+            {"ITEM-MATCH": {"resolved_part_number": "PN-1"}},
+            {"ITEM-OTHER": {"requested_part_number": "PN-2"}},
+        ]))
+        repositories = SimpleNamespace(records=records)
+
+        class Engine:
+            disposed = False
+
+            async def dispose(self):
+                self.disposed = True
+
+        engine = Engine()
+
+        @asynccontextmanager
+        async def fake_session_scope(_engine):
+            yield object()
+
+        class StoreStub:
+            storage_engine = "postgresql"
+
+            @staticmethod
+            def record_automation_event(**values):
+                events.append(values)
+                return "EVENT-1"
+
+        worker = InventoryIngestionWorker(fetch_messages=lambda _mailbox, limit: [])
+        with (
+            patch("services.inventory_ingestion_worker.operations_store", StoreStub()),
+            patch("services.inventory_ingestion_worker.create_engine_from_environment", return_value=engine),
+            patch("services.inventory_ingestion_worker.session_scope", fake_session_scope),
+            patch("repositories.runtime.create_operational_repositories", return_value=repositories),
+            patch("services.db_service.db_service.list_rfqs_async", new=AsyncMock(return_value=rfqs)),
+        ):
+            worker._enqueue_waiting_rfqs("pn-1")
+
+        self.assertEqual(
+            records.list_by_payload_value.await_args_list,
+            [
+                unittest.mock.call("rfq_items", "rfq_id", "RFQ-MATCH"),
+                unittest.mock.call("rfq_items", "rfq_id", "RFQ-NO-MATCH"),
+            ],
+        )
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["entity_id"], "RFQ-MATCH")
+        self.assertEqual(events[0]["idempotency_key"], "rfq-resume:RFQ-MATCH:PN-1")
+        self.assertTrue(engine.disposed)
 
     def test_real_supplier_loader_parses_subject_part_number(self):
         loader = SupplierEmailLoader()

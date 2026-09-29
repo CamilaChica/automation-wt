@@ -5,7 +5,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.operational_models import CustomerRecord, OperationalRecord, RFQItemRecord, RFQRecord, SupplierOfferRecord
+from models.operational_models import AuditLogRecord, CustomerRecord, OperationalRecord, RFQItemRecord, RFQRecord, SupplierOfferRecord
 
 
 class RFQRepository:
@@ -18,6 +18,14 @@ class RFQRepository:
     async def list(self) -> list[RFQRecord]:
         result = await self.session.scalars(
             select(RFQRecord).order_by(RFQRecord.created_at.desc(), RFQRecord.id)
+        )
+        return list(result)
+
+    async def audit_logs(self, rfq_id: str) -> list[AuditLogRecord]:
+        result = await self.session.scalars(
+            select(AuditLogRecord)
+            .where(AuditLogRecord.rfq_id == rfq_id)
+            .order_by(AuditLogRecord.created_at, AuditLogRecord.id)
         )
         return list(result)
 

@@ -89,6 +89,37 @@ class InventoryIngestionWorker:
     def _enqueue_waiting_rfqs(self, part_number: str) -> None:
         if not part_number:
             return
+        if operations_store.storage_engine == "postgresql":
+            asyncio.run(self._enqueue_waiting_rfqs_postgres(part_number))
+            return
+        self._enqueue_waiting_rfqs_local(part_number)
+
+    async def _enqueue_waiting_rfqs_postgres(self, part_number: str) -> None:
+        from repositories.runtime import create_operational_repositories
+        from services.db_service import db_service
+
+        engine = create_engine_from_environment()
+        try:
+            async with session_scope(engine) as session:
+                repositories = create_operational_repositories(session)
+                rfqs = await db_service.list_rfqs_async(repositories)
+                for rfq in rfqs:
+                    if rfq.status != "Supplier_Sourcing":
+                        continue
+                    item_records = await repositories.records.list_by_payload_value(
+                        "rfq_items", "rfq_id", rfq.id
+                    )
+                    if not any(
+                        str(item.get("resolved_part_number") or item.get("requested_part_number") or "").upper()
+                        == part_number.upper()
+                        for item in item_records.values()
+                    ):
+                        continue
+                    self._record_resume_event(rfq.id, part_number)
+        finally:
+            await engine.dispose()
+
+    def _enqueue_waiting_rfqs_local(self, part_number: str) -> None:
         from services.db_service import db_service
 
         for rfq in db_service.list_rfqs():
@@ -99,16 +130,20 @@ class InventoryIngestionWorker:
                 for item in db_service.get_rfq_items(rfq.id)
             ):
                 continue
-            event_id = operations_store.record_automation_event(
-                event_type="resume_waiting_rfq",
-                entity_type="rfq",
-                entity_id=rfq.id,
-                status="QUEUED",
-                result=json.dumps({"part_number": part_number.upper()}),
-                idempotency_key=f"rfq-resume:{rfq.id}:{part_number.upper()}",
-                max_attempts=3,
-            )
-            logger.info("Queued RFQ resume event=%s rfq=%s part=%s", event_id, rfq.id, part_number)
+            self._record_resume_event(rfq.id, part_number)
+
+    @staticmethod
+    def _record_resume_event(rfq_id: str, part_number: str) -> None:
+        event_id = operations_store.record_automation_event(
+            event_type="resume_waiting_rfq",
+            entity_type="rfq",
+            entity_id=rfq_id,
+            status="QUEUED",
+            result=json.dumps({"part_number": part_number.upper()}),
+            idempotency_key=f"rfq-resume:{rfq_id}:{part_number.upper()}",
+            max_attempts=3,
+        )
+        logger.info("Queued RFQ resume event=%s rfq=%s part=%s", event_id, rfq_id, part_number)
 
     def process_message(self, message: dict[str, Any]) -> dict[str, Any]:
         if operations_store.storage_engine == "postgresql":

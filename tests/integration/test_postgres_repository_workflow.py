@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 from api.auth import current_user
 from api.main import app
 from models.db_models import RFQ
-from models.operational_models import SupplierInventoryRowRecord
+from models.operational_models import OperationalRecord, SupplierInventoryRowRecord
 from repositories.review_telemetry_repository import PostgresReviewTelemetryRepository
 from services.async_database import get_async_db, session_scope
 from repositories.runtime import create_operational_repositories
@@ -173,6 +173,61 @@ async def test_rfq_list_endpoint_reads_through_async_repository(disposable_postg
             customer_name="Async API Buyer",
             raw_text="Need an asynchronously listed part",
         ).model_dump(mode="json"))
+        session.add_all([
+            OperationalRecord(
+                domain="rfq_items",
+                record_id="RFQ-ASYNC-ITEM-1",
+                payload={
+                    "id": "RFQ-ASYNC-ITEM-1", "rfq_id": "RFQ-ASYNC-API-1",
+                    "requested_part_number": "ASYNC-PART-1", "quantity": 2,
+                },
+            ),
+            OperationalRecord(
+                domain="rfq_items",
+                record_id="RFQ-OTHER-ITEM-1",
+                payload={
+                    "id": "RFQ-OTHER-ITEM-1", "rfq_id": "RFQ-OTHER-API-1",
+                    "requested_part_number": "OTHER-PART", "quantity": 99,
+                },
+            ),
+            OperationalRecord(
+                domain="quotes",
+                record_id="QUOTE-ASYNC-API-1",
+                payload={
+                    "id": "QUOTE-ASYNC-API-1", "rfq_id": "RFQ-ASYNC-API-1",
+                    "subtotal": 100, "shipping_cost": 5, "total_amount": 105,
+                    "status": "Draft",
+                },
+            ),
+            OperationalRecord(
+                domain="quotes",
+                record_id="QUOTE-OTHER-API-1",
+                payload={
+                    "id": "QUOTE-OTHER-API-1", "rfq_id": "RFQ-OTHER-API-1",
+                    "subtotal": 900, "shipping_cost": 5, "total_amount": 905,
+                    "status": "Draft",
+                },
+            ),
+            OperationalRecord(
+                domain="quote_items",
+                record_id="QUOTE-ASYNC-ITEM-1",
+                payload={
+                    "id": "QUOTE-ASYNC-ITEM-1", "quote_id": "QUOTE-ASYNC-API-1",
+                    "rfq_item_id": "RFQ-ASYNC-ITEM-1", "part_number": "ASYNC-PART-1",
+                    "quantity": 2, "unit_price": 50, "source": "Inventory",
+                    "unit_cost": 40, "margin_percent": 20, "certificate_type": "CoC",
+                },
+            ),
+            OperationalRecord(
+                domain="quote_items",
+                record_id="QUOTE-OTHER-ITEM-1",
+                payload={
+                    "id": "QUOTE-OTHER-ITEM-1", "quote_id": "QUOTE-OTHER-API-1",
+                    "rfq_item_id": "RFQ-OTHER-ITEM-1", "part_number": "OTHER-PART",
+                    "quantity": 99, "unit_price": 100,
+                },
+            ),
+        ])
 
     async def override_async_db():
         async with session_scope(disposable_postgres_engine) as session:
@@ -197,6 +252,10 @@ async def test_rfq_list_endpoint_reads_through_async_repository(disposable_postg
     assert any(record["id"] == "RFQ-ASYNC-API-1" for record in response.json())
     assert detail_response.status_code == 200
     assert detail_response.json()["rfq"]["id"] == "RFQ-ASYNC-API-1"
+    assert [item["id"] for item in detail_response.json()["items"]] == ["RFQ-ASYNC-ITEM-1"]
+    assert detail_response.json()["quote_details"]["quote"]["id"] == "QUOTE-ASYNC-API-1"
+    assert [item["part_number"] for item in detail_response.json()["quote_details"]["items"]] == ["ASYNC-PART-1"]
+    assert detail_response.json()["quote_details"]["items"][0]["quantity"] == 2
 
 
 async def test_rfq_intake_endpoint_writes_through_async_repository(

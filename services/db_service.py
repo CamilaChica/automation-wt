@@ -49,6 +49,29 @@ class _PostgresRecordMap(MutableMapping):
             return default
 
 class MockDatabaseService:
+    async def get_shipment_async(self, repositories, shipment_id: str) -> Optional[Shipment]:
+        payload = await repositories.records.get("shipments", shipment_id)
+        return Shipment.model_validate(payload) if payload else None
+
+    async def get_shipment_by_token_async(self, repositories, public_token: str) -> Optional[Shipment]:
+        records = await repositories.records.list("shipments")
+        payload = next((value for value in records.values() if value.get("public_token") == public_token), None)
+        return Shipment.model_validate(payload) if payload else None
+
+    async def get_shipment_events_async(self, repositories, shipment_id: str) -> List[ShipmentEvent]:
+        records = await repositories.records.list("shipment_events")
+        events = [
+            ShipmentEvent.model_validate(value)
+            for value in records.values()
+            if value.get("shipment_id") == shipment_id
+        ]
+        return sorted(events, key=lambda event: event.occurred_at)
+
+    async def list_shipments_async(self, repositories) -> List[Shipment]:
+        records = await repositories.records.list("shipments")
+        shipments = [Shipment.model_validate(value) for value in records.values()]
+        return sorted(shipments, key=lambda shipment: shipment.updated_at, reverse=True)
+
     async def list_rfqs_async(self, repositories) -> List[RFQ]:
         records = await repositories.rfq.list_operational_records("rfqs")
         if records:
@@ -64,6 +87,21 @@ class MockDatabaseService:
                 created_at=record.created_at,
             )
             for record in await repositories.rfq.list()
+        ]
+
+    async def get_audit_logs_async(self, repositories, rfq_id: str) -> List[AgentAuditLog]:
+        return [
+            AgentAuditLog(
+                id=record.id,
+                rfq_id=record.rfq_id,
+                agent_name=record.agent_name,
+                action_type=record.action_type,
+                message=record.message,
+                status=record.status,
+                payload_json=record.payload_json,
+                timestamp=record.created_at,
+            )
+            for record in await repositories.rfq.audit_logs(rfq_id)
         ]
 
     def __getattr__(self, name):
