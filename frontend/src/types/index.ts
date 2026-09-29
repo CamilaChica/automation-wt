@@ -43,6 +43,7 @@ export interface RFQ {
   delivery_location?: string;
   workflow_state?: string;
   automation_paused?: boolean;
+  pause_reason?: string | null;
   version?: number;
   is_sample_data?: boolean;
 }

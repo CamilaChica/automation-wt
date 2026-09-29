@@ -14,14 +14,16 @@ import {
   FileText,
   Loader2,
   Play,
+  Pause,
 } from 'lucide-react';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
-import { useExecuteInternalCommand, useProcessRFQ, useRFQs, useSupplierOffers } from '../../hooks/useApiResources';
+import { useExecuteInternalCommand, useProcessRFQ, useRFQs, useSetAutomationPause, useSupplierOffers } from '../../hooks/useApiResources';
 
 export const AeroProcurementView: React.FC = () => {
   const [selectedOfferId, setSelectedOfferId] = useState('');
   const [selectedRfqId, setSelectedRfqId] = useState('');
+  const [automationReason, setAutomationReason] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const [commandPending, setCommandPending] = useState<InternalCommand | null>(null);
   const [noticeType, setNoticeType] = useState<'success' | 'error'>('success');
@@ -32,6 +34,7 @@ export const AeroProcurementView: React.FC = () => {
   const usingFallbackData = rfqQuery.isSampleData;
   const commandMutation = useExecuteInternalCommand();
   const processMutation = useProcessRFQ();
+  const automationMutation = useSetAutomationPause();
   const selectedRfq = rfqs.find(rfq => rfq.id === selectedRfqId);
   const selectedPartNumber = selectedRfq?.part_number?.trim() || '';
   const actionsBlocked = loading || Boolean(loadError) || usingFallbackData || !selectedRfq || isFailedRfq(selectedRfq);
@@ -40,6 +43,12 @@ export const AeroProcurementView: React.FC = () => {
     && !loadError
     && !usingFallbackData
     && apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_SALES', 'ROLE_PURCHASING']);
+  const canManageAutomation = Boolean(selectedRfq)
+    && !loading
+    && !loadError
+    && !usingFallbackData
+    && apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER']);
+  const automationPaused = Boolean(selectedRfq?.automation_paused);
   const offersQuery = useSupplierOffers(selectedPartNumber);
   const offers = offersQuery.data || [];
   const selectedOffer = offers.find(offer => offer.id === selectedOfferId);
@@ -53,6 +62,10 @@ export const AeroProcurementView: React.FC = () => {
   useEffect(() => {
     if (!selectedOfferId && offers.length > 0) setSelectedOfferId(offers[0].id);
   }, [offers, selectedOfferId]);
+
+  useEffect(() => {
+    setAutomationReason('');
+  }, [selectedRfqId]);
 
   const runCommand = async (command: InternalCommand, description: string) => {
     if (actionsBlocked || commandMutation.isPending || !selectedRfq) return;
@@ -92,6 +105,29 @@ export const AeroProcurementView: React.FC = () => {
     } catch (error) {
       setNoticeType('error');
       setNotice(getApiErrorMessage(error, 'Unable to process this RFQ.'));
+    }
+  };
+
+  const toggleAutomationPause = async () => {
+    if (!selectedRfq || !canManageAutomation || automationMutation.isPending) return;
+    const paused = !automationPaused;
+    const reason = automationReason.trim();
+    if (paused && !reason) return;
+    if (!window.confirm(`${paused ? 'Pause' : 'Resume'} automation for RFQ ${selectedRfq.id}?`)) return;
+    setNotice(null);
+    try {
+      const result = await automationMutation.mutateAsync({
+        rfqId: selectedRfq.id,
+        paused,
+        reason: paused ? reason : undefined,
+      });
+      if (!result) return;
+      setNoticeType('success');
+      setNotice(paused ? 'Automation paused.' : 'Automation resumed.');
+      setAutomationReason('');
+    } catch (error) {
+      setNoticeType('error');
+      setNotice(getApiErrorMessage(error, `Unable to ${paused ? 'pause' : 'resume'} automation.`));
     }
   };
 
@@ -169,6 +205,21 @@ export const AeroProcurementView: React.FC = () => {
             </h2>
             <span className="font-mono text-[10px] text-slate-500 dark:text-slate-400">P/N: {selectedRfq?.part_number || 'Unavailable'} | {selectedRfq?.condition || 'Condition unavailable'}</span>
           </div>
+
+          {canManageAutomation && <div className="flex flex-wrap items-end justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900/60">
+            <div className="min-w-0 flex-1">
+              {automationPaused
+                ? <p role="status" className="text-xs text-amber-800 dark:text-amber-200">Automation paused{selectedRfq?.pause_reason ? `: ${selectedRfq.pause_reason}` : '.'}</p>
+                : <label className="block space-y-1 text-[10px] font-semibold text-slate-600 dark:text-slate-300">
+                  <span>Reason for pausing automation</span>
+                  <input aria-label="Reason for pausing automation" value={automationReason} onChange={event => setAutomationReason(event.target.value)} maxLength={500} className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-normal text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" />
+                </label>}
+            </div>
+            <button type="button" disabled={automationMutation.isPending || (!automationPaused && !automationReason.trim())} aria-busy={automationMutation.isPending} onClick={() => void toggleAutomationPause()} className={`inline-flex min-h-10 items-center justify-center gap-1.5 rounded-md px-3 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-50 ${automationPaused ? 'bg-emerald-700 text-white hover:bg-emerald-600' : 'bg-amber-600 text-white hover:bg-amber-500'}`}>
+              {automationMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : automationPaused ? <Play className="h-3.5 w-3.5" aria-hidden="true" /> : <Pause className="h-3.5 w-3.5" aria-hidden="true" />}
+              <span>{automationMutation.isPending ? 'SAVING...' : automationPaused ? 'RESUME AUTOMATION' : 'PAUSE AUTOMATION'}</span>
+            </button>
+          </div>}
 
           {canProcessSelectedRfq && <div className="flex items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">
             <span>RFQ is queued for intake processing.</span>

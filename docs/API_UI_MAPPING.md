@@ -44,7 +44,7 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 
 | Method and path | Access | Request | Response / UI mapping |
 | --- | --- | --- | --- |
-| `POST /api/internal/rfqs/{rfq_id}/automation` | Admin/manager | `AutomationPauseRequest` | Automation pause/resume result. No current view is bound. |
+| `POST /api/internal/rfqs/{rfq_id}/automation` | Admin/manager | `AutomationPauseRequest` | Automation pause/resume result. Procurement exposes role-gated pause/resume controls and records an operator reason when pausing. |
 | `POST /api/internal/rfqs/{rfq_id}/trace-decision` | Admin/manager/purchasing | `TraceDecisionRequest` | Decision and automation status. Trace Vault uses `useTraceDecision`, then invalidates RFQs/events. |
 | `GET /api/internal/automation-events` | Admin/manager/sales/purchasing | Optional status/limit | Automation event list. TopBar audit feed and Trace Vault use `useAutomationEvents`. |
 | `GET /api/internal/extraction-reviews` | Admin/manager/sales/purchasing | Optional status/limit | Operator review records. |

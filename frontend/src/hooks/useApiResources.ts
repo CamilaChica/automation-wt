@@ -262,6 +262,14 @@ export function useRejectQuote() {
     ]);
 }
 
+export function useSetAutomationPause() {
+  return useApiMutation((input: { rfqId: string; paused: boolean; reason?: string }) =>
+    apiService.setAutomationPause(input.rfqId, { paused: input.paused, reason: input.reason }), [
+      apiQueryKeys.rfqs,
+      apiQueryKeys.automationEvents,
+    ]);
+}
+
 export function useTraceDecision() {
   return useApiMutation((input: { rfqId: string; decision: 'certify' | 'reject' | 'rescan' | 'freeze'; reason?: string }) =>
     apiService.recordTraceDecision(input.rfqId, input.decision, input.reason), [apiQueryKeys.rfqs, apiQueryKeys.automationEvents]);
