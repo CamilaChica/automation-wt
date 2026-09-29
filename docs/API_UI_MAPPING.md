@@ -51,8 +51,8 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 | `GET /api/internal/extraction-reviews/{review_id}` | Admin/manager/sales/purchasing | Path `review_id` | Selected source text, extracted fields, reason, and hold flags in Trace Vault. |
 | `POST /api/internal/extraction-reviews/{review_id}/decision` | Admin/manager/sales/purchasing | `ExtractionReviewDecisionRequest` | Trace Vault approves the displayed extraction with server source-grounding validation or rejects it with operator comments. |
 | `POST /api/internal/commands` | Admin/manager/sales/purchasing | `InternalCommandRequest` | Audited command result. Procurement, Sourcing and Fulfillment hooks invalidate relevant active resources. |
-| `GET /api/internal/llm/health` | Admin/manager | None | Provider/configuration booleans; no secret values. |
-| `GET /api/internal/llm/telemetry` | Admin/manager | Optional task/limit | LLM telemetry records. |
+| `GET /api/internal/llm/health` | Admin/manager | None | Trace Vault shows provider routing, configuration booleans, and fallback status; no secret values. |
+| `GET /api/internal/llm/telemetry` | Admin/manager | Optional task/limit | Trace Vault shows recent task/model, latency, token, estimated-cost, validation, and review-outcome telemetry. |
 | `GET /api/internal/mailboxes/health` | Internal/admin/manager/sales/purchasing | None | Status strings for `sales_mailbox` and `purchasing_mailbox`, plus authenticated user. TopBar shows live status. |
 | `GET /api/internal/mailboxes/{mailbox}/inbox` | Admin/manager/sales/purchasing, mailbox-specific role checked | Path `mailbox` | Mailbox and message summaries. |
 | `POST /api/internal/mailboxes/{mailbox}/send` | Admin/manager/sales/purchasing, mailbox-specific role checked | `MailboxMessageRequest` | Outbound send result. |

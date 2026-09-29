@@ -3,7 +3,7 @@ import { apiService, getApiErrorMessage } from '../../services/api';
 import { Badge } from '../common/Badge';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
-import { useAutomationEvents, useDecideExtractionReview, useExtractionReview, useExtractionReviews, useRFQs, useTraceDecision } from '../../hooks/useApiResources';
+import { useAutomationEvents, useDecideExtractionReview, useExtractionReview, useExtractionReviews, useLlmHealth, useLlmTelemetry, useRFQs, useTraceDecision } from '../../hooks/useApiResources';
 import type { ExtractionReviewResponse } from '../../types/api';
 import { 
   ShieldCheck, 
@@ -45,9 +45,12 @@ export const TraceVaultView: React.FC = () => {
   const eventsQuery = useAutomationEvents();
   const decisionMutation = useTraceDecision();
   const canReviewExtractions = apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_SALES', 'ROLE_PURCHASING']);
+  const canViewLlm = apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER']);
   const extractionReviewsQuery = useExtractionReviews(canReviewExtractions);
   const extractionReviewQuery = useExtractionReview(selectedReviewId);
   const extractionDecisionMutation = useDecideExtractionReview();
+  const llmHealthQuery = useLlmHealth(canViewLlm);
+  const llmTelemetryQuery = useLlmTelemetry(canViewLlm);
   const rfqs = rfqQuery.data || [];
   const loading = rfqQuery.isLoading;
   const usingFallbackData = rfqQuery.isSampleData;
@@ -143,6 +146,42 @@ export const TraceVaultView: React.FC = () => {
       {loadError && <div role="alert" className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700"><span>{loadError}</span><button type="button" aria-label="Retry loading trace records" onClick={() => void rfqQuery.refetch()} className="font-bold underline focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">Retry</button></div>}
       {notice && <div role="status" aria-live="polite" className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
       {usingFallbackData && <FallbackDataBanner />}
+      {canViewLlm && <section aria-labelledby="llm-operations-title" className="space-y-4 border-y border-slate-200 py-5 dark:border-slate-800">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 id="llm-operations-title" className="font-display text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100">LLM PROVIDER HEALTH & TELEMETRY</h2>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => void llmHealthQuery.refetch()} className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-slate-300 px-2.5 text-xs font-semibold hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:hover:bg-slate-800">Refresh health</button>
+            <button type="button" onClick={() => void llmTelemetryQuery.refetch()} className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-slate-300 px-2.5 text-xs font-semibold hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:hover:bg-slate-800">Refresh telemetry</button>
+          </div>
+        </div>
+        {llmHealthQuery.error && <div role="alert" className="rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200">{llmHealthQuery.error.message}</div>}
+        {llmHealthQuery.isLoading && <p role="status" className="text-xs text-slate-500">Loading provider health...</p>}
+        {llmHealthQuery.data && <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="min-w-0"><p className="text-[10px] font-semibold uppercase text-slate-500">Default provider</p><p className="mt-1 truncate text-sm font-bold text-slate-900 dark:text-slate-100">{llmHealthQuery.data.default_provider}</p></div>
+          <div className="min-w-0"><p className="text-[10px] font-semibold uppercase text-slate-500">Customer communication</p><p className="mt-1 truncate text-sm font-bold text-slate-900 dark:text-slate-100">{llmHealthQuery.data.customer_communication_provider || 'Default'}</p></div>
+          <div><p className="text-[10px] font-semibold uppercase text-slate-500">OpenAI</p><p className={`mt-1 text-sm font-bold ${llmHealthQuery.data.openai_configured ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-500'}`}>{llmHealthQuery.data.openai_configured ? 'Configured' : 'Not configured'}</p></div>
+          <div><p className="text-[10px] font-semibold uppercase text-slate-500">Anthropic</p><p className={`mt-1 text-sm font-bold ${llmHealthQuery.data.anthropic_configured ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-500'}`}>{llmHealthQuery.data.anthropic_configured ? 'Configured' : 'Not configured'}</p></div>
+          <div><p className="text-[10px] font-semibold uppercase text-slate-500">Gemini</p><p className={`mt-1 text-sm font-bold ${llmHealthQuery.data.gemini_configured ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-500'}`}>{llmHealthQuery.data.gemini_configured ? 'Configured' : 'Not configured'}</p></div>
+          <div><p className="text-[10px] font-semibold uppercase text-slate-500">Template fallback</p><p className="mt-1 text-sm font-bold text-slate-900 dark:text-slate-100">{llmHealthQuery.data.fallback_enabled ? 'Enabled' : 'Disabled'}</p></div>
+        </div>}
+        {llmTelemetryQuery.error && <div role="alert" className="rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200">{llmTelemetryQuery.error.message}</div>}
+        {llmTelemetryQuery.isLoading && <p role="status" className="text-xs text-slate-500">Loading recent model telemetry...</p>}
+        {!llmTelemetryQuery.isLoading && !llmTelemetryQuery.error && (llmTelemetryQuery.data?.length || 0) === 0 && <p role="status" className="text-xs text-slate-500">No model telemetry has been recorded.</p>}
+        {(llmTelemetryQuery.data?.length || 0) > 0 && <div className="overflow-x-auto border-y border-slate-200 dark:border-slate-800">
+          <table className="w-full min-w-[780px] text-left text-xs">
+            <thead><tr className="text-[10px] font-semibold uppercase text-slate-500"><th className="py-2 pr-3">Task</th><th className="py-2 pr-3">Model</th><th className="py-2 pr-3">Result</th><th className="py-2 pr-3 text-right">Latency</th><th className="py-2 pr-3 text-right">Tokens in/out</th><th className="py-2 pr-3 text-right">Est. cost</th><th className="py-2 text-right">Recorded</th></tr></thead>
+            <tbody className="divide-y divide-slate-200 dark:divide-slate-800">{llmTelemetryQuery.data?.map(record => <tr key={record.id}>
+              <td className="max-w-40 truncate py-2 pr-3 font-semibold" title={record.task}>{record.task}</td>
+              <td className="max-w-40 truncate py-2 pr-3" title={`${record.model_id} (${record.prompt_version})`}>{record.model_id}</td>
+              <td className="py-2 pr-3">{record.validation_result}{record.operator_review_outcome ? ` / ${record.operator_review_outcome}` : ''}</td>
+              <td className="py-2 pr-3 text-right tabular-nums">{record.latency_ms.toLocaleString()} ms</td>
+              <td className="py-2 pr-3 text-right tabular-nums">{record.input_tokens.toLocaleString()} / {record.output_tokens.toLocaleString()}</td>
+              <td className="py-2 pr-3 text-right tabular-nums">${record.estimated_cost_usd.toFixed(6)}</td>
+              <td className="py-2 text-right whitespace-nowrap">{new Date(record.created_at).toLocaleString()}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>}
+      </section>}
       {canReviewExtractions && <section aria-labelledby="operator-extraction-reviews-title" className="space-y-4 border-y border-slate-200 py-5 dark:border-slate-800">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 id="operator-extraction-reviews-title" className="font-display text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100">OPERATOR EXTRACTION REVIEWS</h2>

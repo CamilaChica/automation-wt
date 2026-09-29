@@ -12,6 +12,8 @@ import type {
   FreightQuoteBody,
   IntakeResponse,
   LoginResponse,
+  LlmHealthResponse,
+  LlmTelemetryRecord,
   MailboxHealthResponse,
   MailboxInboxResponse,
   MailboxMessageBody,
@@ -429,13 +431,13 @@ export const apiService = {
     return res.data;
   },
 
-  async getLlmTelemetry(task?: string, limit = 100): Promise<Record<string, unknown>[]> {
-    const res = await axios.get(`${API_BASE}/internal/llm/telemetry`, { params: { task, limit } });
+  async getLlmTelemetry(task?: string, limit = 100): Promise<LlmTelemetryRecord[]> {
+    const res = await axios.get<LlmTelemetryRecord[]>(`${API_BASE}/internal/llm/telemetry`, { params: { task, limit } });
     return res.data;
   },
 
-  async getLlmHealth(): Promise<Record<string, unknown>> {
-    const res = await axios.get(`${API_BASE}/internal/llm/health`);
+  async getLlmHealth(): Promise<LlmHealthResponse> {
+    const res = await axios.get<LlmHealthResponse>(`${API_BASE}/internal/llm/health`);
     return res.data;
   },
 

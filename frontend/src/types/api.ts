@@ -163,6 +163,29 @@ export interface ExtractionReviewResponse {
   created_at?: IsoDateTime;
   [key: string]: unknown;
 }
+export interface LlmHealthResponse {
+  default_provider: string;
+  customer_communication_provider: string;
+  openai_configured: boolean;
+  anthropic_configured: boolean;
+  gemini_configured: boolean;
+  fallback_enabled: boolean;
+}
+export interface LlmTelemetryRecord {
+  id: string;
+  task: string;
+  prompt_version: string;
+  model_id: string;
+  model_calls: string[];
+  latency_ms: number;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_cost_usd: number;
+  validation_result: string;
+  operator_review_outcome?: string | null;
+  review_queue_id?: string | null;
+  created_at: IsoDateTime;
+}
 export interface FreightQuoteBody {
   origin: string;
   destination: string;

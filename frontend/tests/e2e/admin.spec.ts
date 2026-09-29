@@ -185,3 +185,49 @@ test('admin must provide a reason before rejecting an extraction review', async 
     comments: 'Part identity does not match the source email.',
   });
 });
+
+test('admin can inspect LLM health and telemetry without exposing credentials', async ({ page }) => {
+  await page.route('**/api/rfqs', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/internal/automation-events**', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/internal/extraction-reviews**', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/internal/llm/health', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      default_provider: 'openai',
+      customer_communication_provider: 'openai',
+      openai_configured: true,
+      anthropic_configured: false,
+      gemini_configured: false,
+      fallback_enabled: true,
+      api_key: 'DO_NOT_RENDER_SECRET',
+    }),
+  }));
+  await page.route('**/api/internal/llm/telemetry**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([{
+      id: 'LLM-ADMIN-1',
+      task: 'rfq_extraction',
+      prompt_version: 'v3',
+      model_id: 'gpt-test',
+      model_calls: ['gpt-test'],
+      latency_ms: 125,
+      input_tokens: 40,
+      output_tokens: 12,
+      estimated_cost_usd: 0.004,
+      validation_result: 'PASS',
+      operator_review_outcome: null,
+      review_queue_id: null,
+      created_at: '2026-09-28T12:00:00Z',
+    }]),
+  }));
+  await seedSession(page, 'internal');
+  await page.goto('/');
+  await page.locator('aside button').filter({ hasText: 'Trace Vault' }).first().click();
+
+  await expect(page.getByRole('heading', { name: 'LLM PROVIDER HEALTH & TELEMETRY' })).toBeVisible();
+  await expect(page.getByText('openai', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('rfq_extraction', { exact: true }).last()).toBeVisible();
+  await expect(page.getByText('DO_NOT_RENDER_SECRET')).toHaveCount(0);
+});

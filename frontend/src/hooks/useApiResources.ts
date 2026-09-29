@@ -6,6 +6,8 @@ import type {
   ExtractionReviewResponse,
   FulfillmentStage,
   IntakeRequestBody,
+  LlmHealthResponse,
+  LlmTelemetryRecord,
   MailboxHealthResponse,
   ShipmentTraceResponse,
   SystemHealthResponse,
@@ -157,6 +159,8 @@ export const apiQueryKeys = {
   mailboxHealth: 'mailbox-health',
   operatorReviews: 'operator-reviews',
   operatorReviewDetail: (reviewId: string) => `operator-review-detail:${reviewId}`,
+  llmHealth: 'llm-health',
+  llmTelemetry: 'llm-telemetry',
 } as const;
 
 export function useRFQs() {
@@ -294,6 +298,18 @@ export function useSetAutomationPause() {
         apiQueryKeys.rfqs,
       ]);
   }
+
+    export function useLlmHealth(enabled = true) {
+      return useApiQuery<LlmHealthResponse>(apiQueryKeys.llmHealth, async () => ({
+        data: await apiService.getLlmHealth(),
+      }), enabled);
+    }
+
+    export function useLlmTelemetry(enabled = true) {
+      return useApiQuery<LlmTelemetryRecord[]>(apiQueryKeys.llmTelemetry, async () => ({
+        data: await apiService.getLlmTelemetry(undefined, 50),
+      }), enabled);
+    }
 
 export function useTraceDecision() {
   return useApiMutation((input: { rfqId: string; decision: 'certify' | 'reject' | 'rescan' | 'freeze'; reason?: string }) =>
