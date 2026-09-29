@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
-import { getApiErrorMessage } from '../../services/api';
+import { apiService, getApiErrorMessage } from '../../services/api';
 import { Badge } from '../common/Badge';
 import { InternalCommand, RFQ, SupplierQuote } from '../../types';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
@@ -12,11 +12,12 @@ import {
   Flame, 
   CheckCircle,
   FileText,
-  Loader2
+  Loader2,
+  Play,
 } from 'lucide-react';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
-import { useExecuteInternalCommand, useRFQs, useSupplierOffers } from '../../hooks/useApiResources';
+import { useExecuteInternalCommand, useProcessRFQ, useRFQs, useSupplierOffers } from '../../hooks/useApiResources';
 
 export const AeroProcurementView: React.FC = () => {
   const [selectedOfferId, setSelectedOfferId] = useState('');
@@ -30,9 +31,15 @@ export const AeroProcurementView: React.FC = () => {
   const loadError = rfqQuery.error?.message || null;
   const usingFallbackData = rfqQuery.isSampleData;
   const commandMutation = useExecuteInternalCommand();
+  const processMutation = useProcessRFQ();
   const selectedRfq = rfqs.find(rfq => rfq.id === selectedRfqId);
   const selectedPartNumber = selectedRfq?.part_number?.trim() || '';
   const actionsBlocked = loading || Boolean(loadError) || usingFallbackData || !selectedRfq || isFailedRfq(selectedRfq);
+  const canProcessSelectedRfq = selectedRfq?.status === 'Intake'
+    && !loading
+    && !loadError
+    && !usingFallbackData
+    && apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_SALES', 'ROLE_PURCHASING']);
   const offersQuery = useSupplierOffers(selectedPartNumber);
   const offers = offersQuery.data || [];
   const selectedOffer = offers.find(offer => offer.id === selectedOfferId);
@@ -65,6 +72,26 @@ export const AeroProcurementView: React.FC = () => {
       setNotice(getApiErrorMessage(error, `Unable to ${description}.`));
     } finally {
       setCommandPending(null);
+    }
+  };
+
+  const processSelectedRfq = async () => {
+    if (!selectedRfq || !canProcessSelectedRfq || processMutation.isPending) return;
+    setNotice(null);
+    try {
+      const result = await processMutation.mutateAsync(selectedRfq.id);
+      if (!result) return;
+      const errorMessage = typeof result.error === 'string' ? result.error : null;
+      const resultMessage = typeof result.message === 'string'
+        ? result.message
+        : typeof result.status === 'string'
+          ? `RFQ processing returned ${result.status}.`
+          : 'RFQ processing completed.';
+      setNoticeType(errorMessage ? 'error' : 'success');
+      setNotice(errorMessage || resultMessage);
+    } catch (error) {
+      setNoticeType('error');
+      setNotice(getApiErrorMessage(error, 'Unable to process this RFQ.'));
     }
   };
 
@@ -143,7 +170,14 @@ export const AeroProcurementView: React.FC = () => {
             <span className="font-mono text-[10px] text-slate-500 dark:text-slate-400">P/N: {selectedRfq?.part_number || 'Unavailable'} | {selectedRfq?.condition || 'Condition unavailable'}</span>
           </div>
 
-          {isFailedRfq(selectedRfq) && <div role="alert" className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">{selectedRfq?.status.trim().toUpperCase() === 'NEEDS_HUMAN_REVIEW' ? 'Operator review required.' : 'Intake failed.'} Sourcing and order actions are disabled. Contact intake operations for escalation; the reprocess API is not available.</div>}
+          {canProcessSelectedRfq && <div className="flex items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">
+            <span>RFQ is queued for intake processing.</span>
+            <button type="button" disabled={processMutation.isPending} aria-busy={processMutation.isPending} onClick={() => void processSelectedRfq()} className="inline-flex min-h-10 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-blue-700 px-3 font-bold text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60">
+              {processMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Play className="h-3.5 w-3.5" aria-hidden="true" />}
+              <span>{processMutation.isPending ? 'PROCESSING...' : 'PROCESS RFQ'}</span>
+            </button>
+          </div>}
+          {isFailedRfq(selectedRfq) && <div role="alert" className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">{selectedRfq?.status.trim().toUpperCase() === 'NEEDS_HUMAN_REVIEW' ? 'Operator review required. Complete the review before processing.' : 'Intake failed. A safe retry requires an intake reset that is not available in this view.'} Sourcing and order actions are disabled.</div>}
           <div className="font-mono text-[11px] text-slate-800 dark:text-slate-300 bg-slate-50 dark:bg-slate-900/80 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
             <span className="text-aero-blue font-bold">REQUEST:</span> {selectedRfq?.raw_text || 'Select an RFQ to view its submitted request.'}
           </div>

@@ -21,7 +21,7 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 | `POST /api/rfqs/intake` | Authenticated customer/internal | `IntakeRequest` | `IntakeResponse` (`rfq_id`, status, message). Customer RFQ creation; `useCreateRFQ` invalidates RFQ lists. |
 | `GET /api/rfqs` | Customer sees own records; internal roles see queue | None | `RFQ[]`. Customer dashboard, Sales, Procurement, Sourcing, Trace. `useRFQs`. |
 | `GET /api/rfqs/{rfq_id}` | Authenticated; customer ownership checked | Path `rfq_id` | RFQ, items and optional quote detail; internal response also includes audit logs. `useRFQDetail` / `useQuotes(rfqId)`. There is no quote collection endpoint. |
-| `POST /api/rfqs/{rfq_id}/process` | Admin/manager/sales/purchasing | Path `rfq_id` | Orchestration result. No UI retry/reprocess control is enabled yet. |
+| `POST /api/rfqs/{rfq_id}/process` | Admin/manager/sales/purchasing | Path `rfq_id` | Orchestration result. Procurement can start processing an RFQ in `Intake`; failed-intake reset/retry is not supported. |
 | `POST /api/quotes/{quote_id}/approve` | Admin/manager/sales | `ApproveRequest` | Approval/dispatch result. Customer Dashboard uses `useDispatchQuote`; Sales issues a quote. |
 | `POST /api/quotes/{quote_id}/reject` | Admin/manager/sales | `RejectRequest` | Rejection result. Service method is available; no quote-collection view exists. |
 | `POST /api/purchase-orders` | Authenticated; customer quote ownership checked | `PurchaseOrderRequest` with exactly three attachment IDs | `Pending_PO_Review`, PO and quote IDs. Customer Portal uses `useCreatePurchaseOrder`; this is not quote approval. |

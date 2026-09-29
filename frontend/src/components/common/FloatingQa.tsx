@@ -95,7 +95,7 @@ const clientQa: Record<CustomerLanguage, ClientQaCopy> = {
 
 const internalQa: ClientQaCopy = { button: 'Internal Q&A', title: 'Internal operations Q&A', intro: 'Quick guidance for RFQ and operations workflows.', entries: [
   { question: 'Why is an RFQ action disabled?', answer: 'Actions stay disabled while data is loading, unavailable, sample-only, or the selected RFQ has Intake_Failed status. Confirm the selected record and data source first.' },
-  { question: 'What should I do with an Intake_Failed RFQ?', answer: 'Do not issue a quote or advance compliance actions. Contact intake operations for review; the UI does not currently expose a retry/reprocess endpoint.' },
+  { question: 'What should I do with an Intake_Failed RFQ?', answer: 'Do not issue a quote or advance compliance actions. An authorized operator must resolve the intake failure and reset the RFQ before it can be processed again; the Procurement view only starts processing for RFQs in Intake.' },
   { question: 'Are DEMO ROUTE and SAMPLE values live?', answer: 'No. Those labels identify example route or workflow content. Do not use sample locations, prices, counts, or compliance states as operational evidence.' },
   { question: 'Where may I test mutation actions?', answer: 'Use staging with disposable records only. Verify confirmation, one-time submission, result feedback, rollback/cleanup, and audit trail; never test destructive actions on production.' },
   { question: 'How should a data-load failure be handled?', answer: 'Use the visible Retry control and check service/API health. If data remains unavailable, stop mutations and escalate to the owning operations team.' },

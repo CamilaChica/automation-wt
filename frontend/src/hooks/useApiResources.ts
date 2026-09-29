@@ -246,6 +246,14 @@ export function useDispatchQuote() {
     apiService.approveQuote(input.quoteId, input.operatorName, input.overrides, input.expectedVersion), [apiQueryKeys.rfqs, 'rfq-detail']);
 }
 
+export function useProcessRFQ() {
+  return useApiMutation((rfqId: string) => apiService.processRFQ(rfqId), [
+    apiQueryKeys.rfqs,
+    'rfq-detail',
+    apiQueryKeys.automationEvents,
+  ]);
+}
+
 export function useTraceDecision() {
   return useApiMutation((input: { rfqId: string; decision: 'certify' | 'reject' | 'rescan' | 'freeze'; reason?: string }) =>
     apiService.recordTraceDecision(input.rfqId, input.decision, input.reason), [apiQueryKeys.rfqs, apiQueryKeys.automationEvents]);

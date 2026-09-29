@@ -369,6 +369,11 @@ export const apiService = {
     return null;
   },
 
+  hasAnyRole(roles: readonly string[]): boolean {
+    const role = storedValue('wt_role');
+    return role !== null && roles.includes(role);
+  },
+
   isAuthenticated() {
     return Boolean(storedValue('wt_access_token'));
   },
