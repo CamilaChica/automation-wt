@@ -10,6 +10,7 @@ from api.auth import current_user
 from api.main import app
 from services.db_service import db_service
 from services.operations_store import OperationsStore
+from services.workflow_states import InvalidWorkflowTransition, validate_transition
 
 
 class TestCustomerDataIsolation(unittest.TestCase):
@@ -181,6 +182,65 @@ class TestPurchaseOrderReviewApi(unittest.TestCase):
             self.assertTrue(store.update_purchase_order_status("QTE-1", "APPROVED"))
             self.assertEqual(store.list_purchase_orders(), [])
             self.assertFalse(store.update_purchase_order_status("QTE-1", "APPROVED"))
+
+
+class TestFailedIntakeResetApi(unittest.TestCase):
+    def setUp(self):
+        self.admin = {"role": "ROLE_ADMIN", "email": "admin@example.com"}
+        app.dependency_overrides[current_user] = lambda: self.admin
+        self.client = TestClient(app)
+
+    def tearDown(self):
+        app.dependency_overrides.clear()
+
+    def test_admin_can_reset_failed_intake_with_audited_reason(self):
+        failed_rfq = SimpleNamespace(status="Intake_Failed")
+        updated_rfq = SimpleNamespace(status="Intake")
+        with (
+            patch("api.main.db_service.get_rfq", return_value=failed_rfq),
+            patch("api.main.db_service.update_rfq_status", return_value=updated_rfq) as update_status,
+            patch("api.main.db_service.add_audit_log") as add_audit_log,
+        ):
+            response = self.client.post(
+                "/api/internal/rfqs/WT-RESET-1/reset-intake",
+                json={"reason": "Corrected source attachment received."},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "rfq_id": "WT-RESET-1",
+            "status": "Intake",
+            "reset_by": "admin@example.com",
+            "reason": "Corrected source attachment received.",
+        })
+        update_status.assert_called_once_with("WT-RESET-1", "Intake")
+        add_audit_log.assert_called_once_with(
+            "WT-RESET-1",
+            "AutomationControl",
+            "intake_reset",
+            "Failed intake reset to Intake by admin@example.com. Reason: Corrected source attachment received.",
+            "WARNING",
+        )
+
+    def test_human_review_cannot_be_reset_and_blank_reason_is_rejected(self):
+        with patch("api.main.db_service.get_rfq", return_value=SimpleNamespace(status="NEEDS_HUMAN_REVIEW")), patch("api.main.db_service.update_rfq_status") as update_status:
+            response = self.client.post("/api/internal/rfqs/WT-RESET-2/reset-intake", json={"reason": "Trying again"})
+        self.assertEqual(response.status_code, 409)
+        update_status.assert_not_called()
+
+        with patch("api.main.db_service.get_rfq", return_value=SimpleNamespace(status="Intake_Failed")):
+            response = self.client.post("/api/internal/rfqs/WT-RESET-2/reset-intake", json={"reason": "   "})
+        self.assertEqual(response.status_code, 422)
+
+    def test_sales_role_cannot_reset_failed_intake(self):
+        app.dependency_overrides[current_user] = lambda: {"role": "ROLE_SALES", "email": "sales@example.com"}
+        response = self.client.post("/api/internal/rfqs/WT-RESET-3/reset-intake", json={"reason": "Retry"})
+        self.assertEqual(response.status_code, 403)
+
+    def test_state_machine_only_allows_failed_intake_to_return_to_intake(self):
+        validate_transition("Intake_Failed", "Intake")
+        with self.assertRaises(InvalidWorkflowTransition):
+            validate_transition("NEEDS_HUMAN_REVIEW", "Intake")
 
 
 if __name__ == "__main__":

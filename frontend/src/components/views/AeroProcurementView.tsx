@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
-import { useApprovePurchaseOrder, useExecuteInternalCommand, useFreightQuote, useInventoryDirectory, useMailboxInbox, usePendingPurchaseOrders, useProcessRFQ, useRFQs, useSendMailboxMessage, useSetAutomationPause, useSupplierDirectory, useSupplierOffers, useSupplierProfile } from '../../hooks/useApiResources';
+import { useApprovePurchaseOrder, useExecuteInternalCommand, useFreightQuote, useInventoryDirectory, useMailboxInbox, usePendingPurchaseOrders, useProcessRFQ, useRFQs, useResetFailedIntake, useSendMailboxMessage, useSetAutomationPause, useSupplierDirectory, useSupplierOffers, useSupplierProfile } from '../../hooks/useApiResources';
 
 export const AeroProcurementView: React.FC = () => {
   const [activeMailbox, setActiveMailbox] = useState<'sales' | 'purchasing'>(() => apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_SALES']) ? 'sales' : 'purchasing');
@@ -37,6 +37,7 @@ export const AeroProcurementView: React.FC = () => {
   const [catalogTab, setCatalogTab] = useState<'inventory' | 'suppliers'>('inventory');
   const [selectedOfferId, setSelectedOfferId] = useState('');
   const [selectedRfqId, setSelectedRfqId] = useState('');
+  const [intakeResetReason, setIntakeResetReason] = useState('');
   const [selectedSupplierId, setSelectedSupplierId] = useState('');
   const [automationReason, setAutomationReason] = useState('');
   const [freightOrigin, setFreightOrigin] = useState('');
@@ -74,6 +75,7 @@ export const AeroProcurementView: React.FC = () => {
   const selectedPurchaseOrder: PurchaseOrderReviewRecord | undefined = pendingPurchaseOrders.find(purchaseOrder => purchaseOrder.id === selectedPurchaseOrderId);
   const commandMutation = useExecuteInternalCommand();
   const processMutation = useProcessRFQ();
+  const resetIntakeMutation = useResetFailedIntake();
   const automationMutation = useSetAutomationPause();
   const freightQuoteMutation = useFreightQuote();
   const selectedRfq = rfqs.find(rfq => rfq.id === selectedRfqId);
@@ -84,6 +86,11 @@ export const AeroProcurementView: React.FC = () => {
     && !loadError
     && !usingFallbackData
     && apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_SALES', 'ROLE_PURCHASING']);
+  const canResetSelectedRfq = selectedRfq?.status.trim().toUpperCase() === 'INTAKE_FAILED'
+    && !loading
+    && !loadError
+    && !usingFallbackData
+    && apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER']);
   const canManageAutomation = Boolean(selectedRfq)
     && !loading
     && !loadError
@@ -127,6 +134,7 @@ export const AeroProcurementView: React.FC = () => {
 
   useEffect(() => {
     setAutomationReason('');
+    setIntakeResetReason('');
   }, [selectedRfqId]);
 
   const runCommand = async (command: InternalCommand, description: string) => {
@@ -167,6 +175,24 @@ export const AeroProcurementView: React.FC = () => {
     } catch (error) {
       setNoticeType('error');
       setNotice(getApiErrorMessage(error, 'Unable to process this RFQ.'));
+    }
+  };
+
+  const resetSelectedFailedIntake = async () => {
+    if (!selectedRfq || !canResetSelectedRfq || resetIntakeMutation.isPending) return;
+    const reason = intakeResetReason.trim();
+    if (!reason) return;
+    if (!window.confirm(`Reset failed intake for ${selectedRfq.id}? Processing will remain a separate action.`)) return;
+    setNotice(null);
+    try {
+      const result = await resetIntakeMutation.mutateAsync({ rfqId: selectedRfq.id, body: { reason } });
+      if (!result) return;
+      setNoticeType('success');
+      setNotice(`Failed intake reset to ${result.status}. Review the source, then explicitly process this RFQ.`);
+      setIntakeResetReason('');
+    } catch (error) {
+      setNoticeType('error');
+      setNotice(getApiErrorMessage(error, 'Unable to reset this failed intake.'));
     }
   };
 
@@ -375,7 +401,13 @@ export const AeroProcurementView: React.FC = () => {
               <span>{processMutation.isPending ? 'PROCESSING...' : 'PROCESS RFQ'}</span>
             </button>
           </div>}
-          {isFailedRfq(selectedRfq) && <div role="alert" className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">{selectedRfq?.status.trim().toUpperCase() === 'NEEDS_HUMAN_REVIEW' ? 'Operator review required. Complete the review before processing.' : 'Intake failed. A safe retry requires an intake reset that is not available in this view.'} Sourcing and order actions are disabled.</div>}
+          {isFailedRfq(selectedRfq) && <div role="alert" className="space-y-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">
+            <p>{selectedRfq?.status.trim().toUpperCase() === 'NEEDS_HUMAN_REVIEW' ? 'Operator review required. Complete the review before processing.' : 'Intake failed. An authorized admin or manager must reset it here before a separate Process action is available.'} Sourcing and order actions are disabled.</p>
+            {canResetSelectedRfq && <div className="flex flex-wrap items-end gap-2">
+              <label className="min-w-0 flex-1 space-y-1 text-[10px] font-semibold"><span>Reason for intake reset</span><input aria-label="Reason for intake reset" value={intakeResetReason} onChange={event => setIntakeResetReason(event.target.value)} maxLength={500} required disabled={resetIntakeMutation.isPending} className="w-full rounded-md border border-red-300 bg-white px-2 py-1.5 text-xs font-normal text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-red-500/40 dark:bg-slate-950 dark:text-slate-100" /></label>
+              <button type="button" disabled={resetIntakeMutation.isPending || !intakeResetReason.trim()} aria-busy={resetIntakeMutation.isPending} onClick={() => void resetSelectedFailedIntake()} className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-md bg-red-700 px-3 text-xs font-bold text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50">{resetIntakeMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}<span>RESET INTAKE</span></button>
+            </div>}
+          </div>}
           <div className="font-mono text-[11px] text-slate-800 dark:text-slate-300 bg-slate-50 dark:bg-slate-900/80 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
             <span className="text-aero-blue font-bold">REQUEST:</span> {selectedRfq?.raw_text || 'Select an RFQ to view its submitted request.'}
           </div>

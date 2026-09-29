@@ -4,6 +4,8 @@ import type {
   ApiStatus,
   ExtractionReviewDecisionBody,
   ExtractionReviewResponse,
+  FailedIntakeResetBody,
+  FailedIntakeResetResponse,
   CarrierTrackingBody,
   CreateShipmentBody,
   FreightQuoteBody,
@@ -276,6 +278,15 @@ export function useProcessRFQ() {
     'rfq-detail',
     apiQueryKeys.automationEvents,
   ]);
+}
+
+export function useResetFailedIntake() {
+  return useApiMutation((input: { rfqId: string; body: FailedIntakeResetBody }): Promise<FailedIntakeResetResponse> =>
+    apiService.resetFailedIntake(input.rfqId, input.body), [
+      apiQueryKeys.rfqs,
+      'rfq-detail',
+      apiQueryKeys.automationEvents,
+    ]);
 }
 
 export function useRejectQuote() {

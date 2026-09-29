@@ -336,6 +336,9 @@ class AutomationPauseRequest(BaseModel):
     paused: bool
     reason: Optional[str] = None
 
+class FailedIntakeResetRequest(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=500)
+
 class TraceDecisionRequest(BaseModel):
     decision: str = Field(..., pattern="^(certify|reject|rescan|freeze)$")
     reason: Optional[str] = None
@@ -894,6 +897,34 @@ async def trigger_process(rfq_id: str, _user: dict = Depends(require_roles("ROLE
         
     res = await orchestration_service.process_rfq_pipeline(rfq_id)
     return res
+
+@app.post("/api/internal/rfqs/{rfq_id}/reset-intake")
+async def reset_failed_intake(
+    rfq_id: str,
+    request: FailedIntakeResetRequest,
+    user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER")),
+):
+    rfq = db_service.get_rfq(rfq_id)
+    if not rfq:
+        raise HTTPException(status_code=404, detail="RFQ not found.")
+    if rfq.status != "Intake_Failed":
+        raise HTTPException(status_code=409, detail="Only Intake_Failed RFQs can be reset. Human-review RFQs must be resolved through their review queue.")
+    reason = request.reason.strip()
+    if not reason:
+        raise HTTPException(status_code=422, detail="A reset reason is required.")
+    transaction = operations_store.transaction() if operations_store.storage_engine == "postgresql" else nullcontext()
+    with transaction:
+        updated = db_service.update_rfq_status(rfq_id, "Intake")
+        if not updated:
+            raise HTTPException(status_code=404, detail="RFQ not found.")
+        db_service.add_audit_log(
+            rfq_id,
+            "AutomationControl",
+            "intake_reset",
+            f"Failed intake reset to Intake by {user['email']}. Reason: {reason}",
+            "WARNING",
+        )
+    return {"rfq_id": rfq_id, "status": "Intake", "reset_by": user["email"], "reason": reason}
 
 @app.post("/api/internal/rfqs/{rfq_id}/automation")
 async def set_automation_pause(

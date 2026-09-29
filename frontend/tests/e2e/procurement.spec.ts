@@ -53,7 +53,7 @@ test('procurement can process queued intake RFQs', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'PROCESS RFQ' })).toHaveCount(0);
 });
 
-test('procurement does not offer retry for failed intake without a reset path', async ({ page }) => {
+test('procurement does not reset human-review RFQs or process them before review', async ({ page }) => {
   await seedSession(page, 'internal');
   let processCalls = 0;
 
@@ -61,11 +61,11 @@ test('procurement does not offer retry for failed intake without a reset path', 
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify([{
-      id: 'WT-FAILED-1',
-      customer_name: 'Failed Test',
-      customer_email: 'failed@example.com',
-      status: 'Intake_Failed',
-      raw_text: 'Unparseable test request',
+      id: 'WT-REVIEW-1',
+      customer_name: 'Review Test',
+      customer_email: 'review@example.com',
+      status: 'NEEDS_HUMAN_REVIEW',
+      raw_text: 'Request held for operator review',
       created_at: new Date().toISOString(),
     }]),
   }));
@@ -74,7 +74,7 @@ test('procurement does not offer retry for failed intake without a reset path', 
     contentType: 'application/json',
     body: JSON.stringify([]),
   }));
-  await page.route('**/api/rfqs/WT-FAILED-1/process', async route => {
+  await page.route('**/api/rfqs/WT-REVIEW-1/process', async route => {
     processCalls += 1;
     await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
   });
@@ -82,9 +82,58 @@ test('procurement does not offer retry for failed intake without a reset path', 
   await page.goto('/');
   await page.locator('aside button').filter({ hasText: 'Proc Command' }).first().click();
 
-  await expect(page.getByText(/safe retry requires an intake reset/i)).toBeVisible();
+  await expect(page.getByText(/Operator review required\. Complete the review before processing/i)).toBeVisible();
   await expect(page.getByRole('button', { name: 'PROCESS RFQ' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'RESET INTAKE' })).toHaveCount(0);
   expect(processCalls).toBe(0);
+});
+
+test('admin must reset failed intake before explicitly processing it', async ({ page }) => {
+  await seedSession(page, 'internal');
+  let status = 'Intake_Failed';
+  const resetRequests: Array<{ reason: string }> = [];
+  let processCalls = 0;
+
+  await page.route('**/api/rfqs', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([{
+      id: 'WT-RESET-UI-1',
+      customer_name: 'Reset Test',
+      customer_email: 'reset@example.com',
+      status,
+      raw_text: 'Corrected request source',
+      created_at: new Date().toISOString(),
+    }]),
+  }));
+  await page.route('**/api/supplier-offers**', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/internal/rfqs/WT-RESET-UI-1/reset-intake', async route => {
+    const payload = route.request().postDataJSON() as { reason: string };
+    resetRequests.push(payload);
+    status = 'Intake';
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ rfq_id: 'WT-RESET-UI-1', status, reset_by: 'camila@wingedtycoons.com', reason: payload.reason }) });
+  });
+  await page.route('**/api/rfqs/WT-RESET-UI-1/process', async route => {
+    processCalls += 1;
+    status = 'Validating';
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status, message: 'RFQ processing started.' }) });
+  });
+
+  await page.goto('/');
+  await page.locator('aside button').filter({ hasText: 'Proc Command' }).first().click();
+  await expect(page.getByText(/Intake failed\. An authorized admin or manager must reset it here/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'RESET INTAKE' })).toBeDisabled();
+  await page.getByLabel('Reason for intake reset').fill('Corrected source attachment received.');
+  page.on('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'RESET INTAKE' }).click();
+
+  await expect(page.getByRole('button', { name: 'PROCESS RFQ' })).toBeVisible();
+  await expect.poll(() => resetRequests[0]).toEqual({ reason: 'Corrected source attachment received.' });
+  expect(processCalls).toBe(0);
+
+  await page.getByRole('button', { name: 'PROCESS RFQ' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'RFQ processing started.' })).toBeVisible();
+  await expect.poll(() => processCalls).toBe(1);
 });
 
 test('authorized procurement users can inspect internal inventory and supplier profiles', async ({ page }) => {

@@ -11,6 +11,8 @@ import type {
   EmployeeWorkHoursReport,
   FreightQuoteBody,
   FreightQuoteResponse,
+  FailedIntakeResetBody,
+  FailedIntakeResetResponse,
   IntakeResponse,
   LoginResponse,
   LlmHealthResponse,
@@ -404,6 +406,11 @@ export const apiService = {
 
   async processRFQ(rfqId: string): Promise<Record<string, unknown>> {
     const res = await axios.post(`${API_BASE}/rfqs/${encodeURIComponent(rfqId)}/process`);
+    return res.data;
+  },
+
+  async resetFailedIntake(rfqId: string, body: FailedIntakeResetBody): Promise<FailedIntakeResetResponse> {
+    const res = await axios.post<FailedIntakeResetResponse>(`${API_BASE}/internal/rfqs/${encodeURIComponent(rfqId)}/reset-intake`, body);
     return res.data;
   },
 

@@ -225,6 +225,8 @@ export interface FreightQuoteResponse {
 }
 export interface ShipmentSmsBody { recipient: string; status: string; tracking_url?: string }
 export interface AutomationPauseBody { paused: boolean; reason?: string }
+export interface FailedIntakeResetBody { reason: string }
+export interface FailedIntakeResetResponse { rfq_id: string; status: 'Intake'; reset_by: string; reason: string }
 export interface TraceDecisionResponse { decision: string; automation_paused: boolean }
 export interface FulfillmentStage {
   shipment_id: string;
@@ -260,6 +262,8 @@ export interface ApiRouteContracts {
   'GET /api/rfqs': { response: RFQ[] };
   'POST /api/rfqs/intake': { request: IntakeRequestBody; response: IntakeResponse };
   'GET /api/rfqs/{rfq_id}': { response: RFQDetailResponse };
+  'POST /api/rfqs/{rfq_id}/process': { response: Record<string, unknown> };
+  'POST /api/internal/rfqs/{rfq_id}/reset-intake': { request: FailedIntakeResetBody; response: FailedIntakeResetResponse };
   'GET /api/supplier-offers?part_number={part_number}': { response: SupplierQuote[] };
   'GET /api/internal/shipments': { response: Shipment[] };
   'GET /api/shipments/track/{public_token}': { response: ShipmentTraceResponse };
@@ -274,9 +278,9 @@ export interface ApiRouteContracts {
   'POST /api/quotes/{quote_id}/approve': { request: ApproveQuoteBody; response: { status: string; quote_id: string; message: string } };
   'POST /api/quotes/{quote_id}/reject': { request: RejectQuoteBody; response: { status: string; quote_id: string; message: string } };
   'POST /api/purchase-orders': { request: PurchaseOrderBody; response: PurchaseOrderResponse };
+  'GET /api/internal/purchase-orders': { response: PurchaseOrderReviewRecord[] };
   'POST /api/internal/rfqs/{rfq_id}/trace-decision': { request: TraceDecisionBody; response: { decision: string; automation_paused: boolean } };
   'POST /api/internal/rfqs/{rfq_id}/automation': { request: AutomationPauseBody; response: Record<string, unknown> };
-  'POST /api/rfqs/{rfq_id}/process': { response: Record<string, unknown> };
   'POST /api/internal/commands': { request: InternalCommandBody; response: CommandResponse };
   'POST /api/internal/shipments': { request: CreateShipmentBody; response: { shipment_id: string; tracking_url: string; status: string; tracking_notification: string } };
   'POST /api/internal/shipments/{shipment_id}/events': { request: ShipmentEventBody; response: { status: string; event: ShipmentEvent } };
