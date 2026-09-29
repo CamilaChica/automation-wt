@@ -16,6 +16,8 @@ import type {
   MailboxInboxResponse,
   MailboxMessageBody,
   MailboxSendResponse,
+  PurchaseOrderApprovalRequest,
+  PurchaseOrderReviewRecord,
   ShipmentTraceResponse,
   ShipmentEventBody,
   ShipmentSmsBody,
@@ -174,6 +176,7 @@ export const apiQueryKeys = {
   suppliers: 'suppliers',
   supplierDetail: (supplierId: string) => `supplier-detail:${supplierId}`,
   mailboxInbox: (mailbox: 'sales' | 'purchasing') => `mailbox-inbox:${mailbox}`,
+  purchaseOrders: 'purchase-orders',
 } as const;
 
 export function useRFQs() {
@@ -362,6 +365,20 @@ export function useSetAutomationPause() {
           apiQueryKeys.mailboxInbox('purchasing'),
         ]);
     }
+
+      export function usePendingPurchaseOrders(enabled = true) {
+        return useApiQuery<PurchaseOrderReviewRecord[]>(apiQueryKeys.purchaseOrders, async () => ({
+          data: await apiService.getPendingPurchaseOrders(),
+        }), enabled);
+      }
+
+      export function useApprovePurchaseOrder() {
+        return useApiMutation((input: { quoteId: string; body: PurchaseOrderApprovalRequest }) =>
+          apiService.approvePurchaseOrder(input.quoteId, input.body), [
+            apiQueryKeys.purchaseOrders,
+            apiQueryKeys.rfqs,
+          ]);
+      }
 
       export function useCreateShipment() {
         return useApiMutation((body: CreateShipmentBody) => apiService.createShipment(body), [

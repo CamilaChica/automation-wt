@@ -390,6 +390,22 @@ class PostgresReviewTelemetryRepository:
             ), {"po_number": po_number}).mappings().one()
             return dict(row)
 
+    def list_purchase_orders(self, *, status: str = "Pending_PO_Review") -> list[dict[str, Any]]:
+        with self._read() as connection:
+            rows = connection.execute(text(
+                "SELECT id, po_number, customer_email, total_amount, status, quote_id, rfq_id, attachment_metadata, created_at "
+                "FROM purchase_orders WHERE status = :status ORDER BY created_at ASC"
+            ), {"status": status}).mappings().all()
+            return [dict(row) for row in rows]
+
+    def update_purchase_order_status(self, quote_id: str, status: str) -> bool:
+        with self._begin() as connection:
+            updated_id = connection.execute(text(
+                "UPDATE purchase_orders SET status = :status WHERE quote_id = :quote_id "
+                "AND status = 'Pending_PO_Review' RETURNING id"
+            ), {"status": status, "quote_id": quote_id}).scalar_one_or_none()
+            return updated_id is not None
+
     @contextmanager
     def transaction(self):
         active = getattr(self._transaction_state, "connection", None)

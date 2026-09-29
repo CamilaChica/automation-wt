@@ -23,6 +23,7 @@ import type {
   OtpRequestResponse,
   OtpVerifyBody,
   PurchaseOrderApprovalRequest,
+  PurchaseOrderReviewRecord,
   ShipmentEventBody,
   ShipmentSmsBody,
   ShipmentTraceResponse,
@@ -485,6 +486,10 @@ export const apiService = {
       customer_email,
       attachment_ids,
     });
+    return res.data;
+  },
+  async getPendingPurchaseOrders(): Promise<PurchaseOrderReviewRecord[]> {
+    const res = await axios.get<PurchaseOrderReviewRecord[]>(`${API_BASE}/internal/purchase-orders`, { params: { status: 'Pending_PO_Review' } });
     return res.data;
   },
   async trackShipment(public_token: string): Promise<ShipmentTraceResponse> {

@@ -362,3 +362,46 @@ test('authorized users can update shipment events, tracking, and SMS', async ({ 
   expect(payloads.refresh).toBeDefined();
   expect(payloads.sms).toMatchObject({ recipient: '+15550100100', status: 'In transit' });
 });
+
+test('purchasing can inspect and approve a pending purchase order', async ({ page }) => {
+  let pending = true;
+  let approvalPayload: Record<string, unknown> | undefined;
+  const purchaseOrder = {
+    id: 'PO-REVIEW-1',
+    po_number: 'CUST-PO-100',
+    customer_email: 'buyer@example.com',
+    total_amount: 4200,
+    status: 'Pending_PO_Review',
+    quote_id: 'QTE-PO-100',
+    rfq_id: 'WT-PO-100',
+    attachment_metadata: [{ attachment_id: 'ATT-PO-1' }, { attachment_id: 'ATT-PO-2' }, { attachment_id: 'ATT-PO-3' }],
+  };
+  await seedSession(page, 'internal');
+  await page.route('**/api/rfqs', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/inventory', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/suppliers', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/internal/purchase-orders**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(pending ? [purchaseOrder] : []),
+  }));
+  await page.route('**/api/purchase-orders/QTE-PO-100/approve', async route => {
+    approvalPayload = route.request().postDataJSON();
+    pending = false;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'Purchase_Order_Received', quote_id: purchaseOrder.quote_id, rfq_id: purchaseOrder.rfq_id }) });
+  });
+  await page.goto('/');
+  await page.locator('aside button').filter({ hasText: 'Proc Command' }).first().click();
+
+  await expect(page.getByRole('heading', { name: 'PURCHASE ORDER REVIEW' })).toBeVisible();
+  await expect(page.getByText('CUST-PO-100').first()).toBeVisible();
+  await expect(page.getByText('$4,200.00').first()).toBeVisible();
+  await expect(page.getByText('ATT-PO-1')).toBeVisible();
+  await page.getByLabel('Purchase order approval comments').fill('Signed documents verified.');
+  page.on('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'APPROVE PO' }).click();
+
+  await expect(page.getByText(/Purchase order CUST-PO-100 approved/)).toBeVisible();
+  await expect.poll(() => approvalPayload).toEqual({ operator_name: 'camila@wingedtycoons.com', comments: 'Signed documents verified.' });
+  await expect(page.getByText('No purchase orders are waiting for review.')).toBeVisible();
+});

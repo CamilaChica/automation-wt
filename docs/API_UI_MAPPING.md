@@ -25,7 +25,8 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 | `POST /api/quotes/{quote_id}/approve` | Admin/manager/sales | `ApproveRequest` | Approval/dispatch result. Customer Dashboard uses `useDispatchQuote`; Sales issues a quote. |
 | `POST /api/quotes/{quote_id}/reject` | Admin/manager/sales | `RejectRequest` | Rejection result. Sales Command rejects the selected quote with an audited reason. There is no quote-collection view. |
 | `POST /api/purchase-orders` | Authenticated; customer quote ownership checked | `PurchaseOrderRequest` with exactly three attachment IDs | `Pending_PO_Review`, PO and quote IDs. Customer Portal uses `useCreatePurchaseOrder`; this is not quote approval. |
-| `POST /api/purchase-orders/{quote_id}/approve` | Admin/manager/purchasing | `PurchaseOrderApprovalRequest` | PO review state, quote ID, RFQ ID. No current view is bound to this endpoint. |
+| `GET /api/internal/purchase-orders?status=Pending_PO_Review` | Admin/manager/purchasing | Optional status filter | Pending PO queue in Aero Procurement with customer, quote/RFQ IDs, total, and attachment IDs. |
+| `POST /api/purchase-orders/{quote_id}/approve` | Admin/manager/purchasing | `PurchaseOrderApprovalRequest` | Aero Procurement approves a pending PO with operator/comments; the RFQ and persisted PO status are updated and the item leaves the queue. |
 | `GET /api/attachments/{attachment_id}` | Authenticated and authorized | Path `attachment_id` | Binary attachment download. Sales/document preview. |
 | `POST /api/attachments` | Authenticated and authorized | Multipart `file` | Accepted attachment ID/name/status. Customer RFQ and PO uploads. |
 

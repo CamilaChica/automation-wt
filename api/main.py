@@ -1182,6 +1182,13 @@ async def reject_quote(quote_id: str, request: RejectRequest, _user: dict = Depe
         raise HTTPException(status_code=409, detail=result["error"])
     return result
 
+@app.get("/api/internal/purchase-orders")
+async def list_pending_purchase_orders(
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+):
+    return operations_store.list_purchase_orders(status="Pending_PO_Review")
+
+
 @app.post("/api/purchase-orders")
 async def submit_purchase_order(request: PurchaseOrderRequest, user: dict = Depends(current_user)):
     """Receive a customer PO and route its purchasing details to the human team."""
@@ -1290,6 +1297,7 @@ async def approve_purchase_order(
         raise HTTPException(status_code=409, detail="PO is not waiting for human review.")
 
     orchestration_service.approve_purchase_order(rfq.id, request.operator_name, request.comments)
+    operations_store.update_purchase_order_status(quote_id, "APPROVED")
     return {"status": "Purchase_Order_Received", "quote_id": quote_id, "rfq_id": rfq.id}
 
 @app.get("/api/shipments/track/{public_token}")

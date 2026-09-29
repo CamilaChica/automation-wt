@@ -3,7 +3,7 @@ import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { apiService, getApiErrorMessage } from '../../services/api';
 import { Badge } from '../common/Badge';
 import { InternalCommand, InventoryItem, RFQ, Supplier, SupplierQuote } from '../../types';
-import type { FreightQuoteBody, FreightQuoteResponse, MailboxMessageSummary } from '../../types/api';
+import type { FreightQuoteBody, FreightQuoteResponse, MailboxMessageSummary, PurchaseOrderReviewRecord } from '../../types/api';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import { 
   FileCheck, 
@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
-import { useExecuteInternalCommand, useFreightQuote, useInventoryDirectory, useMailboxInbox, useProcessRFQ, useRFQs, useSendMailboxMessage, useSetAutomationPause, useSupplierDirectory, useSupplierOffers, useSupplierProfile } from '../../hooks/useApiResources';
+import { useApprovePurchaseOrder, useExecuteInternalCommand, useFreightQuote, useInventoryDirectory, useMailboxInbox, usePendingPurchaseOrders, useProcessRFQ, useRFQs, useSendMailboxMessage, useSetAutomationPause, useSupplierDirectory, useSupplierOffers, useSupplierProfile } from '../../hooks/useApiResources';
 
 export const AeroProcurementView: React.FC = () => {
   const [activeMailbox, setActiveMailbox] = useState<'sales' | 'purchasing'>(() => apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_SALES']) ? 'sales' : 'purchasing');
@@ -30,6 +30,10 @@ export const AeroProcurementView: React.FC = () => {
   const [mailboxReplyTo, setMailboxReplyTo] = useState('');
   const [mailboxNotice, setMailboxNotice] = useState<string | null>(null);
   const [mailboxNoticeType, setMailboxNoticeType] = useState<'success' | 'error'>('success');
+  const [selectedPurchaseOrderId, setSelectedPurchaseOrderId] = useState('');
+  const [purchaseOrderComments, setPurchaseOrderComments] = useState('');
+  const [purchaseOrderNotice, setPurchaseOrderNotice] = useState<string | null>(null);
+  const [purchaseOrderNoticeType, setPurchaseOrderNoticeType] = useState<'success' | 'error'>('success');
   const [catalogTab, setCatalogTab] = useState<'inventory' | 'suppliers'>('inventory');
   const [selectedOfferId, setSelectedOfferId] = useState('');
   const [selectedRfqId, setSelectedRfqId] = useState('');
@@ -51,6 +55,7 @@ export const AeroProcurementView: React.FC = () => {
   const loadError = rfqQuery.error?.message || null;
   const usingFallbackData = rfqQuery.isSampleData;
   const canViewInternalCatalog = apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_PURCHASING']);
+  const canReviewPurchaseOrders = apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_PURCHASING']);
   const canAccessSalesMailbox = apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_SALES']);
   const canAccessPurchasingMailbox = apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_PURCHASING']);
   const canAccessActiveMailbox = activeMailbox === 'sales' ? canAccessSalesMailbox : canAccessPurchasingMailbox;
@@ -59,10 +64,14 @@ export const AeroProcurementView: React.FC = () => {
   const supplierProfileQuery = useSupplierProfile(selectedSupplierId);
   const mailboxInboxQuery = useMailboxInbox(activeMailbox, canAccessActiveMailbox);
   const mailboxSendMutation = useSendMailboxMessage();
+  const purchaseOrderQuery = usePendingPurchaseOrders(canReviewPurchaseOrders);
+  const purchaseOrderApprovalMutation = useApprovePurchaseOrder();
   const inventory = inventoryQuery.data || [];
   const suppliers = supplierDirectoryQuery.data || [];
   const mailboxMessages = mailboxInboxQuery.data?.messages || [];
   const selectedMailboxMessage: MailboxMessageSummary | undefined = mailboxMessages.find(message => message.message_id === selectedMailboxMessageId);
+  const pendingPurchaseOrders = purchaseOrderQuery.data || [];
+  const selectedPurchaseOrder: PurchaseOrderReviewRecord | undefined = pendingPurchaseOrders.find(purchaseOrder => purchaseOrder.id === selectedPurchaseOrderId);
   const commandMutation = useExecuteInternalCommand();
   const processMutation = useProcessRFQ();
   const automationMutation = useSetAutomationPause();
@@ -107,6 +116,14 @@ export const AeroProcurementView: React.FC = () => {
       setSelectedMailboxMessageId('');
     }
   }, [activeMailbox, mailboxMessages, selectedMailboxMessageId]);
+
+  useEffect(() => {
+    if (pendingPurchaseOrders.length > 0 && !pendingPurchaseOrders.some(purchaseOrder => purchaseOrder.id === selectedPurchaseOrderId)) {
+      setSelectedPurchaseOrderId(pendingPurchaseOrders[0].id);
+    } else if (pendingPurchaseOrders.length === 0) {
+      setSelectedPurchaseOrderId('');
+    }
+  }, [pendingPurchaseOrders, selectedPurchaseOrderId]);
 
   useEffect(() => {
     setAutomationReason('');
@@ -219,6 +236,45 @@ export const AeroProcurementView: React.FC = () => {
     } catch (error) {
       setMailboxNotice(getApiErrorMessage(error, `Unable to send from the ${activeMailbox} mailbox.`));
       setMailboxNoticeType('error');
+    }
+  };
+
+  const approvePendingPurchaseOrder = async () => {
+    const purchaseOrder = selectedPurchaseOrder;
+    if (!canReviewPurchaseOrders || !purchaseOrder?.quote_id || purchaseOrderApprovalMutation.isPending) return;
+    if (!window.confirm(`Approve purchase order ${purchaseOrder.po_number} for ${purchaseOrder.customer_email}?`)) return;
+    setPurchaseOrderNotice(null);
+    try {
+      const result = await purchaseOrderApprovalMutation.mutateAsync({
+              quoteId: purchaseOrder.quote_id,
+        body: {
+          operator_name: apiService.getUserEmail() || 'Authenticated operator',
+          comments: purchaseOrderComments.trim() || undefined,
+        },
+      });
+      if (!result) return;
+      setPurchaseOrderNoticeType('success');
+      setPurchaseOrderNotice(`Purchase order ${purchaseOrder.po_number} approved.`);
+      setPurchaseOrderComments('');
+    } catch (error) {
+      setPurchaseOrderNoticeType('error');
+      setPurchaseOrderNotice(getApiErrorMessage(error, 'Unable to approve the purchase order.'));
+    }
+  };
+
+  const downloadPurchaseOrderAttachment = async (attachmentId: string) => {
+    if (!attachmentId || !selectedPurchaseOrder) return;
+    try {
+      const blob = await apiService.downloadAttachment(attachmentId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${selectedPurchaseOrder.po_number}-${attachmentId}`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setPurchaseOrderNoticeType('error');
+      setPurchaseOrderNotice(getApiErrorMessage(error, 'Unable to download the purchase order attachment.'));
     }
   };
 
@@ -496,6 +552,22 @@ export const AeroProcurementView: React.FC = () => {
             <button type="submit" disabled={mailboxSendMutation.isPending || !mailboxRecipient.trim() || !mailboxSubject.trim() || !mailboxBody.trim()} aria-busy={mailboxSendMutation.isPending} className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-md bg-aero-blue px-3 text-xs font-bold text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50">{mailboxSendMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}<span>{mailboxSendMutation.isPending ? 'SENDING...' : 'SEND MESSAGE'}</span></button>
           </form>
         </div>
+      </section>}
+
+      {canReviewPurchaseOrders && <section aria-labelledby="purchase-order-review-title" className="space-y-4 border-y border-slate-200 py-5 dark:border-slate-800">
+        <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="purchase-order-review-title" className="font-display text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100">PURCHASE ORDER REVIEW</h2><div className="flex items-center gap-3 text-xs text-slate-500"><span>{pendingPurchaseOrders.length} pending</span><button type="button" aria-label="Refresh purchase order queue" onClick={() => void purchaseOrderQuery.refetch()} className="min-h-9 rounded-md border border-slate-300 px-2.5 font-semibold hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800">Refresh</button></div></div>
+        {purchaseOrderNotice && <div role={purchaseOrderNoticeType === 'error' ? 'alert' : 'status'} aria-live="polite" className={`rounded-md border p-3 text-xs ${purchaseOrderNoticeType === 'error' ? 'border-red-300 bg-red-50 text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200' : 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-200'}`}>{purchaseOrderNotice}</div>}
+        {purchaseOrderQuery.error && <div role="alert" className="flex items-center justify-between gap-3 rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200"><span>{purchaseOrderQuery.error.message}</span><button type="button" onClick={() => void purchaseOrderQuery.refetch()} className="font-bold underline">Retry</button></div>}
+        {purchaseOrderQuery.isLoading && <p role="status" className="py-4 text-center text-xs text-slate-500">Loading pending purchase orders...</p>}
+        {!purchaseOrderQuery.isLoading && !purchaseOrderQuery.error && pendingPurchaseOrders.length === 0 && <p role="status" className="py-4 text-center text-xs text-slate-500">No purchase orders are waiting for review.</p>}
+        {pendingPurchaseOrders.length > 0 && <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(220px,0.8fr)_minmax(0,1.6fr)]">
+          <nav aria-label="Pending purchase orders" className="space-y-1">{pendingPurchaseOrders.map(purchaseOrder => <button key={purchaseOrder.id} type="button" aria-pressed={selectedPurchaseOrderId === purchaseOrder.id} onClick={() => setSelectedPurchaseOrderId(purchaseOrder.id)} className={`w-full rounded-md border px-3 py-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${selectedPurchaseOrderId === purchaseOrder.id ? 'border-aero-blue bg-blue-50 dark:bg-aero-blue/10' : 'border-slate-200 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900'}`}><span className="flex justify-between gap-2 text-xs font-bold"><span>{purchaseOrder.po_number}</span><span className="text-slate-500">{purchaseOrder.total_amount === null ? 'Amount unavailable' : `$${purchaseOrder.total_amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}</span></span><span className="mt-1 block truncate text-[11px] text-slate-600 dark:text-slate-400">{purchaseOrder.customer_email || 'Customer unavailable'} · {purchaseOrder.rfq_id || 'RFQ unavailable'}</span></button>)}</nav>
+          <div className="min-w-0 space-y-3 border-l border-slate-200 pl-4 dark:border-slate-800">{selectedPurchaseOrder && <>
+            <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2"><div><span className="text-slate-500">PO number</span><p className="font-bold">{selectedPurchaseOrder.po_number}</p></div><div><span className="text-slate-500">Customer</span><p className="break-words">{selectedPurchaseOrder.customer_email || 'Not available'}</p></div><div><span className="text-slate-500">RFQ</span><p>{selectedPurchaseOrder.rfq_id || 'Not available'}</p></div><div><span className="text-slate-500">Quote</span><p>{selectedPurchaseOrder.quote_id || 'Not available'}</p></div><div><span className="text-slate-500">Total</span><p className="font-bold">{selectedPurchaseOrder.total_amount === null ? 'Not available' : `$${selectedPurchaseOrder.total_amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}</p></div><div><span className="text-slate-500">Attachments</span><div className="flex flex-wrap gap-2">{(selectedPurchaseOrder.attachment_metadata || []).map((attachment, index) => <button key={`${attachment.attachment_id}-${index}`} type="button" onClick={() => void downloadPurchaseOrderAttachment(attachment.attachment_id)} className="font-semibold text-aero-blue underline">{attachment.attachment_id}</button>)}</div></div></div>
+            <label className="block space-y-1 text-[10px] font-semibold text-slate-600 dark:text-slate-300"><span>Approval comments (optional)</span><textarea aria-label="Purchase order approval comments" value={purchaseOrderComments} onChange={event => setPurchaseOrderComments(event.target.value)} rows={2} maxLength={1000} disabled={purchaseOrderApprovalMutation.isPending} className="w-full resize-y rounded-md border border-slate-300 bg-white p-2 text-xs font-normal text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" /></label>
+            <button type="button" disabled={purchaseOrderApprovalMutation.isPending || !selectedPurchaseOrder.quote_id} aria-busy={purchaseOrderApprovalMutation.isPending} onClick={() => void approvePendingPurchaseOrder()} className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-md bg-emerald-700 px-3 text-xs font-bold text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50">{purchaseOrderApprovalMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}<span>APPROVE PO</span></button>
+          </>}</div>
+        </div>}
       </section>}
 
       {/* Bottom Section: AOG Triage Matrix & Lead Time Chart & Telemetry */}

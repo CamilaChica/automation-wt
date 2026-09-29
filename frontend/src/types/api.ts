@@ -104,6 +104,17 @@ export interface PurchaseOrderResponse {
   internal_notification?: unknown;
   supplier_confirmation_count?: number;
 }
+export interface PurchaseOrderReviewRecord {
+  id: string;
+  po_number: string;
+  customer_email: string | null;
+  total_amount: number | null;
+  status: string;
+  quote_id: string | null;
+  rfq_id: string | null;
+  attachment_metadata?: Array<{ attachment_id: string }> | null;
+  created_at?: IsoDateTime;
+}
 export interface ShipmentTraceResponse {
   shipment_id: string;
   status: string;

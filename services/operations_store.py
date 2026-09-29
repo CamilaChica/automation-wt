@@ -36,6 +36,8 @@ POSTGRES_STORE_METHODS = (
     "record_inventory_import",
     "record_inventory_rows",
     "record_purchase_order",
+    "list_purchase_orders",
+    "update_purchase_order_status",
     "get_negotiation_session",
     "save_negotiation_session",
     "get_operational_record",
@@ -483,6 +485,40 @@ class OperationsStore:
             row = conn.execute("SELECT * FROM purchase_orders WHERE po_number = ?", (po_number,)).fetchone()
             conn.commit()
             return dict(row) if row else {}
+        finally:
+            conn.close()
+
+    def list_purchase_orders(self, *, status: str = "Pending_PO_Review") -> list[dict[str, Any]]:
+        if self._postgres:
+            return self._postgres.list_purchase_orders(status=status)
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT id, po_number, customer_email, total_amount, status, quote_id, rfq_id, attachment_metadata, created_at "
+                "FROM purchase_orders WHERE status = ? ORDER BY created_at ASC",
+                (status,),
+            ).fetchall()
+            purchase_orders = []
+            for row in rows:
+                record = dict(row)
+                metadata = record.get("attachment_metadata")
+                record["attachment_metadata"] = json.loads(metadata) if isinstance(metadata, str) and metadata else metadata or []
+                purchase_orders.append(record)
+            return purchase_orders
+        finally:
+            conn.close()
+
+    def update_purchase_order_status(self, quote_id: str, status: str) -> bool:
+        if self._postgres:
+            return self._postgres.update_purchase_order_status(quote_id, status)
+        conn = self._connect()
+        try:
+            result = conn.execute(
+                "UPDATE purchase_orders SET status = ?, updated_at = ? WHERE quote_id = ? AND status = 'Pending_PO_Review'",
+                (status, datetime.now(timezone.utc).isoformat(), quote_id),
+            )
+            conn.commit()
+            return result.rowcount > 0
         finally:
             conn.close()
 
