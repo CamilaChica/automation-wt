@@ -374,6 +374,10 @@ export const apiService = {
     return role !== null && roles.includes(role);
   },
 
+  getUserEmail(): string | null {
+    return storedValue('wt_email');
+  },
+
   isAuthenticated() {
     return Boolean(storedValue('wt_access_token'));
   },

@@ -3,7 +3,7 @@ import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { apiService, getApiErrorMessage } from '../../services/api';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
-import { useDispatchQuote, useRFQDetail, useRFQs } from '../../hooks/useApiResources';
+import { useDispatchQuote, useRejectQuote, useRFQDetail, useRFQs } from '../../hooks/useApiResources';
 import { 
   Send, 
   FileText, 
@@ -13,7 +13,8 @@ import {
   Mail,
   UserCheck,
   Loader2,
-  AlertTriangle
+  AlertTriangle,
+  XCircle,
 } from 'lucide-react';
 
 export const SalesCommandView: React.FC = () => {
@@ -24,17 +25,30 @@ export const SalesCommandView: React.FC = () => {
   const [notification, setNotification] = useState<string | null>(null);
   const [notificationType, setNotificationType] = useState<'success' | 'error' | 'info'>('success');
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
+  const [rejectionComments, setRejectionComments] = useState('');
   const rfqQuery = useRFQs();
   const rfqDetailQuery = useRFQDetail(selectedRfqId);
   const dispatchMutation = useDispatchQuote();
+  const rejectMutation = useRejectQuote();
   const rfqInbox = rfqQuery.data || [];
   const usingFallbackData = rfqQuery.isSampleData || rfqDetailQuery.isSampleData;
   const selectedQuoteId = rfqDetailQuery.data?.quote_details?.quote.id || '';
   const quoteReady = Boolean(selectedQuoteId);
   const issuing = dispatchMutation.isPending;
+  const rejecting = rejectMutation.isPending;
+  const quoteActionPending = issuing || rejecting;
   const detailError = rfqDetailQuery.error?.message || null;
   const selectedRfq = rfqInbox.find(rfq => rfq.id === selectedRfqId);
   const selectedRfqFailed = isFailedRfq(selectedRfq);
+  const selectedRfqStatus = selectedRfq?.status.trim().toUpperCase();
+  const canRejectQuote = quoteReady
+    && Boolean(selectedRfq)
+    && !selectedRfqFailed
+    && !usingFallbackData
+    && selectedRfqStatus !== 'REJECTED'
+    && selectedRfqStatus !== 'QUOTE_SENT'
+    && selectedRfqStatus !== 'QUOTE_DISPATCH_PENDING'
+    && apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_SALES']);
 
   useEffect(() => {
     if (!selectedRfqId && rfqInbox.length > 0) {
@@ -99,7 +113,7 @@ export const SalesCommandView: React.FC = () => {
   };
 
   const handleIssueQuote = async () => {
-    if (issuing) return;
+    if (quoteActionPending) return;
     if (!selectedQuoteId || !selectedRfq || selectedRfqFailed || usingFallbackData) {
       setNotificationType('error');
       setNotification('Select a live, quote-ready RFQ before issuing a customer quote.');
@@ -112,11 +126,31 @@ export const SalesCommandView: React.FC = () => {
       ] });
       if (!result) return;
       setNotificationType('success');
-      setNotification(result.message);
+      setNotification(result.message || `Quote ${selectedRfq.id} issued to ${selectedRfq.customer_name}.`);
       setTimeout(() => setNotification(null), 5000);
     } catch (error) {
       setNotificationType('error');
       setNotification(getApiErrorMessage(error, 'Unable to issue the quote. Please retry.'));
+    }
+  };
+
+  const handleRejectQuote = async () => {
+    const comments = rejectionComments.trim();
+    if (!canRejectQuote || !selectedQuoteId || !comments || quoteActionPending) return;
+    if (!window.confirm(`Reject quote ${selectedQuoteId} for ${selectedRfq?.customer_name}?`)) return;
+    try {
+      const result = await rejectMutation.mutateAsync({
+        quoteId: selectedQuoteId,
+        operatorName: apiService.getUserEmail() || 'Authenticated operator',
+        comments,
+      });
+      if (!result) return;
+      setNotificationType('success');
+      setNotification(result.message || 'Quote rejected.');
+      setRejectionComments('');
+    } catch (error) {
+      setNotificationType('error');
+      setNotification(getApiErrorMessage(error, 'Unable to reject the quote.'));
     }
   };
 
@@ -354,17 +388,22 @@ export const SalesCommandView: React.FC = () => {
               {/* Action Buttons */}
               <div className="grid grid-cols-2 gap-2 pt-1 font-display">
                 {selectedRfqFailed && <div role="alert" className="mb-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">Intake failed. Quote issuance is disabled. Contact intake operations to arrange retry or escalation.</div>}
+                {canRejectQuote && <label className="col-span-2 space-y-1.5 text-[10px] font-bold text-slate-600 dark:text-slate-300">
+                  <span>Reason for quote rejection</span>
+                  <textarea aria-label="Reason for quote rejection" value={rejectionComments} onChange={event => setRejectionComments(event.target.value)} rows={2} maxLength={1000} disabled={quoteActionPending} className="w-full resize-y rounded-lg border border-slate-300 bg-white p-2 text-xs font-normal text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+                </label>}
                 <button
                   onClick={handleIssueQuote}
-                  disabled={issuing || usingFallbackData || !quoteReady || !selectedRfq || selectedRfqFailed}
+                  disabled={quoteActionPending || usingFallbackData || !quoteReady || !selectedRfq || selectedRfqFailed}
                   aria-busy={issuing}
                   className="bg-aero-blue hover:bg-blue-600 text-white font-bold py-2.5 px-3 rounded-xl text-xs flex items-center justify-center space-x-1.5 shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {issuing ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Send className="w-3.5 h-3.5" />}
                   <span>{issuing ? 'ISSUING...' : quoteReady ? 'ISSUE QUOTE' : 'LOADING QUOTE...'}</span>
                 </button>
-                <button onClick={() => { setNotificationType('info'); setNotification('Purchase orders are submitted by customers through the customer portal after quote approval.'); }} className="bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-3 rounded-xl text-xs border border-slate-200 dark:border-slate-700 transition-colors">
-                  ISSUE PO
+                <button type="button" onClick={() => void handleRejectQuote()} disabled={!canRejectQuote || quoteActionPending || !rejectionComments.trim()} aria-busy={rejecting} className="bg-red-50 hover:bg-red-100 text-red-800 dark:bg-red-500/10 dark:hover:bg-red-500/20 dark:text-red-200 font-bold py-2.5 px-3 rounded-xl text-xs border border-red-200 dark:border-red-500/40 flex items-center justify-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50">
+                  {rejecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <XCircle className="h-3.5 w-3.5" aria-hidden="true" />}
+                  <span>{rejecting ? 'REJECTING...' : 'REJECT QUOTE'}</span>
                 </button>
               </div>
             </div>

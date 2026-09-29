@@ -254,6 +254,14 @@ export function useProcessRFQ() {
   ]);
 }
 
+export function useRejectQuote() {
+  return useApiMutation((input: { quoteId: string; operatorName: string; comments: string }) =>
+    apiService.rejectQuote(input.quoteId, input.operatorName, input.comments), [
+      apiQueryKeys.rfqs,
+      'rfq-detail',
+    ]);
+}
+
 export function useTraceDecision() {
   return useApiMutation((input: { rfqId: string; decision: 'certify' | 'reject' | 'rescan' | 'freeze'; reason?: string }) =>
     apiService.recordTraceDecision(input.rfqId, input.decision, input.reason), [apiQueryKeys.rfqs, apiQueryKeys.automationEvents]);
