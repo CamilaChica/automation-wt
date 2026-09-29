@@ -273,3 +273,92 @@ test('purchasing users only load the purchasing mailbox', async ({ page }) => {
   await expect.poll(() => purchasingMailboxRequests).toBeGreaterThan(0);
   expect(salesMailboxRequests).toBe(0);
 });
+
+test('authorized purchasing users can create a shipment from an RFQ', async ({ page }) => {
+  let createPayload: Record<string, unknown> | undefined;
+  await seedSession(page, 'internal');
+  await page.route('**/api/rfqs', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([{ id: 'WT-SHIP-1', customer_name: 'Shipment Test', customer_email: 'ship@example.com', status: 'Quote_Sent', part_number: 'PN-300', quantity: 2 }]),
+  }));
+  await page.route('**/api/internal/shipments', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/internal/shipments', async route => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    createPayload = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ shipment_id: 'SHIP-CREATED-1', tracking_url: '/track/PUBLIC-1', status: 'Preparing', tracking_notification: 'QUEUED' }),
+    });
+  });
+  await page.goto('/');
+  await page.locator('aside button').filter({ hasText: 'Fulfillment' }).first().click();
+
+  await expect(page.getByRole('heading', { name: 'CREATE SHIPMENT' })).toBeVisible();
+  await page.getByLabel('Shipment RFQ').selectOption('WT-SHIP-1');
+  await page.getByLabel('Shipment part numbers').fill('PN-300, PN-301');
+  await page.getByLabel('Shipment quantity').fill('2');
+  page.on('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'CREATE SHIPMENT' }).click();
+
+  await expect(page.getByText(/Shipment SHIP-CREATED-1 created/)).toBeVisible();
+  await expect.poll(() => createPayload).toEqual({ rfq_id: 'WT-SHIP-1', part_numbers: ['PN-300', 'PN-301'], quantity: 2 });
+});
+
+test('authorized users can update shipment events, tracking, and SMS', async ({ page }) => {
+  const payloads: Record<string, Record<string, unknown>> = {};
+  let registeredCarrier: string | undefined;
+  let registeredTrackingNumber: string | undefined;
+  await seedSession(page, 'internal');
+  await page.route('**/api/internal/shipments', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([{ id: 'SHIP-OPS-1', rfq_id: 'WT-SHIP-OPS', status: 'Preparing', carrier: registeredCarrier, tracking_number: registeredTrackingNumber, part_numbers: ['PN-400'], quantity: 1 }]),
+  }));
+  await page.route('**/api/internal/shipments/SHIP-OPS-1/events', async route => {
+    payloads.event = route.request().postDataJSON();
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'updated', event: { status: payloads.event.status } }) });
+  });
+  await page.route('**/api/internal/shipments/SHIP-OPS-1/tracking', async route => {
+    payloads.tracking = route.request().postDataJSON();
+    registeredCarrier = String(payloads.tracking.carrier);
+    registeredTrackingNumber = String(payloads.tracking.tracking_number);
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ shipment_id: 'SHIP-OPS-1', ...payloads.tracking }) });
+  });
+  await page.route('**/api/internal/shipments/SHIP-OPS-1/tracking/refresh', async route => {
+    payloads.refresh = {};
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ shipment_id: 'SHIP-OPS-1', event: { status: 'IN_TRANSIT' } }) });
+  });
+  await page.route('**/api/internal/shipments/SHIP-OPS-1/sms', async route => {
+    payloads.sms = route.request().postDataJSON();
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'sent' }) });
+  });
+  await page.goto('/');
+  await page.locator('aside button').filter({ hasText: 'Fulfillment' }).first().click();
+
+  await page.getByLabel('Shipment event status').fill('Packed');
+  await page.getByLabel('Shipment event location').fill('MIA warehouse');
+  await page.getByLabel('Shipment event description').fill('Package passed final inspection.');
+  page.on('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'ADD SHIPMENT EVENT' }).click();
+  await expect(page.getByText(/Shipment event recorded/)).toBeVisible();
+
+  await page.getByLabel('Carrier name').fill('FedEx');
+  await page.getByLabel('Tracking number').fill('FDX-100');
+  await page.getByRole('button', { name: 'REGISTER TRACKING' }).click();
+  await expect(page.getByText(/Carrier tracking registered/)).toBeVisible();
+
+  await page.getByRole('button', { name: 'REFRESH TRACKING' }).click();
+  await expect(page.getByText(/Tracking refreshed/)).toBeVisible();
+
+  await page.getByLabel('SMS recipient').fill('+15550100100');
+  await page.getByLabel('SMS shipment status').fill('In transit');
+  await page.getByRole('button', { name: 'SEND TRACKING SMS' }).click();
+  await expect(page.getByText(/Shipment update sent/)).toBeVisible();
+
+  expect(payloads.event).toEqual({ status: 'Packed', location: 'MIA warehouse', description: 'Package passed final inspection.' });
+  expect(payloads.tracking).toEqual({ carrier: 'FedEx', tracking_number: 'FDX-100' });
+  expect(payloads.refresh).toBeDefined();
+  expect(payloads.sms).toMatchObject({ recipient: '+15550100100', status: 'In transit' });
+});

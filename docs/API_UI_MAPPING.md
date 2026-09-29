@@ -61,12 +61,12 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 
 | Method and path | Access | Request | Response / UI mapping |
 | --- | --- | --- | --- |
-| `POST /api/internal/shipments` | Admin/manager/purchasing | `ShipmentCreateRequest` | Shipment ID, tracking URL and notification status. No current creation form is bound. |
+| `POST /api/internal/shipments` | Admin/manager/purchasing | `ShipmentCreateRequest` | Fulfillment Hub creates a shipment from an eligible RFQ after confirmation and shows the tracking-link notification result. |
 | `GET /api/internal/shipments` | Admin/manager/purchasing | None | Persisted shipment records. Fulfillment Hub `useShipments` / `useFulfillmentStages`. |
-| `POST /api/internal/shipments/{shipment_id}/events` | Admin/manager/purchasing | `ShipmentEventRequest` | Updated event. |
-| `POST /api/internal/shipments/{shipment_id}/tracking` | Admin/manager/purchasing | `CarrierTrackingRequest` | Carrier registration/provider result. |
-| `POST /api/internal/shipments/{shipment_id}/tracking/refresh` | Admin/manager/purchasing | Path `shipment_id` | Refreshed carrier event/provider result. |
-| `POST /api/internal/shipments/{shipment_id}/sms` | Admin/manager/purchasing/sales | `ShipmentSmsRequest` | SMS adapter result. |
+| `POST /api/internal/shipments/{shipment_id}/events` | Admin/manager/purchasing | `ShipmentEventRequest` | Fulfillment Hub records a confirmed operational event and refreshes shipment state. |
+| `POST /api/internal/shipments/{shipment_id}/tracking` | Admin/manager/purchasing | `CarrierTrackingRequest` | Fulfillment Hub registers carrier tracking after confirmation and displays provider result. |
+| `POST /api/internal/shipments/{shipment_id}/tracking/refresh` | Admin/manager/purchasing | Path `shipment_id` | Fulfillment Hub refreshes registered tracking after confirmation and displays the returned event. |
+| `POST /api/internal/shipments/{shipment_id}/sms` | Admin/manager/purchasing/sales | `ShipmentSmsRequest` | Fulfillment Hub sends an E.164 customer update after explicit confirmation; current shipment selection is restricted to admin/manager/purchasing roles. |
 | `GET /api/shipments/track/{public_token}` | Public opaque token | Path `public_token` | Customer-safe trace: status, parts, quantity, carrier/tracking, ETA, events. Portal `useShipmentTrace`. There is no `GET /api/shipments/{id}`. |
 | `POST /api/webhooks/carriers/aftership` | Signed provider request | Carrier webhook body/signature | Applies normalized carrier event. Backend-only. |
 
@@ -95,7 +95,7 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 | TopBar | `/ready`, mailbox health, employee profile/presence | AOG alert count is not API-backed. |
 | Customer Dashboard | RFQ list/detail, quote detail and dispatch, internal shipment counts, RFQ creation | Price-option cards, spend/SLA/savings estimates, document previews and route maps remain badged sample content. |
 | Aero Procurement / Sourcing | RFQ queue and supplier offers | Lead-time history, supplier performance, workload matrix, compliance-document panels remain sample where no read contract exists. |
-| Fulfillment Hub | Shipment list and status-derived stage label; command targets actual shipment ID | Five-step workflow graphic, inspection/package/compliance checks and map route are demos, not shipment milestones. |
+| Fulfillment Hub | Shipment list/stage, shipment creation, event and carrier tracking controls for admin/manager/purchasing; SMS is confirmation-gated | Five-step workflow graphic, inspection/package/compliance checks and map route are demos, not shipment milestones. |
 | Trace Vault | RFQs, compliance-related automation events and trace-decision mutation | OCR, document checklist, historical timeline and KPI metrics remain sample. |
 | Customer Portal | Catalog search, RFQ/attachment upload, customer PO and token-based shipment trace | A catalog fallback is explicitly badged and cannot be represented as confirmed availability. |
 

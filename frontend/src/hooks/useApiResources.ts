@@ -4,6 +4,8 @@ import type {
   ApiStatus,
   ExtractionReviewDecisionBody,
   ExtractionReviewResponse,
+  CarrierTrackingBody,
+  CreateShipmentBody,
   FreightQuoteBody,
   FreightQuoteResponse,
   FulfillmentStage,
@@ -15,6 +17,8 @@ import type {
   MailboxMessageBody,
   MailboxSendResponse,
   ShipmentTraceResponse,
+  ShipmentEventBody,
+  ShipmentSmsBody,
   SystemHealthResponse,
 } from '../types/api';
 import type { AutomationEvent, InternalCommand, InventoryItem, RFQ, RFQDetailResponse, Shipment, Supplier, SupplierQuote } from '../types';
@@ -206,8 +210,8 @@ export function useSupplierOffers(partNumber: string) {
   }), Boolean(partNumber.trim()));
 }
 
-export function useShipments() {
-  return useApiQuery<Shipment[]>(apiQueryKeys.shipments, async () => ({ data: await apiService.getShipments() }));
+export function useShipments(enabled = true) {
+  return useApiQuery<Shipment[]>(apiQueryKeys.shipments, async () => ({ data: await apiService.getShipments() }), enabled);
 }
 
 export function useShipmentTrace(publicToken: string) {
@@ -216,8 +220,8 @@ export function useShipmentTrace(publicToken: string) {
   }), Boolean(publicToken.trim()));
 }
 
-export function useFulfillmentStages() {
-  const shipments = useShipments();
+export function useFulfillmentStages(enabled = true) {
+  const shipments = useShipments(enabled);
   const data: FulfillmentStage[] | undefined = shipments.data?.map(shipment => ({
     shipment_id: shipment.id,
     stage: stageFromShipmentStatus(shipment.status),
@@ -358,6 +362,32 @@ export function useSetAutomationPause() {
           apiQueryKeys.mailboxInbox('purchasing'),
         ]);
     }
+
+      export function useCreateShipment() {
+        return useApiMutation((body: CreateShipmentBody) => apiService.createShipment(body), [
+          apiQueryKeys.shipments,
+          apiQueryKeys.rfqs,
+        ]);
+      }
+
+      export function useAddShipmentEvent() {
+        return useApiMutation((input: { shipmentId: string; body: ShipmentEventBody }) =>
+          apiService.addShipmentEvent(input.shipmentId, input.body), [apiQueryKeys.shipments]);
+      }
+
+      export function useRegisterCarrierTracking() {
+        return useApiMutation((input: { shipmentId: string; body: CarrierTrackingBody }) =>
+          apiService.registerCarrierTracking(input.shipmentId, input.body), [apiQueryKeys.shipments]);
+      }
+
+      export function useRefreshCarrierTracking() {
+        return useApiMutation((shipmentId: string) => apiService.refreshCarrierTracking(shipmentId), [apiQueryKeys.shipments]);
+      }
+
+      export function useSendShipmentSms() {
+        return useApiMutation((input: { shipmentId: string; body: ShipmentSmsBody }) =>
+          apiService.sendShipmentSms(input.shipmentId, input.body), [apiQueryKeys.shipments]);
+      }
 
 export function useTraceDecision() {
   return useApiMutation((input: { rfqId: string; decision: 'certify' | 'reject' | 'rescan' | 'freeze'; reason?: string }) =>
