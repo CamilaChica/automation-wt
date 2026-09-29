@@ -54,8 +54,8 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 | `GET /api/internal/llm/health` | Admin/manager | None | Trace Vault shows provider routing, configuration booleans, and fallback status; no secret values. |
 | `GET /api/internal/llm/telemetry` | Admin/manager | Optional task/limit | Trace Vault shows recent task/model, latency, token, estimated-cost, validation, and review-outcome telemetry. |
 | `GET /api/internal/mailboxes/health` | Internal/admin/manager/sales/purchasing | None | Status strings for `sales_mailbox` and `purchasing_mailbox`, plus authenticated user. TopBar shows live status. |
-| `GET /api/internal/mailboxes/{mailbox}/inbox` | Admin/manager/sales/purchasing, mailbox-specific role checked | Path `mailbox` | Mailbox and message summaries. |
-| `POST /api/internal/mailboxes/{mailbox}/send` | Admin/manager/sales/purchasing, mailbox-specific role checked | `MailboxMessageRequest` | Outbound send result. |
+| `GET /api/internal/mailboxes/{mailbox}/inbox` | Admin/manager/sales/purchasing, mailbox-specific role checked | Path `mailbox` | Procurement mailbox view shows message headers/body and attachment names/types; raw MIME and attachment contents are not returned. |
+| `POST /api/internal/mailboxes/{mailbox}/send` | Admin/manager/sales/purchasing, mailbox-specific role checked | `MailboxMessageRequest` | Procurement send form requires recipient/subject/body and explicit confirmation; result is reported in the UI. |
 
 ## Fulfillment and carrier tracking
 

@@ -1567,7 +1567,28 @@ async def mailbox_inbox(mailbox: str, user: dict = Depends(require_roles("ROLE_A
         raise HTTPException(403, "You do not have access to the sales mailbox.")
     if mailbox == "purchasing" and user["role"] not in ("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING"):
         raise HTTPException(403, "You do not have access to the purchasing mailbox.")
-    return {"mailbox": mailbox, "messages": fetch_inbox_messages(mailbox)}
+    messages = []
+    for message in fetch_inbox_messages(mailbox):
+        attachments = message.get("attachments") or []
+        messages.append({
+            "mailbox": mailbox,
+            "message_id": message.get("message_id", ""),
+            "internet_message_id": message.get("internet_message_id"),
+            "conversation_id": message.get("conversation_id"),
+            "from": message.get("from", ""),
+            "subject": message.get("subject", ""),
+            "date": message.get("date", ""),
+            "body": message.get("body", ""),
+            "attachments": [
+                {
+                    "filename": attachment.get("filename", "attachment"),
+                    "content_type": attachment.get("content_type", "application/octet-stream"),
+                }
+                for attachment in attachments
+                if isinstance(attachment, dict)
+            ],
+        })
+    return {"mailbox": mailbox, "messages": messages}
 
 @app.post("/api/internal/mailboxes/{mailbox}/send")
 async def mailbox_send(

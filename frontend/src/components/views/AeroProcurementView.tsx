@@ -3,7 +3,7 @@ import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { apiService, getApiErrorMessage } from '../../services/api';
 import { Badge } from '../common/Badge';
 import { InternalCommand, InventoryItem, RFQ, Supplier, SupplierQuote } from '../../types';
-import type { FreightQuoteBody, FreightQuoteResponse } from '../../types/api';
+import type { FreightQuoteBody, FreightQuoteResponse, MailboxMessageSummary } from '../../types/api';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import { 
   FileCheck, 
@@ -19,9 +19,17 @@ import {
 } from 'lucide-react';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
-import { useExecuteInternalCommand, useFreightQuote, useInventoryDirectory, useProcessRFQ, useRFQs, useSetAutomationPause, useSupplierDirectory, useSupplierOffers, useSupplierProfile } from '../../hooks/useApiResources';
+import { useExecuteInternalCommand, useFreightQuote, useInventoryDirectory, useMailboxInbox, useProcessRFQ, useRFQs, useSendMailboxMessage, useSetAutomationPause, useSupplierDirectory, useSupplierOffers, useSupplierProfile } from '../../hooks/useApiResources';
 
 export const AeroProcurementView: React.FC = () => {
+  const [activeMailbox, setActiveMailbox] = useState<'sales' | 'purchasing'>(() => apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_SALES']) ? 'sales' : 'purchasing');
+  const [selectedMailboxMessageId, setSelectedMailboxMessageId] = useState('');
+  const [mailboxRecipient, setMailboxRecipient] = useState('');
+  const [mailboxSubject, setMailboxSubject] = useState('');
+  const [mailboxBody, setMailboxBody] = useState('');
+  const [mailboxReplyTo, setMailboxReplyTo] = useState('');
+  const [mailboxNotice, setMailboxNotice] = useState<string | null>(null);
+  const [mailboxNoticeType, setMailboxNoticeType] = useState<'success' | 'error'>('success');
   const [catalogTab, setCatalogTab] = useState<'inventory' | 'suppliers'>('inventory');
   const [selectedOfferId, setSelectedOfferId] = useState('');
   const [selectedRfqId, setSelectedRfqId] = useState('');
@@ -43,11 +51,18 @@ export const AeroProcurementView: React.FC = () => {
   const loadError = rfqQuery.error?.message || null;
   const usingFallbackData = rfqQuery.isSampleData;
   const canViewInternalCatalog = apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_PURCHASING']);
+  const canAccessSalesMailbox = apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_SALES']);
+  const canAccessPurchasingMailbox = apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_PURCHASING']);
+  const canAccessActiveMailbox = activeMailbox === 'sales' ? canAccessSalesMailbox : canAccessPurchasingMailbox;
   const inventoryQuery = useInventoryDirectory(canViewInternalCatalog);
   const supplierDirectoryQuery = useSupplierDirectory(canViewInternalCatalog);
   const supplierProfileQuery = useSupplierProfile(selectedSupplierId);
+  const mailboxInboxQuery = useMailboxInbox(activeMailbox, canAccessActiveMailbox);
+  const mailboxSendMutation = useSendMailboxMessage();
   const inventory = inventoryQuery.data || [];
   const suppliers = supplierDirectoryQuery.data || [];
+  const mailboxMessages = mailboxInboxQuery.data?.messages || [];
+  const selectedMailboxMessage: MailboxMessageSummary | undefined = mailboxMessages.find(message => message.message_id === selectedMailboxMessageId);
   const commandMutation = useExecuteInternalCommand();
   const processMutation = useProcessRFQ();
   const automationMutation = useSetAutomationPause();
@@ -84,6 +99,14 @@ export const AeroProcurementView: React.FC = () => {
   useEffect(() => {
     if (!selectedSupplierId && suppliers.length > 0) setSelectedSupplierId(suppliers[0].id);
   }, [selectedSupplierId, suppliers]);
+
+  useEffect(() => {
+    if (mailboxMessages.length > 0 && !mailboxMessages.some(message => message.message_id === selectedMailboxMessageId)) {
+      setSelectedMailboxMessageId(mailboxMessages[0].message_id);
+    } else if (mailboxMessages.length === 0) {
+      setSelectedMailboxMessageId('');
+    }
+  }, [activeMailbox, mailboxMessages, selectedMailboxMessageId]);
 
   useEffect(() => {
     setAutomationReason('');
@@ -171,6 +194,31 @@ export const AeroProcurementView: React.FC = () => {
       if (result) setFreightResult(result);
     } catch (error) {
       setFreightError(getApiErrorMessage(error, 'Unable to request freight rates.'));
+    }
+  };
+
+  const sendMailboxMessage = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const recipient = mailboxRecipient.trim();
+    const subject = mailboxSubject.trim();
+    const body = mailboxBody.trim();
+    if (!canAccessActiveMailbox || !recipient || !subject || !body || mailboxSendMutation.isPending) return;
+    if (!window.confirm(`Send this message from the ${activeMailbox} mailbox to ${recipient}?`)) return;
+    setMailboxNotice(null);
+    try {
+      const result = await mailboxSendMutation.mutateAsync({
+        mailbox: activeMailbox,
+        message: { recipient, subject, body, reply_to: mailboxReplyTo.trim() || undefined },
+      });
+      if (!result) return;
+      setMailboxNotice(`Message sent from the ${activeMailbox} mailbox.`);
+      setMailboxNoticeType('success');
+      setMailboxSubject('');
+      setMailboxBody('');
+      setMailboxReplyTo('');
+    } catch (error) {
+      setMailboxNotice(getApiErrorMessage(error, `Unable to send from the ${activeMailbox} mailbox.`));
+      setMailboxNoticeType('error');
     }
   };
 
@@ -411,6 +459,43 @@ export const AeroProcurementView: React.FC = () => {
             </div>}
           </div>
         </div>}
+      </section>}
+
+      {(canAccessSalesMailbox || canAccessPurchasingMailbox) && <section aria-labelledby="mailbox-operations-title" className="space-y-4 border-y border-slate-200 py-5 dark:border-slate-800">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div><h2 id="mailbox-operations-title" className="font-display text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100">MAILBOX OPERATIONS</h2><p className="mt-1 text-[11px] text-slate-500">Messages are sent from the selected shared mailbox after confirmation.</p></div>
+          <div role="tablist" aria-label="Mailbox selection" className="inline-flex border border-slate-300 dark:border-slate-700">
+            {canAccessSalesMailbox && <button type="button" role="tab" aria-selected={activeMailbox === 'sales'} aria-label="Sales mailbox" onClick={() => { setActiveMailbox('sales'); setMailboxNotice(null); }} className={`min-h-9 px-3 text-xs font-semibold ${activeMailbox === 'sales' ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'}`}>Sales</button>}
+            {canAccessPurchasingMailbox && <button type="button" role="tab" aria-selected={activeMailbox === 'purchasing'} aria-label="Purchasing mailbox" onClick={() => { setActiveMailbox('purchasing'); setMailboxNotice(null); }} className={`min-h-9 px-3 text-xs font-semibold ${activeMailbox === 'purchasing' ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'}`}>Purchasing</button>}
+          </div>
+        </div>
+        {mailboxNotice && <div role={mailboxNoticeType === 'error' ? 'alert' : 'status'} aria-live="polite" className={`rounded-md border p-3 text-xs ${mailboxNoticeType === 'error' ? 'border-red-300 bg-red-50 text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200' : 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-200'}`}>{mailboxNotice}</div>}
+        {mailboxInboxQuery.error && <div role="alert" className="flex items-center justify-between gap-3 rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200"><span>{mailboxInboxQuery.error.message}</span><button type="button" onClick={() => void mailboxInboxQuery.refetch()} className="font-bold underline">Retry inbox</button></div>}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(220px,0.8fr)_minmax(0,1.4fr)_minmax(280px,1fr)]">
+          <div className="space-y-1" aria-label={`${activeMailbox} inbox`}>
+            <div className="mb-2 flex items-center justify-between gap-2"><h3 className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Recent messages</h3><button type="button" aria-label={`Refresh ${activeMailbox} inbox`} onClick={() => void mailboxInboxQuery.refetch()} className="text-[10px] font-semibold text-aero-blue underline">Refresh</button></div>
+            {mailboxInboxQuery.isLoading && <p role="status" className="py-3 text-xs text-slate-500">Loading inbox...</p>}
+            {!mailboxInboxQuery.isLoading && !mailboxInboxQuery.error && mailboxMessages.length === 0 && <p role="status" className="py-3 text-xs text-slate-500">No messages returned for this mailbox.</p>}
+            {mailboxMessages.map(message => <button key={message.message_id} type="button" aria-pressed={selectedMailboxMessageId === message.message_id} onClick={() => setSelectedMailboxMessageId(message.message_id)} className={`w-full rounded-md border px-3 py-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${selectedMailboxMessageId === message.message_id ? 'border-aero-blue bg-blue-50 dark:bg-aero-blue/10' : 'border-slate-200 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900'}`}>
+              <span className="block truncate text-xs font-bold text-slate-900 dark:text-slate-100">{message.subject || '(No subject)'}</span><span className="mt-1 block truncate text-[11px] text-slate-600 dark:text-slate-400">{message.from}</span><span className="mt-1 block text-[10px] text-slate-500">{message.date}</span>
+            </button>)}
+          </div>
+          <div className="min-w-0 border-l border-slate-200 pl-4 dark:border-slate-800">
+            {selectedMailboxMessage ? <div className="space-y-2">
+              <h3 className="break-words text-sm font-bold text-slate-900 dark:text-slate-100">{selectedMailboxMessage.subject || '(No subject)'}</h3><p className="break-words text-[11px] text-slate-500">From: {selectedMailboxMessage.from}</p><p className="text-[11px] text-slate-500">Received: {selectedMailboxMessage.date}</p>
+              {selectedMailboxMessage.body && <p className="max-h-64 overflow-auto whitespace-pre-wrap break-words border-y border-slate-200 py-3 text-xs text-slate-800 dark:border-slate-800 dark:text-slate-200">{selectedMailboxMessage.body}</p>}
+              {(selectedMailboxMessage.attachments || []).length > 0 && <ul aria-label="Attachment names" className="space-y-1 text-[11px] text-slate-600 dark:text-slate-400">{selectedMailboxMessage.attachments?.map((attachment, index) => <li key={`${attachment.filename}-${index}`}>{attachment.filename} · {attachment.content_type}</li>)}</ul>}
+            </div> : <p role="status" className="py-4 text-xs text-slate-500">Select a message to preview its text.</p>}
+          </div>
+          <form onSubmit={event => void sendMailboxMessage(event)} className="space-y-2 border-l border-slate-200 pl-4 dark:border-slate-800">
+            <h3 className="text-[10px] font-bold uppercase tracking-wide text-slate-500">New message</h3>
+            <label className="block space-y-1 text-[10px] font-semibold text-slate-600 dark:text-slate-300"><span>Recipient</span><input aria-label="Mailbox recipient" type="email" value={mailboxRecipient} onChange={event => setMailboxRecipient(event.target.value)} required maxLength={254} disabled={mailboxSendMutation.isPending} className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-normal text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" /></label>
+            <label className="block space-y-1 text-[10px] font-semibold text-slate-600 dark:text-slate-300"><span>Subject</span><input aria-label="Mailbox subject" value={mailboxSubject} onChange={event => setMailboxSubject(event.target.value)} required maxLength={200} disabled={mailboxSendMutation.isPending} className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-normal text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" /></label>
+            <label className="block space-y-1 text-[10px] font-semibold text-slate-600 dark:text-slate-300"><span>Reply-to message ID (optional)</span><input aria-label="Mailbox reply-to" value={mailboxReplyTo} onChange={event => setMailboxReplyTo(event.target.value)} maxLength={500} disabled={mailboxSendMutation.isPending} className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-normal text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" /></label>
+            <label className="block space-y-1 text-[10px] font-semibold text-slate-600 dark:text-slate-300"><span>Message</span><textarea aria-label="Mailbox message" value={mailboxBody} onChange={event => setMailboxBody(event.target.value)} rows={4} maxLength={10000} required disabled={mailboxSendMutation.isPending} className="w-full resize-y rounded-md border border-slate-300 bg-white p-2 text-xs font-normal text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" /></label>
+            <button type="submit" disabled={mailboxSendMutation.isPending || !mailboxRecipient.trim() || !mailboxSubject.trim() || !mailboxBody.trim()} aria-busy={mailboxSendMutation.isPending} className="inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-md bg-aero-blue px-3 text-xs font-bold text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50">{mailboxSendMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}<span>{mailboxSendMutation.isPending ? 'SENDING...' : 'SEND MESSAGE'}</span></button>
+          </form>
+        </div>
       </section>}
 
       {/* Bottom Section: AOG Triage Matrix & Lead Time Chart & Telemetry */}

@@ -212,3 +212,64 @@ test('authorized users can request freight rates and distinguish a dry run', asy
   await expect(page.getByText(/shipping charge was not added to the customer quote/i)).toBeVisible();
   await expect.poll(() => freightRequest).toEqual({ origin: 'MIA', destination: 'JFK', weight_kg: 12.5, packages: 2, service_level: 'express' });
 });
+
+test('admin can inspect the sales mailbox and send after confirmation', async ({ page }) => {
+  let sentMessage: Record<string, unknown> | undefined;
+  await seedSession(page, 'internal');
+  await page.route('**/api/rfqs', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/inventory', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/suppliers', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/internal/mailboxes/sales/inbox', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ mailbox: 'sales', messages: [{
+      mailbox: 'sales', message_id: 'MSG-SALES-1', from: 'buyer@example.com',
+      subject: 'PN-100 availability', date: '2026-09-28T10:00:00Z', body: 'Please confirm current availability.',
+    }] }),
+  }));
+  await page.route('**/api/internal/mailboxes/sales/send', async route => {
+    sentMessage = route.request().postDataJSON();
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'sent', mailbox: 'sales', sent_by: 'camila@wingedtycoons.com' }) });
+  });
+
+  await page.goto('/');
+  await page.locator('aside button').filter({ hasText: 'Proc Command' }).first().click();
+  await expect(page.getByRole('heading', { name: 'MAILBOX OPERATIONS' })).toBeVisible();
+  await expect(page.getByText('Please confirm current availability.')).toBeVisible();
+  await page.getByLabel('Mailbox recipient').fill('buyer@example.com');
+  await page.getByLabel('Mailbox subject').fill('PN-100 availability');
+  await page.getByLabel('Mailbox message').fill('PN-100 is available; a quote will follow.');
+  page.on('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'SEND MESSAGE' }).click();
+
+  await expect(page.getByText(/Message sent from the sales mailbox/)).toBeVisible();
+  await expect.poll(() => sentMessage).toEqual({ recipient: 'buyer@example.com', subject: 'PN-100 availability', body: 'PN-100 is available; a quote will follow.' });
+});
+
+test('purchasing users only load the purchasing mailbox', async ({ page }) => {
+  let salesMailboxRequests = 0;
+  let purchasingMailboxRequests = 0;
+  await page.addInitScript(() => {
+    localStorage.setItem('wt_access_token', 'e2e-purchasing-token');
+    localStorage.setItem('wt_role', 'ROLE_PURCHASING');
+    localStorage.setItem('wt_email', 'purchasing@example.com');
+  });
+  await page.route('**/api/rfqs', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/supplier-offers**', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/internal/mailboxes/sales/inbox', route => {
+    salesMailboxRequests += 1;
+    return route.fulfill({ status: 403, contentType: 'application/json', body: '{}' });
+  });
+  await page.route('**/api/internal/mailboxes/purchasing/inbox', route => {
+    purchasingMailboxRequests += 1;
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ mailbox: 'purchasing', messages: [] }) });
+  });
+
+  await page.goto('/');
+  await page.locator('aside button').filter({ hasText: 'Proc Command' }).first().click();
+  await expect(page.getByRole('heading', { name: 'MAILBOX OPERATIONS' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Purchasing mailbox' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Sales mailbox' })).toHaveCount(0);
+  await expect.poll(() => purchasingMailboxRequests).toBeGreaterThan(0);
+  expect(salesMailboxRequests).toBe(0);
+});

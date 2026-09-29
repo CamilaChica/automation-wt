@@ -131,11 +131,16 @@ export interface MailboxMessageBody { recipient: string; subject: string; body: 
 export interface MailboxMessageSummary {
   mailbox: string;
   message_id: string;
+  internet_message_id?: string | null;
+  conversation_id?: string | null;
   from: string;
   subject: string;
   date: IsoDateTime;
+  body?: string;
+  attachments?: Array<{ filename: string; content_type: string }>;
 }
 export interface MailboxInboxResponse { mailbox: string; messages: MailboxMessageSummary[] }
+export interface MailboxSendResponse { status: string; mailbox: string; sent_by: string }
 export type VoiceLanguageCode = 'en' | 'es' | 'fr' | 'de' | 'pt' | 'it' | 'ja' | 'zh' | 'ko' | 'nl' | 'ar' | 'hi';
 export interface VoiceSessionRequest { language: VoiceLanguageCode }
 export interface VoiceSessionResponse { client_secret: string; model: string }

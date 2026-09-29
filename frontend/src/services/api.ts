@@ -18,6 +18,7 @@ import type {
   MailboxHealthResponse,
   MailboxInboxResponse,
   MailboxMessageBody,
+  MailboxSendResponse,
   OtpRequestBody,
   OtpRequestResponse,
   OtpVerifyBody,
@@ -443,12 +444,12 @@ export const apiService = {
   },
 
   async getMailboxInbox(mailbox: 'sales' | 'purchasing'): Promise<MailboxInboxResponse> {
-    const res = await axios.get(`${API_BASE}/internal/mailboxes/${mailbox}/inbox`);
+    const res = await axios.get<MailboxInboxResponse>(`${API_BASE}/internal/mailboxes/${mailbox}/inbox`);
     return res.data;
   },
 
-  async sendMailboxMessage(mailbox: 'sales' | 'purchasing', body: MailboxMessageBody): Promise<Record<string, unknown>> {
-    const res = await axios.post(`${API_BASE}/internal/mailboxes/${mailbox}/send`, body);
+  async sendMailboxMessage(mailbox: 'sales' | 'purchasing', body: MailboxMessageBody): Promise<MailboxSendResponse> {
+    const res = await axios.post<MailboxSendResponse>(`${API_BASE}/internal/mailboxes/${mailbox}/send`, body);
     return res.data;
   },
 

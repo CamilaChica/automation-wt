@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -57,6 +58,38 @@ class TestCustomerDataIsolation(unittest.TestCase):
         ]
         for method, path in checks:
             self.assertEqual(getattr(self.client, method)(path).status_code, 403, path)
+
+
+class TestMailboxInboxProjection(unittest.TestCase):
+    def setUp(self):
+        app.dependency_overrides[current_user] = lambda: {"role": "ROLE_ADMIN", "email": "admin@example.com"}
+        self.client = TestClient(app)
+
+    def tearDown(self):
+        app.dependency_overrides.clear()
+
+    def test_inbox_returns_message_summary_without_raw_mime_or_attachment_contents(self):
+        message = {
+            "mailbox": "sales",
+            "message_id": "MSG-1",
+            "internet_message_id": "<message@example.com>",
+            "conversation_id": "CONV-1",
+            "from": "buyer@example.com",
+            "subject": "PN-100 availability",
+            "date": "2026-09-28T10:00:00Z",
+            "body": "Please confirm current availability.",
+            "raw_mime": b"secret raw mime payload",
+            "attachments": [{"filename": "po.pdf", "content_type": "application/pdf", "content": b"secret attachment bytes"}],
+        }
+        with patch("api.main.fetch_inbox_messages", return_value=[message]):
+            response = self.client.get("/api/internal/mailboxes/sales/inbox")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["messages"][0]["body"], "Please confirm current availability.")
+        self.assertEqual(payload["messages"][0]["attachments"], [{"filename": "po.pdf", "content_type": "application/pdf"}])
+        self.assertNotIn("raw_mime", payload["messages"][0])
+        self.assertNotIn("content", payload["messages"][0]["attachments"][0])
 
 
 if __name__ == "__main__":

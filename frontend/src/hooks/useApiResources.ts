@@ -11,6 +11,9 @@ import type {
   LlmHealthResponse,
   LlmTelemetryRecord,
   MailboxHealthResponse,
+  MailboxInboxResponse,
+  MailboxMessageBody,
+  MailboxSendResponse,
   ShipmentTraceResponse,
   SystemHealthResponse,
 } from '../types/api';
@@ -166,6 +169,7 @@ export const apiQueryKeys = {
   inventory: 'inventory',
   suppliers: 'suppliers',
   supplierDetail: (supplierId: string) => `supplier-detail:${supplierId}`,
+  mailboxInbox: (mailbox: 'sales' | 'purchasing') => `mailbox-inbox:${mailbox}`,
 } as const;
 
 export function useRFQs() {
@@ -339,6 +343,20 @@ export function useSetAutomationPause() {
     export function useFreightQuote() {
       return useApiMutation((request: FreightQuoteBody): Promise<FreightQuoteResponse> =>
         apiService.quoteFreight(request));
+    }
+
+    export function useMailboxInbox(mailbox: 'sales' | 'purchasing', enabled = true) {
+      return useApiQuery<MailboxInboxResponse>(apiQueryKeys.mailboxInbox(mailbox), async () => ({
+        data: await apiService.getMailboxInbox(mailbox),
+      }), enabled);
+    }
+
+    export function useSendMailboxMessage() {
+      return useApiMutation((input: { mailbox: 'sales' | 'purchasing'; message: MailboxMessageBody }): Promise<MailboxSendResponse> =>
+        apiService.sendMailboxMessage(input.mailbox, input.message), [
+          apiQueryKeys.mailboxInbox('sales'),
+          apiQueryKeys.mailboxInbox('purchasing'),
+        ]);
     }
 
 export function useTraceDecision() {
