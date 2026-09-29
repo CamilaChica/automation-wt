@@ -151,7 +151,18 @@ export interface ExtractionReviewDecisionBody {
   comments?: string;
   approved_extraction?: Record<string, unknown>;
 }
-export interface ExtractionReviewResponse { id: string; status: string; [key: string]: unknown }
+export interface ExtractionReviewResponse {
+  id: string;
+  status: string;
+  task?: string;
+  entity_id?: string | null;
+  source_text?: string;
+  extraction?: Record<string, unknown>;
+  reason?: string;
+  hold_flags?: string[];
+  created_at?: IsoDateTime;
+  [key: string]: unknown;
+}
 export interface FreightQuoteBody {
   origin: string;
   destination: string;

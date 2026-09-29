@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { getApiErrorMessage } from '../../services/api';
+import { apiService, getApiErrorMessage } from '../../services/api';
 import { Badge } from '../common/Badge';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
-import { useAutomationEvents, useRFQs, useTraceDecision } from '../../hooks/useApiResources';
+import { useAutomationEvents, useDecideExtractionReview, useExtractionReview, useExtractionReviews, useRFQs, useTraceDecision } from '../../hooks/useApiResources';
+import type { ExtractionReviewResponse } from '../../types/api';
 import { 
   ShieldCheck, 
   AlertOctagon, 
@@ -15,18 +16,38 @@ import {
   FileCheck,
   Search,
   Eye,
-  Loader2
+  Loader2,
+  RefreshCw,
 } from 'lucide-react';
+
+const formatReviewValue = (value: unknown): string => {
+  if (typeof value === 'string') return value;
+  if (value === undefined) return '';
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
 
 export const TraceVaultView: React.FC = () => {
   const [activeTab, setActiveTab] = useState('');
+  const [selectedReviewId, setSelectedReviewId] = useState('');
+  const [reviewComments, setReviewComments] = useState('');
   const [verificationPassed, setVerificationPassed] = useState(false);
   const [hardFreezeEnabled, setHardFreezeEnabled] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [reviewNotice, setReviewNotice] = useState<string | null>(null);
+  const [reviewNoticeType, setReviewNoticeType] = useState<'success' | 'error'>('success');
   const [pendingDecision, setPendingDecision] = useState<'certify' | 'reject' | 'rescan' | 'freeze' | null>(null);
+  const [reviewDecisionPending, setReviewDecisionPending] = useState<'approve' | 'reject' | null>(null);
   const rfqQuery = useRFQs();
   const eventsQuery = useAutomationEvents();
   const decisionMutation = useTraceDecision();
+  const canReviewExtractions = apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_SALES', 'ROLE_PURCHASING']);
+  const extractionReviewsQuery = useExtractionReviews(canReviewExtractions);
+  const extractionReviewQuery = useExtractionReview(selectedReviewId);
+  const extractionDecisionMutation = useDecideExtractionReview();
   const rfqs = rfqQuery.data || [];
   const loading = rfqQuery.isLoading;
   const usingFallbackData = rfqQuery.isSampleData;
@@ -34,6 +55,8 @@ export const TraceVaultView: React.FC = () => {
   const automationEvents = eventsQuery.data || [];
   const complianceLoadError = eventsQuery.error?.message || null;
   const loadingComplianceEvents = eventsQuery.isLoading;
+  const extractionReviews = extractionReviewsQuery.data || [];
+  const selectedExtractionReview: ExtractionReviewResponse | undefined = extractionReviewQuery.data;
   const selectedRfq = rfqs.find(rfq => rfq.id === activeTab);
   const actionsBlocked = loading || decisionMutation.isPending || usingFallbackData || !selectedRfq || isFailedRfq(selectedRfq);
 
@@ -69,11 +92,105 @@ export const TraceVaultView: React.FC = () => {
     if (!activeTab && rfqs.length > 0) setActiveTab(rfqs[0].id);
   }, [activeTab, rfqs]);
 
+  useEffect(() => {
+    if (!selectedReviewId && extractionReviews.length > 0) setSelectedReviewId(extractionReviews[0].id);
+  }, [selectedReviewId, extractionReviews]);
+
+  useEffect(() => {
+    setReviewComments('');
+  }, [selectedReviewId]);
+
+  const decideExtractionReview = async (decision: 'approve' | 'reject') => {
+    const review = selectedExtractionReview;
+    const comments = reviewComments.trim();
+    if (!review || review.status !== 'PENDING' || extractionDecisionMutation.isPending) return;
+    if (decision === 'approve' && !review.extraction) {
+      setReviewNoticeType('error');
+      setReviewNotice('The extraction payload is missing and cannot be approved.');
+      return;
+    }
+    if (decision === 'reject' && !comments) {
+      setReviewNoticeType('error');
+      setReviewNotice('Add a reason before rejecting this extraction.');
+      return;
+    }
+    if (!window.confirm(`${decision === 'approve' ? 'Approve' : 'Reject'} extraction review ${review.id}?`)) return;
+    setReviewDecisionPending(decision);
+    setReviewNotice(null);
+    try {
+      await extractionDecisionMutation.mutateAsync({
+        reviewId: review.id,
+        body: {
+          decision,
+          comments: comments || undefined,
+          approved_extraction: decision === 'approve' ? review.extraction : undefined,
+        },
+      });
+      setReviewNoticeType('success');
+      setReviewNotice(`Extraction review ${decision === 'approve' ? 'approved' : 'rejected'}.`);
+      setSelectedReviewId('');
+      setReviewComments('');
+    } catch (error) {
+      setReviewNoticeType('error');
+      setReviewNotice(getApiErrorMessage(error, `Unable to ${decision} the extraction review.`));
+    } finally {
+      setReviewDecisionPending(null);
+    }
+  };
+
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
       {loadError && <div role="alert" className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700"><span>{loadError}</span><button type="button" aria-label="Retry loading trace records" onClick={() => void rfqQuery.refetch()} className="font-bold underline focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">Retry</button></div>}
       {notice && <div role="status" aria-live="polite" className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
       {usingFallbackData && <FallbackDataBanner />}
+      {canReviewExtractions && <section aria-labelledby="operator-extraction-reviews-title" className="space-y-4 border-y border-slate-200 py-5 dark:border-slate-800">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 id="operator-extraction-reviews-title" className="font-display text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100">OPERATOR EXTRACTION REVIEWS</h2>
+          <div className="flex items-center gap-3 text-xs text-slate-500">
+            <span>{extractionReviews.length} pending</span>
+            <button type="button" aria-label="Refresh extraction reviews" onClick={() => void extractionReviewsQuery.refetch()} className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-slate-300 px-2.5 font-semibold hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:hover:bg-slate-800">
+              {extractionReviewsQuery.isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />}
+              <span>Refresh</span>
+            </button>
+          </div>
+        </div>
+        {reviewNotice && <div role={reviewNoticeType === 'error' ? 'alert' : 'status'} aria-live="polite" className={`rounded-md border p-3 text-xs ${reviewNoticeType === 'error' ? 'border-red-300 bg-red-50 text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200' : 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-200'}`}>{reviewNotice}</div>}
+        {extractionReviewsQuery.error && <div role="alert" className="flex items-center justify-between gap-3 rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200"><span>{extractionReviewsQuery.error.message}</span><button type="button" onClick={() => void extractionReviewsQuery.refetch()} className="font-bold underline">Retry</button></div>}
+        {extractionReviewsQuery.isLoading && <p role="status" className="py-4 text-center text-xs text-slate-500">Loading operator reviews...</p>}
+        {!extractionReviewsQuery.isLoading && !extractionReviewsQuery.error && extractionReviews.length === 0 && <p role="status" className="py-4 text-center text-xs text-slate-500">No pending extraction reviews.</p>}
+        {extractionReviews.length > 0 && <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(220px,0.8fr)_minmax(0,1.6fr)]">
+          <nav aria-label="Pending extraction reviews" className="space-y-1">
+            {extractionReviews.map(review => <button key={review.id} type="button" aria-pressed={selectedReviewId === review.id} onClick={() => setSelectedReviewId(review.id)} className={`w-full rounded-md border px-3 py-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${selectedReviewId === review.id ? 'border-aero-blue bg-blue-50 dark:bg-aero-blue/10' : 'border-slate-200 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900'}`}>
+              <span className="flex items-center justify-between gap-2 text-xs font-bold text-slate-900 dark:text-slate-100"><span>{review.id}</span><span className="text-[10px] font-semibold uppercase text-amber-700 dark:text-amber-300">{review.task || 'Review'}</span></span>
+              <span className="mt-1 block truncate text-[11px] text-slate-600 dark:text-slate-400">{review.entity_id || review.reason || 'Pending operator decision'}</span>
+            </button>)}
+          </nav>
+          <div aria-live="polite" className="min-w-0 border-l border-slate-200 pl-4 dark:border-slate-800">
+            {extractionReviewQuery.error && <div role="alert" className="flex items-center justify-between gap-3 rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200"><span>{extractionReviewQuery.error.message}</span><button type="button" onClick={() => void extractionReviewQuery.refetch()} className="font-bold underline">Retry</button></div>}
+            {extractionReviewQuery.isLoading && <p role="status" className="py-4 text-xs text-slate-500">Loading selected review...</p>}
+            {!extractionReviewQuery.isLoading && !extractionReviewQuery.error && !selectedExtractionReview && <p role="status" className="py-4 text-xs text-slate-500">Select a pending review to inspect its source and extraction.</p>}
+            {selectedExtractionReview && <div className="space-y-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div><h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">{selectedExtractionReview.id}</h3><p className="mt-1 text-[11px] text-slate-500">{selectedExtractionReview.entity_id || selectedExtractionReview.task || 'Extraction review'}</p></div>
+                <Badge variant="outline">{selectedExtractionReview.status}</Badge>
+              </div>
+              {selectedExtractionReview.reason && <p className="rounded-md border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">{selectedExtractionReview.reason}</p>}
+              {(selectedExtractionReview.hold_flags || []).length > 0 && <div className="flex flex-wrap gap-1.5">{selectedExtractionReview.hold_flags?.map(flag => <Badge key={flag} variant="outline">{flag}</Badge>)}</div>}
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div className="min-w-0 space-y-1"><h4 className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Source text</h4><p className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-white p-3 text-xs text-slate-800 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200">{selectedExtractionReview.source_text || 'No source text recorded.'}</p></div>
+                <div className="min-w-0 space-y-1"><h4 className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Extracted fields</h4><dl className="max-h-48 space-y-2 overflow-auto rounded-md border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">{Object.entries(selectedExtractionReview.extraction || {}).map(([field, value]) => <div key={field} className="grid grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)] gap-2 text-xs"><dt className="break-words font-semibold text-slate-600 dark:text-slate-400">{field}</dt><dd className="break-words text-slate-900 dark:text-slate-200">{formatReviewValue(value)}</dd></div>)}</dl></div>
+              </div>
+              {selectedExtractionReview.status === 'PENDING' && <div className="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-800">
+                <label className="block space-y-1 text-[10px] font-semibold text-slate-600 dark:text-slate-300"><span>Decision comments</span><textarea aria-label="Extraction review comments" value={reviewComments} onChange={event => setReviewComments(event.target.value)} rows={2} maxLength={1000} disabled={Boolean(reviewDecisionPending)} className="w-full resize-y rounded-md border border-slate-300 bg-white p-2 text-xs font-normal text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" /></label>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" disabled={Boolean(reviewDecisionPending) || !selectedExtractionReview.extraction} aria-busy={reviewDecisionPending === 'approve'} onClick={() => void decideExtractionReview('approve')} className="inline-flex min-h-10 items-center gap-1.5 rounded-md bg-emerald-700 px-3 text-xs font-bold text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50">{reviewDecisionPending === 'approve' ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Check className="h-3.5 w-3.5" aria-hidden="true" />}<span>APPROVE EXTRACTION</span></button>
+                  <button type="button" disabled={Boolean(reviewDecisionPending) || !reviewComments.trim()} aria-busy={reviewDecisionPending === 'reject'} onClick={() => void decideExtractionReview('reject')} className="inline-flex min-h-10 items-center gap-1.5 rounded-md bg-red-700 px-3 text-xs font-bold text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50">{reviewDecisionPending === 'reject' ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <XCircle className="h-3.5 w-3.5" aria-hidden="true" />}<span>REJECT EXTRACTION</span></button>
+                </div>
+              </div>}
+            </div>}
+          </div>
+        </div>}
+      </section>}
       {/* Top Grid: Pipeline & Active Vault & Document Viewer */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Top (4 cols): DOCUMENTATION STATUS PIPELINE & ACTIVE DOCUMENT VAULT */}

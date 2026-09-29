@@ -47,9 +47,9 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 | `POST /api/internal/rfqs/{rfq_id}/automation` | Admin/manager | `AutomationPauseRequest` | Automation pause/resume result. Procurement exposes role-gated pause/resume controls and records an operator reason when pausing. |
 | `POST /api/internal/rfqs/{rfq_id}/trace-decision` | Admin/manager/purchasing | `TraceDecisionRequest` | Decision and automation status. Trace Vault uses `useTraceDecision`, then invalidates RFQs/events. |
 | `GET /api/internal/automation-events` | Admin/manager/sales/purchasing | Optional status/limit | Automation event list. TopBar audit feed and Trace Vault use `useAutomationEvents`. |
-| `GET /api/internal/extraction-reviews` | Admin/manager/sales/purchasing | Optional status/limit | Operator review records. |
-| `GET /api/internal/extraction-reviews/{review_id}` | Admin/manager/sales/purchasing | Path `review_id` | One operator review. |
-| `POST /api/internal/extraction-reviews/{review_id}/decision` | Admin/manager/sales/purchasing | `ExtractionReviewDecisionRequest` | Review-decision result. |
+| `GET /api/internal/extraction-reviews` | Admin/manager/sales/purchasing | Optional status/limit | Pending operator extraction-review queue in Trace Vault. |
+| `GET /api/internal/extraction-reviews/{review_id}` | Admin/manager/sales/purchasing | Path `review_id` | Selected source text, extracted fields, reason, and hold flags in Trace Vault. |
+| `POST /api/internal/extraction-reviews/{review_id}/decision` | Admin/manager/sales/purchasing | `ExtractionReviewDecisionRequest` | Trace Vault approves the displayed extraction with server source-grounding validation or rejects it with operator comments. |
 | `POST /api/internal/commands` | Admin/manager/sales/purchasing | `InternalCommandRequest` | Audited command result. Procurement, Sourcing and Fulfillment hooks invalidate relevant active resources. |
 | `GET /api/internal/llm/health` | Admin/manager | None | Provider/configuration booleans; no secret values. |
 | `GET /api/internal/llm/telemetry` | Admin/manager | Optional task/limit | LLM telemetry records. |

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiService, getApiErrorMessage } from '../services/api';
 import type {
   ApiStatus,
+  ExtractionReviewDecisionBody,
+  ExtractionReviewResponse,
   FulfillmentStage,
   IntakeRequestBody,
   MailboxHealthResponse,
@@ -153,6 +155,8 @@ export const apiQueryKeys = {
   automationEvents: 'automation-events',
   systemHealth: 'system-health',
   mailboxHealth: 'mailbox-health',
+  operatorReviews: 'operator-reviews',
+  operatorReviewDetail: (reviewId: string) => `operator-review-detail:${reviewId}`,
 } as const;
 
 export function useRFQs() {
@@ -269,6 +273,27 @@ export function useSetAutomationPause() {
       apiQueryKeys.automationEvents,
     ]);
 }
+
+  export function useExtractionReviews(enabled = true) {
+    return useApiQuery<ExtractionReviewResponse[]>(apiQueryKeys.operatorReviews, async () => ({
+      data: await apiService.getExtractionReviews('PENDING', 100),
+    }), enabled);
+  }
+
+  export function useExtractionReview(reviewId: string) {
+    return useApiQuery<ExtractionReviewResponse>(apiQueryKeys.operatorReviewDetail(reviewId), async () => ({
+      data: await apiService.getExtractionReview(reviewId),
+    }), Boolean(reviewId));
+  }
+
+  export function useDecideExtractionReview() {
+    return useApiMutation((input: { reviewId: string; body: ExtractionReviewDecisionBody }) =>
+      apiService.decideExtractionReview(input.reviewId, input.body), [
+        apiQueryKeys.operatorReviews,
+        'operator-review-detail',
+        apiQueryKeys.rfqs,
+      ]);
+  }
 
 export function useTraceDecision() {
   return useApiMutation((input: { rfqId: string; decision: 'certify' | 'reject' | 'rescan' | 'freeze'; reason?: string }) =>
