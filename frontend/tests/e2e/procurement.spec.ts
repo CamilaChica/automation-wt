@@ -86,3 +86,94 @@ test('procurement does not offer retry for failed intake without a reset path', 
   await expect(page.getByRole('button', { name: 'PROCESS RFQ' })).toHaveCount(0);
   expect(processCalls).toBe(0);
 });
+
+test('authorized procurement users can inspect internal inventory and supplier profiles', async ({ page }) => {
+  await seedSession(page, 'internal');
+  await page.route('**/api/rfqs', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/inventory', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([{
+      id: 'INV-ADMIN-1',
+      part_number: 'PN-100',
+      serial_number: 'SN-100',
+      quantity_available: 3,
+      condition_code: 'NE',
+      warehouse_location: 'MIA-A12',
+      unit_cost: 1250,
+      certificate_type: 'FAA 8130-3',
+      has_full_trace: true,
+    }]),
+  }));
+  await page.route('**/api/suppliers', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([{
+      id: 'SUP-ADMIN-1',
+      company_name: 'Acme Components',
+      contact_name: 'Morgan Lee',
+      phone: '+1-555-0100',
+      email: 'sales@acme.example',
+      address_line1: '100 Aviation Way',
+      city: 'Miami',
+      state_province: 'FL',
+      postal_code: '33101',
+      country: 'US',
+      approval_status: 'Approved',
+      itar_certified: true,
+    }]),
+  }));
+  await page.route('**/api/suppliers/SUP-ADMIN-1', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      id: 'SUP-ADMIN-1',
+      company_name: 'Acme Components',
+      contact_name: 'Morgan Lee',
+      phone: '+1-555-0100',
+      email: 'sales@acme.example',
+      address_line1: '100 Aviation Way',
+      city: 'Miami',
+      state_province: 'FL',
+      postal_code: '33101',
+      country: 'US',
+      approval_status: 'Approved',
+      itar_certified: true,
+    }),
+  }));
+
+  await page.goto('/');
+  await page.locator('aside button').filter({ hasText: 'Proc Command' }).first().click();
+
+  await expect(page.getByRole('heading', { name: 'INVENTORY & SUPPLIER DIRECTORY' })).toBeVisible();
+  await expect(page.getByText('PN-100', { exact: true })).toBeVisible();
+  await expect(page.getByText('$1,250')).toBeVisible();
+  await page.getByRole('tab', { name: 'Suppliers' }).click();
+  await page.getByRole('button', { name: /Acme Components/ }).click();
+  await expect(page.getByRole('heading', { name: 'Acme Components' })).toBeVisible();
+  await expect(page.getByText('sales@acme.example')).toBeVisible();
+});
+
+test('sales role cannot load internal inventory or supplier directory', async ({ page }) => {
+  let protectedRequests = 0;
+  await page.addInitScript(() => {
+    localStorage.setItem('wt_access_token', 'e2e-sales-token');
+    localStorage.setItem('wt_role', 'ROLE_SALES');
+    localStorage.setItem('wt_email', 'sales@example.com');
+  });
+  await page.route('**/api/rfqs', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/inventory', route => {
+    protectedRequests += 1;
+    return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ detail: 'Insufficient permissions.' }) });
+  });
+  await page.route('**/api/suppliers**', route => {
+    protectedRequests += 1;
+    return route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ detail: 'Insufficient permissions.' }) });
+  });
+
+  await page.goto('/');
+  await page.locator('aside button').filter({ hasText: 'Proc Command' }).first().click();
+
+  await expect(page.getByRole('heading', { name: 'INVENTORY & SUPPLIER DIRECTORY' })).toHaveCount(0);
+  expect(protectedRequests).toBe(0);
+});

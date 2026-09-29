@@ -657,26 +657,34 @@ export const apiService = {
     }
   },
 
-  async getInventory(): Promise<InventoryItem[]> {
+  async getInventoryWithSource(): Promise<{ inventory: InventoryItem[]; isFallback: boolean }> {
     try {
       const res = await axios.get(`${API_BASE}/inventory`);
-      return res.data;
+      return { inventory: res.data, isFallback: false };
     } catch (error) {
       if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
       if (!allowMockFallbacks) throw error;
-      return mockInventory;
+      return { inventory: mockInventory, isFallback: true };
+    }
+  },
+
+  async getInventory(): Promise<InventoryItem[]> {
+    return (await this.getInventoryWithSource()).inventory;
+  },
+
+  async getSuppliersWithSource(): Promise<{ suppliers: Supplier[]; isFallback: boolean }> {
+    try {
+      const res = await axios.get(`${API_BASE}/suppliers`);
+      return { suppliers: res.data, isFallback: false };
+    } catch (error) {
+      if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
+      if (!allowMockFallbacks) throw error;
+      return { suppliers: mockSuppliers, isFallback: true };
     }
   },
 
   async getSuppliers(): Promise<Supplier[]> {
-    try {
-      const res = await axios.get(`${API_BASE}/suppliers`);
-      return res.data;
-    } catch (error) {
-      if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
-      if (!allowMockFallbacks) throw error;
-      return mockSuppliers;
-    }
+    return (await this.getSuppliersWithSource()).suppliers;
   },
 
   async getSupplier(supplierId: string): Promise<Supplier> {

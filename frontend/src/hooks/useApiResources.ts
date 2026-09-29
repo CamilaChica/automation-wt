@@ -12,7 +12,7 @@ import type {
   ShipmentTraceResponse,
   SystemHealthResponse,
 } from '../types/api';
-import type { AutomationEvent, InternalCommand, RFQ, RFQDetailResponse, Shipment, SupplierQuote } from '../types';
+import type { AutomationEvent, InternalCommand, InventoryItem, RFQ, RFQDetailResponse, Shipment, Supplier, SupplierQuote } from '../types';
 
 export interface ApiQueryState<T> {
   data: T | undefined;
@@ -161,6 +161,9 @@ export const apiQueryKeys = {
   operatorReviewDetail: (reviewId: string) => `operator-review-detail:${reviewId}`,
   llmHealth: 'llm-health',
   llmTelemetry: 'llm-telemetry',
+  inventory: 'inventory',
+  suppliers: 'suppliers',
+  supplierDetail: (supplierId: string) => `supplier-detail:${supplierId}`,
 } as const;
 
 export function useRFQs() {
@@ -309,6 +312,26 @@ export function useSetAutomationPause() {
       return useApiQuery<LlmTelemetryRecord[]>(apiQueryKeys.llmTelemetry, async () => ({
         data: await apiService.getLlmTelemetry(undefined, 50),
       }), enabled);
+    }
+
+    export function useInventoryDirectory(enabled = true) {
+      return useApiQuery<InventoryItem[]>(apiQueryKeys.inventory, async () => {
+        const result = await apiService.getInventoryWithSource();
+        return { data: result.inventory, isSampleData: result.isFallback };
+      }, enabled);
+    }
+
+    export function useSupplierDirectory(enabled = true) {
+      return useApiQuery<Supplier[]>(apiQueryKeys.suppliers, async () => {
+        const result = await apiService.getSuppliersWithSource();
+        return { data: result.suppliers, isSampleData: result.isFallback };
+      }, enabled);
+    }
+
+    export function useSupplierProfile(supplierId: string) {
+      return useApiQuery<Supplier>(apiQueryKeys.supplierDetail(supplierId), async () => ({
+        data: await apiService.getSupplier(supplierId),
+      }), Boolean(supplierId));
     }
 
 export function useTraceDecision() {

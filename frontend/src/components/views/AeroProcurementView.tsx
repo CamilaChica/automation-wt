@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { apiService, getApiErrorMessage } from '../../services/api';
 import { Badge } from '../common/Badge';
-import { InternalCommand, RFQ, SupplierQuote } from '../../types';
+import { InternalCommand, InventoryItem, RFQ, Supplier, SupplierQuote } from '../../types';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import { 
   FileCheck, 
@@ -18,11 +18,13 @@ import {
 } from 'lucide-react';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
-import { useExecuteInternalCommand, useProcessRFQ, useRFQs, useSetAutomationPause, useSupplierOffers } from '../../hooks/useApiResources';
+import { useExecuteInternalCommand, useInventoryDirectory, useProcessRFQ, useRFQs, useSetAutomationPause, useSupplierDirectory, useSupplierOffers, useSupplierProfile } from '../../hooks/useApiResources';
 
 export const AeroProcurementView: React.FC = () => {
+  const [catalogTab, setCatalogTab] = useState<'inventory' | 'suppliers'>('inventory');
   const [selectedOfferId, setSelectedOfferId] = useState('');
   const [selectedRfqId, setSelectedRfqId] = useState('');
+  const [selectedSupplierId, setSelectedSupplierId] = useState('');
   const [automationReason, setAutomationReason] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const [commandPending, setCommandPending] = useState<InternalCommand | null>(null);
@@ -32,6 +34,12 @@ export const AeroProcurementView: React.FC = () => {
   const loading = rfqQuery.isLoading;
   const loadError = rfqQuery.error?.message || null;
   const usingFallbackData = rfqQuery.isSampleData;
+  const canViewInternalCatalog = apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_PURCHASING']);
+  const inventoryQuery = useInventoryDirectory(canViewInternalCatalog);
+  const supplierDirectoryQuery = useSupplierDirectory(canViewInternalCatalog);
+  const supplierProfileQuery = useSupplierProfile(selectedSupplierId);
+  const inventory = inventoryQuery.data || [];
+  const suppliers = supplierDirectoryQuery.data || [];
   const commandMutation = useExecuteInternalCommand();
   const processMutation = useProcessRFQ();
   const automationMutation = useSetAutomationPause();
@@ -62,6 +70,10 @@ export const AeroProcurementView: React.FC = () => {
   useEffect(() => {
     if (!selectedOfferId && offers.length > 0) setSelectedOfferId(offers[0].id);
   }, [offers, selectedOfferId]);
+
+  useEffect(() => {
+    if (!selectedSupplierId && suppliers.length > 0) setSelectedSupplierId(suppliers[0].id);
+  }, [selectedSupplierId, suppliers]);
 
   useEffect(() => {
     setAutomationReason('');
@@ -299,6 +311,51 @@ export const AeroProcurementView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {canViewInternalCatalog && <section aria-labelledby="inventory-supplier-directory-title" className="space-y-4 border-y border-slate-200 py-5 dark:border-slate-800">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 id="inventory-supplier-directory-title" className="font-display text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100">INVENTORY & SUPPLIER DIRECTORY</h2>
+          <div role="tablist" aria-label="Internal catalog views" className="inline-flex border border-slate-300 dark:border-slate-700">
+            <button type="button" role="tab" aria-selected={catalogTab === 'inventory'} onClick={() => setCatalogTab('inventory')} className={`min-h-9 px-3 text-xs font-semibold ${catalogTab === 'inventory' ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'bg-transparent text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'}`}>Inventory</button>
+            <button type="button" role="tab" aria-selected={catalogTab === 'suppliers'} onClick={() => setCatalogTab('suppliers')} className={`min-h-9 px-3 text-xs font-semibold ${catalogTab === 'suppliers' ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'bg-transparent text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'}`}>Suppliers</button>
+          </div>
+        </div>
+        {catalogTab === 'inventory' && inventoryQuery.isSampleData && <FallbackDataBanner message="Internal inventory is showing local sample records, not confirmed stock." />}
+        {catalogTab === 'suppliers' && supplierDirectoryQuery.isSampleData && <FallbackDataBanner message="Supplier directory is showing local sample records, not confirmed supplier data." />}
+        {catalogTab === 'inventory' && inventoryQuery.error && <div role="alert" className="flex items-center justify-between gap-3 rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200"><span>{inventoryQuery.error.message}</span><button type="button" onClick={() => void inventoryQuery.refetch()} className="font-bold underline">Retry</button></div>}
+        {catalogTab === 'suppliers' && supplierDirectoryQuery.error && <div role="alert" className="flex items-center justify-between gap-3 rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200"><span>{supplierDirectoryQuery.error.message}</span><button type="button" onClick={() => void supplierDirectoryQuery.refetch()} className="font-bold underline">Retry</button></div>}
+        {catalogTab === 'inventory' && <>
+          {inventoryQuery.isLoading && <p role="status" className="py-4 text-center text-xs text-slate-500">Loading internal inventory...</p>}
+          {!inventoryQuery.isLoading && !inventoryQuery.error && inventory.length === 0 && <p role="status" className="py-4 text-center text-xs text-slate-500">No inventory records are available.</p>}
+          {inventory.length > 0 && <div className="overflow-x-auto border-y border-slate-200 dark:border-slate-800"><table className="w-full min-w-[740px] text-left text-xs">
+            <thead><tr className="text-[10px] font-semibold uppercase text-slate-500"><th className="py-2 pr-3">Part</th><th className="py-2 pr-3">Serial</th><th className="py-2 pr-3">Condition</th><th className="py-2 pr-3 text-right">Available</th><th className="py-2 pr-3 text-right">Unit cost</th><th className="py-2 pr-3">Location</th><th className="py-2">Certificate</th></tr></thead>
+            <tbody className="divide-y divide-slate-200 dark:divide-slate-800">{inventory.map((item: InventoryItem) => <tr key={item.id}><td className="py-2 pr-3 font-semibold">{item.part_number}</td><td className="py-2 pr-3">{item.serial_number}</td><td className="py-2 pr-3">{item.condition_code}</td><td className="py-2 pr-3 text-right tabular-nums">{item.quantity_available.toLocaleString()}</td><td className="py-2 pr-3 text-right tabular-nums">${item.unit_cost.toLocaleString()}</td><td className="py-2 pr-3">{item.warehouse_location}</td><td className="py-2">{item.certificate_type}</td></tr>)}</tbody>
+          </table></div>}
+        </>}
+        {catalogTab === 'suppliers' && <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(220px,0.8fr)_minmax(0,1.6fr)]">
+          <div className="space-y-1" aria-label="Supplier directory">
+            {supplierDirectoryQuery.isLoading && <p role="status" className="py-4 text-xs text-slate-500">Loading suppliers...</p>}
+            {!supplierDirectoryQuery.isLoading && !supplierDirectoryQuery.error && suppliers.length === 0 && <p role="status" className="py-4 text-xs text-slate-500">No suppliers are available.</p>}
+            {suppliers.map((supplier: Supplier) => <button key={supplier.id} type="button" aria-pressed={selectedSupplierId === supplier.id} onClick={() => setSelectedSupplierId(supplier.id)} className={`w-full rounded-md border px-3 py-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${selectedSupplierId === supplier.id ? 'border-aero-blue bg-blue-50 dark:bg-aero-blue/10' : 'border-slate-200 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900'}`}>
+              <span className="flex items-center justify-between gap-2 text-xs font-bold"><span>{supplier.company_name}</span><span className="text-[10px] font-semibold uppercase text-slate-500">{supplier.approval_status}</span></span>
+              <span className="mt-1 block text-[11px] text-slate-600 dark:text-slate-400">{supplier.country} · ITAR {supplier.itar_certified ? 'certified' : 'not certified'}</span>
+            </button>)}
+          </div>
+          <div aria-live="polite" className="min-w-0 border-l border-slate-200 pl-4 dark:border-slate-800">
+            {supplierProfileQuery.error && <div role="alert" className="flex items-center justify-between gap-3 rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200"><span>{supplierProfileQuery.error.message}</span><button type="button" onClick={() => void supplierProfileQuery.refetch()} className="font-bold underline">Retry</button></div>}
+            {supplierProfileQuery.isLoading && <p role="status" className="py-4 text-xs text-slate-500">Loading supplier profile...</p>}
+            {supplierProfileQuery.data && <div className="space-y-2 text-xs">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">{supplierProfileQuery.data.company_name}</h3>
+              <p>{supplierProfileQuery.data.contact_name}{supplierProfileQuery.data.contact_title ? ` · ${supplierProfileQuery.data.contact_title}` : ''}</p>
+              <p><a className="underline" href={`mailto:${supplierProfileQuery.data.email}`}>{supplierProfileQuery.data.email}</a></p>
+              <p>{supplierProfileQuery.data.phone}</p>
+              <p>{supplierProfileQuery.data.address_line1}{supplierProfileQuery.data.address_line2 ? `, ${supplierProfileQuery.data.address_line2}` : ''}, {supplierProfileQuery.data.city}, {supplierProfileQuery.data.state_province} {supplierProfileQuery.data.postal_code}, {supplierProfileQuery.data.country}</p>
+              <p>Approval: {supplierProfileQuery.data.approval_status} · ITAR: {supplierProfileQuery.data.itar_certified ? 'Certified' : 'Not certified'}</p>
+              {supplierProfileQuery.data.notes && <p className="whitespace-pre-wrap text-slate-600 dark:text-slate-400">{supplierProfileQuery.data.notes}</p>}
+            </div>}
+          </div>
+        </div>}
+      </section>}
 
       {/* Bottom Section: AOG Triage Matrix & Lead Time Chart & Telemetry */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">

@@ -34,9 +34,9 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 | Method and path | Access | Request | Response / UI mapping |
 | --- | --- | --- | --- |
 | `GET /api/catalog/search` | Customer/admin/manager/sales/purchasing | `query`, optional `condition` | Customer-safe catalog rows only. Portal search; fallback rows are tagged as sample. |
-| `GET /api/inventory` | Admin/manager/purchasing | None | Internal inventory list; service exists, but current customer-facing panels do not expose internal cost/location fields. |
-| `GET /api/suppliers` | Admin/manager/purchasing | None | Supplier directory. |
-| `GET /api/suppliers/{supplier_id}` | Admin/manager/purchasing | Path `supplier_id` | Single supplier profile. |
+| `GET /api/inventory` | Admin/manager/purchasing | None | Role-gated Procurement inventory tab; internal cost/location fields are never shown to sales/customer roles, and fallback rows are marked sample. |
+| `GET /api/suppliers` | Admin/manager/purchasing | None | Role-gated Procurement supplier directory; fallback rows are marked sample. |
+| `GET /api/suppliers/{supplier_id}` | Admin/manager/purchasing | Path `supplier_id` | Selected supplier profile in the Procurement directory. |
 | `GET /api/supplier-offers?part_number=...` | Admin/manager/purchasing/sales | Part number query | Supplier offers. Procurement and Sourcing views use `useSupplierOffers`. |
 | `POST /api/internal/freight/quote` | Admin/manager/purchasing/sales | `FreightRequest` | Provider quote result. No live carrier data is synthesized by the UI. |
 
