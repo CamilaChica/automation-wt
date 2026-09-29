@@ -193,6 +193,20 @@ export interface FreightQuoteBody {
   packages: number;
   service_level: string;
 }
+export interface FreightRate {
+  service: string;
+  amount: number;
+  currency: string;
+  estimated_days?: number | null;
+  carrier?: string | null;
+}
+export interface FreightQuoteResponse {
+  provider: string;
+  status: 'DRY_RUN' | 'QUOTED' | string;
+  request: FreightQuoteBody;
+  rates: FreightRate[];
+  message?: string;
+}
 export interface ShipmentSmsBody { recipient: string; status: string; tracking_url?: string }
 export interface AutomationPauseBody { paused: boolean; reason?: string }
 export interface TraceDecisionResponse { decision: string; automation_paused: boolean }

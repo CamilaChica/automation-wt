@@ -4,6 +4,8 @@ import type {
   ApiStatus,
   ExtractionReviewDecisionBody,
   ExtractionReviewResponse,
+  FreightQuoteBody,
+  FreightQuoteResponse,
   FulfillmentStage,
   IntakeRequestBody,
   LlmHealthResponse,
@@ -332,6 +334,11 @@ export function useSetAutomationPause() {
       return useApiQuery<Supplier>(apiQueryKeys.supplierDetail(supplierId), async () => ({
         data: await apiService.getSupplier(supplierId),
       }), Boolean(supplierId));
+    }
+
+    export function useFreightQuote() {
+      return useApiMutation((request: FreightQuoteBody): Promise<FreightQuoteResponse> =>
+        apiService.quoteFreight(request));
     }
 
 export function useTraceDecision() {

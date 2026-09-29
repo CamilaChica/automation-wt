@@ -10,6 +10,7 @@ import type {
   EmployeeWorkHours,
   EmployeeWorkHoursReport,
   FreightQuoteBody,
+  FreightQuoteResponse,
   IntakeResponse,
   LoginResponse,
   LlmHealthResponse,
@@ -523,8 +524,8 @@ export const apiService = {
     return res.data;
   },
 
-  async quoteFreight(body: FreightQuoteBody): Promise<Record<string, unknown>> {
-    const res = await axios.post(`${API_BASE}/internal/freight/quote`, body);
+  async quoteFreight(body: FreightQuoteBody): Promise<FreightQuoteResponse> {
+    const res = await axios.post<FreightQuoteResponse>(`${API_BASE}/internal/freight/quote`, body);
     return res.data;
   },
 

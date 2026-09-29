@@ -38,7 +38,7 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 | `GET /api/suppliers` | Admin/manager/purchasing | None | Role-gated Procurement supplier directory; fallback rows are marked sample. |
 | `GET /api/suppliers/{supplier_id}` | Admin/manager/purchasing | Path `supplier_id` | Selected supplier profile in the Procurement directory. |
 | `GET /api/supplier-offers?part_number=...` | Admin/manager/purchasing/sales | Part number query | Supplier offers. Procurement and Sourcing views use `useSupplierOffers`. |
-| `POST /api/internal/freight/quote` | Admin/manager/purchasing/sales | `FreightRequest` | Provider quote result. No live carrier data is synthesized by the UI. |
+| `POST /api/internal/freight/quote` | Admin/manager/purchasing/sales | `FreightRequest` | Procurement collects route/weight/package/service inputs and shows provider rates or `DRY_RUN`; dry-run charges are not applied to quotes and no shipment is booked. |
 
 ## Internal operations and compliance
 

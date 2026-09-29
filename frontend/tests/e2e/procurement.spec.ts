@@ -177,3 +177,38 @@ test('sales role cannot load internal inventory or supplier directory', async ({
   await expect(page.getByRole('heading', { name: 'INVENTORY & SUPPLIER DIRECTORY' })).toHaveCount(0);
   expect(protectedRequests).toBe(0);
 });
+
+test('authorized users can request freight rates and distinguish a dry run', async ({ page }) => {
+  await seedSession(page, 'internal');
+  let freightRequest: Record<string, unknown> | undefined;
+  await page.route('**/api/rfqs', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/inventory', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/suppliers', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  await page.route('**/api/internal/freight/quote', async route => {
+    freightRequest = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        provider: 'configured-carrier-api',
+        status: 'DRY_RUN',
+        request: freightRequest,
+        rates: [],
+        message: 'Freight provider is disabled; the shipping charge was not added to the customer quote.',
+      }),
+    });
+  });
+
+  await page.goto('/');
+  await page.locator('aside button').filter({ hasText: 'Proc Command' }).first().click();
+  await page.getByLabel('Freight origin').fill('MIA');
+  await page.getByLabel('Freight destination').fill('JFK');
+  await page.getByLabel('Freight weight (kg)').fill('12.5');
+  await page.getByLabel('Package count').fill('2');
+  await page.getByLabel('Service level').selectOption('express');
+  await page.getByRole('button', { name: 'GET FREIGHT QUOTE' }).click();
+
+  await expect(page.getByText('DRY_RUN', { exact: true })).toBeVisible();
+  await expect(page.getByText(/shipping charge was not added to the customer quote/i)).toBeVisible();
+  await expect.poll(() => freightRequest).toEqual({ origin: 'MIA', destination: 'JFK', weight_kg: 12.5, packages: 2, service_level: 'express' });
+});

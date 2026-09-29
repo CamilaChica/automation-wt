@@ -3,6 +3,7 @@ import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { apiService, getApiErrorMessage } from '../../services/api';
 import { Badge } from '../common/Badge';
 import { InternalCommand, InventoryItem, RFQ, Supplier, SupplierQuote } from '../../types';
+import type { FreightQuoteBody, FreightQuoteResponse } from '../../types/api';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import { 
   FileCheck, 
@@ -18,7 +19,7 @@ import {
 } from 'lucide-react';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
-import { useExecuteInternalCommand, useInventoryDirectory, useProcessRFQ, useRFQs, useSetAutomationPause, useSupplierDirectory, useSupplierOffers, useSupplierProfile } from '../../hooks/useApiResources';
+import { useExecuteInternalCommand, useFreightQuote, useInventoryDirectory, useProcessRFQ, useRFQs, useSetAutomationPause, useSupplierDirectory, useSupplierOffers, useSupplierProfile } from '../../hooks/useApiResources';
 
 export const AeroProcurementView: React.FC = () => {
   const [catalogTab, setCatalogTab] = useState<'inventory' | 'suppliers'>('inventory');
@@ -26,6 +27,13 @@ export const AeroProcurementView: React.FC = () => {
   const [selectedRfqId, setSelectedRfqId] = useState('');
   const [selectedSupplierId, setSelectedSupplierId] = useState('');
   const [automationReason, setAutomationReason] = useState('');
+  const [freightOrigin, setFreightOrigin] = useState('');
+  const [freightDestination, setFreightDestination] = useState('');
+  const [freightWeightKg, setFreightWeightKg] = useState('');
+  const [freightPackages, setFreightPackages] = useState('1');
+  const [freightServiceLevel, setFreightServiceLevel] = useState('standard');
+  const [freightResult, setFreightResult] = useState<FreightQuoteResponse | null>(null);
+  const [freightError, setFreightError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [commandPending, setCommandPending] = useState<InternalCommand | null>(null);
   const [noticeType, setNoticeType] = useState<'success' | 'error'>('success');
@@ -43,6 +51,7 @@ export const AeroProcurementView: React.FC = () => {
   const commandMutation = useExecuteInternalCommand();
   const processMutation = useProcessRFQ();
   const automationMutation = useSetAutomationPause();
+  const freightQuoteMutation = useFreightQuote();
   const selectedRfq = rfqs.find(rfq => rfq.id === selectedRfqId);
   const selectedPartNumber = selectedRfq?.part_number?.trim() || '';
   const actionsBlocked = loading || Boolean(loadError) || usingFallbackData || !selectedRfq || isFailedRfq(selectedRfq);
@@ -56,6 +65,7 @@ export const AeroProcurementView: React.FC = () => {
     && !loadError
     && !usingFallbackData
     && apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER']);
+  const canQuoteFreight = apiService.hasAnyRole(['ROLE_ADMIN', 'ROLE_MANAGER', 'ROLE_PURCHASING', 'ROLE_SALES']);
   const automationPaused = Boolean(selectedRfq?.automation_paused);
   const offersQuery = useSupplierOffers(selectedPartNumber);
   const offers = offersQuery.data || [];
@@ -140,6 +150,27 @@ export const AeroProcurementView: React.FC = () => {
     } catch (error) {
       setNoticeType('error');
       setNotice(getApiErrorMessage(error, `Unable to ${paused ? 'pause' : 'resume'} automation.`));
+    }
+  };
+
+  const requestFreightQuote = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!canQuoteFreight || freightQuoteMutation.isPending) return;
+    const request: FreightQuoteBody = {
+      origin: freightOrigin.trim(),
+      destination: freightDestination.trim(),
+      weight_kg: Number(freightWeightKg),
+      packages: Number(freightPackages),
+      service_level: freightServiceLevel,
+    };
+    if (!request.origin || !request.destination || !Number.isFinite(request.weight_kg) || request.weight_kg <= 0 || !Number.isInteger(request.packages) || request.packages < 1) return;
+    setFreightError(null);
+    setFreightResult(null);
+    try {
+      const result = await freightQuoteMutation.mutateAsync(request);
+      if (result) setFreightResult(result);
+    } catch (error) {
+      setFreightError(getApiErrorMessage(error, 'Unable to request freight rates.'));
     }
   };
 
@@ -311,6 +342,31 @@ export const AeroProcurementView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {canQuoteFreight && <section aria-labelledby="freight-quote-title" className="space-y-4 border-y border-slate-200 py-5 dark:border-slate-800">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 id="freight-quote-title" className="font-display text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100">FREIGHT RATE QUOTE</h2>
+          <p className="text-[11px] text-slate-500">Rate inquiry only. No shipment is booked and no customer quote is changed.</p>
+        </div>
+        <form onSubmit={event => void requestFreightQuote(event)} className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
+          <label className="space-y-1 text-[10px] font-semibold text-slate-600 dark:text-slate-300"><span>Origin</span><input aria-label="Freight origin" value={freightOrigin} onChange={event => setFreightOrigin(event.target.value)} required maxLength={120} className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-normal text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" /></label>
+          <label className="space-y-1 text-[10px] font-semibold text-slate-600 dark:text-slate-300"><span>Destination</span><input aria-label="Freight destination" value={freightDestination} onChange={event => setFreightDestination(event.target.value)} required maxLength={120} className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-normal text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" /></label>
+          <label className="space-y-1 text-[10px] font-semibold text-slate-600 dark:text-slate-300"><span>Weight (kg)</span><input aria-label="Freight weight (kg)" type="number" value={freightWeightKg} onChange={event => setFreightWeightKg(event.target.value)} min="0.01" step="0.01" required className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-normal text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" /></label>
+          <label className="space-y-1 text-[10px] font-semibold text-slate-600 dark:text-slate-300"><span>Packages</span><input aria-label="Package count" type="number" value={freightPackages} onChange={event => setFreightPackages(event.target.value)} min="1" step="1" required className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-normal text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" /></label>
+          <label className="space-y-1 text-[10px] font-semibold text-slate-600 dark:text-slate-300"><span>Service level</span><select aria-label="Service level" value={freightServiceLevel} onChange={event => setFreightServiceLevel(event.target.value)} className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-normal text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"><option value="standard">Standard</option><option value="express">Express</option><option value="overnight">Overnight</option></select></label>
+          <button type="submit" disabled={freightQuoteMutation.isPending || !freightOrigin.trim() || !freightDestination.trim() || !freightWeightKg || Number(freightWeightKg) <= 0 || !Number.isInteger(Number(freightPackages)) || Number(freightPackages) < 1} aria-busy={freightQuoteMutation.isPending} className="inline-flex min-h-10 items-center justify-center gap-1.5 self-end rounded-md bg-aero-blue px-3 text-xs font-bold text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50">
+            {freightQuoteMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+            <span>{freightQuoteMutation.isPending ? 'REQUESTING...' : 'GET FREIGHT QUOTE'}</span>
+          </button>
+        </form>
+        {freightError && <div role="alert" className="rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200">{freightError}</div>}
+        {freightResult && <div role="status" aria-live="polite" className={`space-y-2 rounded-md border p-3 text-xs ${freightResult.status === 'DRY_RUN' ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200' : 'border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-200'}`}>
+          <div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{freightResult.status}</Badge><span>Provider: {freightResult.provider}</span></div>
+          {freightResult.message && <p>{freightResult.message}</p>}
+          {freightResult.rates.length === 0 && <p>{freightResult.status === 'DRY_RUN' ? 'No live rates returned.' : 'The provider returned no rates for this request.'}</p>}
+          {freightResult.rates.length > 0 && <div className="overflow-x-auto"><table className="w-full min-w-[420px] text-left"><thead><tr><th className="py-1 pr-3">Service</th><th className="py-1 pr-3">Carrier</th><th className="py-1 pr-3 text-right">Rate</th><th className="py-1 text-right">Estimated days</th></tr></thead><tbody>{freightResult.rates.map((rate, index) => <tr key={`${rate.service}-${rate.carrier || 'carrier'}-${index}`} className="border-t border-current/20"><td className="py-1 pr-3">{rate.service}</td><td className="py-1 pr-3">{rate.carrier || 'Not provided'}</td><td className="py-1 pr-3 text-right">{rate.currency} {rate.amount.toLocaleString()}</td><td className="py-1 text-right">{rate.estimated_days ?? 'Not provided'}</td></tr>)}</tbody></table></div>}
+        </div>}
+      </section>}
 
       {canViewInternalCatalog && <section aria-labelledby="inventory-supplier-directory-title" className="space-y-4 border-y border-slate-200 py-5 dark:border-slate-800">
         <div className="flex flex-wrap items-center justify-between gap-3">
