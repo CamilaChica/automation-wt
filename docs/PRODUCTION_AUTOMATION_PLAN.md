@@ -13,7 +13,7 @@ Single source of truth for what is left before end users can use the app. Comple
 | 1 | Provision Redis and set `REDIS_URL` on backend and email worker | Platform owner | 🔴 Blocked: needs Render access |
 | 2 | Set `FORWARDED_ALLOW_IPS` to Render's proxy CIDRs (never `*`) | Platform owner | 🔴 Blocked: needs Render access |
 | 3 | Rotate exposed credentials (DB password, Graph/mailbox secrets, API tokens) and store them only in Render env vars | Security owner | 🔴 Blocked: needs credential owner |
-| 4 | Sync Render Blueprint from `render.yaml` (Dashboard → Blueprints → Sync) | Platform owner | 🔴 Blocked: needs Render access |
+| 4 | STOP: clean up duplicate Render services before any Blueprint sync (see section 0) | Platform owner | 🔴 Blocked: duplicates are running |
 | 5 | Apply DB migrations to head (`alembic upgrade head`, adds `0010_shared_auth_state`) | DB owner | 🔴 Blocked: needs prod `DATABASE_URL` |
 | 6 | Import auth users: dry run, then `--apply --invalidate-existing-auth --confirm-target` | DB owner | ⏳ Waits on #5 |
 | 7 | Deploy; verify `/healthz` = 200 and `/ready` = 200 | Platform owner | ⏳ Waits on #1–#6 |
@@ -22,6 +22,13 @@ Single source of truth for what is left before end users can use the app. Comple
 | 10 | Create end-user accounts and send the login link (customer app: `apps/web`; internal: `frontend/`) | Business owner | ⏳ Waits on #9 |
 
 ## Blocked: how to unblock (step by step)
+
+**0. Duplicate Render services. Do this first and do NOT run Blueprint Sync until it is done.**
+Why: Render Blueprints match services by `name`. Commits renamed services in `render.yaml`: `winged-tycoons-api` → `winged-api` → `backend`, `winged-tycoons-frontend` → `frontend`, and `winged-customer-web-2` was added then removed. Workers were also added: `winged-inventory-ingestion`, `winged-outbox-dispatcher`, `winged-rfq-resume-worker`. On each sync Render created a new service for each new name and left the old one running. Old and new workers then poll the same mailbox and DB, so emails and RFQs get processed twice. Workers missing env vars (Redis/DB) also restart or retry forever.
+1. Render Dashboard → list all services. For each role, keep ONE: API, frontend, email worker, inventory ingestion, outbox dispatcher, RFQ resume worker.
+2. Keep the service that owns the live URL (e.g. `winged-tycoons-frontend.onrender.com`). **Suspend** (don't delete yet) the duplicates.
+3. Tell engineering the exact names you kept. `render.yaml` will be renamed to match them, so the next sync updates in place instead of creating new services.
+4. After 24h with no issues, delete the suspended duplicates. Detach disks only after confirming they hold no needed data.
 
 **A. Redis (`REDIS_URL`), items 1–2. About 10 minutes.**
 1. Render Dashboard → New → Key Value (Redis) → same region as the backend → Create.
@@ -58,3 +65,4 @@ Single source of truth for what is left before end users can use the app. Comple
 - SMS, analytics, and maps integrations.
 - Azure backup artifact cleanup.
 - Historical SQLite → PG data import (canceled).
+
