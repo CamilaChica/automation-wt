@@ -4,7 +4,7 @@ Single source of truth for what is left before end users can use the app. Comple
 
 **Last updated:** 2026-10-01
 **Scope:** simple launch. No new features. Anything not required to serve real users today is under "Deferred".
-**Status:** 🔴 BLOCKED. The code is ready on `main` (tests green). Every remaining item needs owner access to Render, Postgres, Redis, or mailbox credentials.
+**Status:** 🔴 BLOCKED. Production readiness is not established: there are substantial uncommitted code changes that have not been reviewed and validated. Do not deploy or sync the Blueprint until the service list and code changes are reconciled.
 
 ## Launch checklist (in order)
 
@@ -42,9 +42,8 @@ Why: Render Blueprints match services by `name`. Commits renamed services in `re
 2. Microsoft Graph / mailbox: Azure Portal → App registrations → the app → Certificates & secrets → New client secret. Update the secret env var in Render, then delete the old secret.
 3. Any other API tokens listed as `sync: false` in `render.yaml`: regenerate each one at its provider and update it in Render.
 
-**C. Blueprint sync, item 4. About 5 minutes.**
-1. Render Dashboard → Blueprints → this repo → **Manual Sync**.
-2. Review the diff Render shows (services, disks, env keys), then Apply.
+**C. Blueprint sync: STOP.**
+Do not run Manual Sync. First send engineering the exact names of the services kept in step 0. Engineering must reconcile `render.yaml` to those names and confirm which workers are required. Only then review the Blueprint diff for unexpected creates/deletes; do not Apply if it proposes duplicates.
 
 **D. Migration and user import, items 5–6. About 15 minutes, in a quiet window.**
 1. Render → backend service → Shell.
@@ -65,4 +64,3 @@ Why: Render Blueprints match services by `name`. Commits renamed services in `re
 - SMS, analytics, and maps integrations.
 - Azure backup artifact cleanup.
 - Historical SQLite → PG data import (canceled).
-
