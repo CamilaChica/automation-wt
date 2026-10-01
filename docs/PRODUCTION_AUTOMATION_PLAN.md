@@ -12,7 +12,34 @@
 
 ## Required before customer launch
 
-1. **Resolve the PostgreSQL readiness gate.** Do not recreate the database, change database URLs, or bypass the readiness guard based on this response: the API reached its cutover gate after the connection preflight. The public 503 does not reveal which sub-check failed. In the existing API service's Render Shell, check `alembic current` against the repo's Alembic head first. Engineering must then use a read-only check against the same production `DATABASE_URL` to identify any missing required schema or failed RFQ/supplier/quote/inventory repository probe, and confirm `INVENTORY_INGESTION_POSTGRES_ENABLED`; apply only the specific confirmed correction and preserve production data.
+1. **Resolve the PostgreSQL readiness gate.** Do not recreate the database, change database URLs, or bypass the readiness guard based on this response: the API reached its cutover gate after the connection preflight. The public 503 does not reveal which sub-check failed. In the existing API service's Render Shell, run this once; it is read-only and does not print credentials:
+
+   ```sh
+   python - <<'PY'
+   import asyncio
+   import os
+   from services.async_database import create_engine_from_environment, preflight_database, check_migration_state, session_scope
+   from repositories.runtime import create_operational_repositories
+   from services.operations_store import operations_store
+
+   async def main():
+       engine = create_engine_from_environment()
+       try:
+           await preflight_database(engine)
+           print("postgres_preflight=OK")
+           print("migrations=", await check_migration_state(engine))
+           async with session_scope(engine) as session:
+               print("repository_checks=", await create_operational_repositories(session).check_readiness())
+           print("operational_schema=", operations_store.check_operational_schema())
+           print("inventory_mirroring_env=", os.getenv("INVENTORY_INGESTION_POSTGRES_ENABLED"))
+       finally:
+           await engine.dispose()
+
+   asyncio.run(main())
+   PY
+   ```
+
+   Apply only the specific confirmed missing migration/schema or setting; preserve production data. Do not rerun app-wide tests for this diagnosis.
 2. **Reconcile Render services without creating more aliases.** The Blueprint now names the existing API and internal frontend `winged-tycoons-api` and `winged-tycoons-frontend`. In the Render Dashboard, inspect `backend` and `frontend`; suspend an alias only after confirming it has no unique traffic, data, or configuration. Do not run Blueprint Sync until the live resources have been reconciled.
 3. **Deploy the customer portal.** Add/deploy `apps/web` as the customer-facing Next.js app with `API_BASE_URL` set to the HTTPS API origin and `CUSTOMER_PORTAL_ORIGIN` set to its HTTPS public origin. Do not replace the internal static frontend with the customer portal.
 4. **Verify one real customer journey.** Confirm a customer can sign in, submit an RFQ, view a sent quote, and submit PO documents; then onboard the intended end users. Do not claim internal PO review is complete: the current API/UI map has an approval endpoint but no pending-PO list endpoint for staff to discover submissions.
