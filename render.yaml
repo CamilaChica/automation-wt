@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: backend
+    name: winged-tycoons-api
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
@@ -17,6 +17,8 @@ services:
         value: "production"
       - key: WT_AUTH_STORAGE_BACKEND
         value: "postgres"
+      - key: ATTACHMENT_STORAGE_DIR
+        value: "/var/data/attachments"
       - key: WT_AUTH_SECRET
         sync: false
       - key: SALES_EMAIL_USERNAME
@@ -151,7 +153,7 @@ services:
         value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com,https://rfq.wingedtycoons.com"
 
   - type: web
-    name: frontend
+    name: winged-tycoons-frontend
     runtime: static
     buildCommand: npm --prefix frontend install && npm --prefix frontend run build
     staticPublishPath: frontend/dist

@@ -6,43 +6,19 @@
 ## Live status checked 2026-10-01
 
 - `https://winged-tycoons-api.onrender.com/healthz`: HTTP 200.
-- `https://winged-tycoons-api.onrender.com/ready`: HTTP 503 with the operational PostgreSQL cutover-gate message. In this code path, a missing `DATABASE_URL` or failed PostgreSQL connection returns a different error first. The latest response therefore indicates the database connection passed preflight; the failure is one or more readiness checks: Alembic at head, required operational schema, RFQ/supplier/quote/inventory repository probes, or `INVENTORY_INGESTION_POSTGRES_ENABLED`. The current 503 does not expose which check failed.
+- `https://winged-tycoons-api.onrender.com/ready`: HTTP 503; after the auth-schema issue is repaired, this endpoint still reports that the operational PostgreSQL cutover is not ready.
+- Render shows the latest API deploy failed because the PostgreSQL authentication schema was missing; the last successful API commit remains live.
+- Production DB was at `0009_prompt_rag_storage` before a migration. The old running image advanced it to `0010_reconciliation_quarantine`, which only adds inactive quarantine tables. No existing rows or tables were deleted. The current source needs a linear migration that adds shared auth state after this revision.
 - `https://winged-tycoons-frontend.onrender.com/internal`: the existing internal static app is served. The customer portal in `apps/web` is a separate Next.js app and is not declared as a Render service in this Blueprint.
-- Render Dashboard is currently at its sign-in page in the available browser session, so no service was suspended, deployed, or otherwise changed in Render.
+- Render shows the duplicate `backend` and `frontend` aliases are already suspended, as are the email and inventory workers. Keep them suspended unless explicitly needed.
 
 ## Required before customer launch
 
-1. **Resolve the PostgreSQL readiness gate.** Do not recreate the database, change database URLs, or bypass the readiness guard based on this response: the API reached its cutover gate after the connection preflight. The public 503 does not reveal which sub-check failed. In the existing API service's Render Shell, run this once; it is read-only and does not print credentials:
-
-   ```sh
-   python - <<'PY'
-   import asyncio
-   import os
-   from services.async_database import create_engine_from_environment, preflight_database, check_migration_state, session_scope
-   from repositories.runtime import create_operational_repositories
-   from services.operations_store import operations_store
-
-   async def main():
-       engine = create_engine_from_environment()
-       try:
-           await preflight_database(engine)
-           print("postgres_preflight=OK")
-           print("migrations=", await check_migration_state(engine))
-           async with session_scope(engine) as session:
-               print("repository_checks=", await create_operational_repositories(session).check_readiness())
-           print("operational_schema=", operations_store.check_operational_schema())
-           print("inventory_mirroring_env=", os.getenv("INVENTORY_INGESTION_POSTGRES_ENABLED"))
-       finally:
-           await engine.dispose()
-
-   asyncio.run(main())
-   PY
-   ```
-
-   Apply only the specific confirmed missing migration/schema or setting; preserve production data. Do not rerun app-wide tests for this diagnosis.
-2. **Reconcile Render services without creating more aliases.** The Blueprint now names the existing API and internal frontend `winged-tycoons-api` and `winged-tycoons-frontend`. In the Render Dashboard, inspect `backend` and `frontend`; suspend an alias only after confirming it has no unique traffic, data, or configuration. Do not run Blueprint Sync until the live resources have been reconciled.
-3. **Deploy the customer portal.** Add/deploy `apps/web` as the customer-facing Next.js app with `API_BASE_URL` set to the HTTPS API origin and `CUSTOMER_PORTAL_ORIGIN` set to its HTTPS public origin. Do not replace the internal static frontend with the customer portal.
-4. **Verify one real customer journey.** Confirm a customer can sign in, submit an RFQ, view a sent quote, and submit PO documents; then onboard the intended end users. Do not claim internal PO review is complete: the current API/UI map has an approval endpoint but no pending-PO list endpoint for staff to discover submissions.
+1. **Repair and apply the shared-auth migration.** The migration chain now needs to recognize production revision `0010_reconciliation_quarantine` and add auth tables as `0011_shared_auth_state`. Deploy that chain, apply the migration from the matching deployed image, then recover the API deploy. Do not roll back the additive quarantine tables.
+2. **Complete the PostgreSQL production cutover.** Resolve `/ready` only by confirming inventory mirroring and the RFQ, supplier, and quote repositories are PostgreSQL-backed. Do not bypass the readiness guard. Import customer auth users only after reviewing the dry-run target and count.
+3. **Reconcile Render services without creating aliases.** The Blueprint now names the existing API and internal frontend `winged-tycoons-api` and `winged-tycoons-frontend`; the `backend` and `frontend` aliases are already suspended. Do not run Blueprint Sync until live mappings are reconciled.
+4. **Deploy the customer portal.** Host `apps/web` separately from the internal static frontend, set `API_BASE_URL` to the HTTPS API origin, and set `CUSTOMER_PORTAL_ORIGIN` to its HTTPS public origin.
+5. **Verify one real customer journey.** Confirm sign-in, RFQ submission, sent-quote viewing, and PO document submission; then onboard the intended end users. Do not claim internal PO review is complete: the current API/UI map has an approval endpoint but no pending-PO list endpoint for staff to discover submissions.
 
 ## Explicitly deferred by the owner
 
