@@ -49,7 +49,7 @@ export type MailboxHealthResponse = Partial<Record<'sales' | 'purchasing', Mailb
 export interface OtpRequestBody { email: string; role: 'ROLE_CUSTOMER' | 'ROLE_INTERNAL'; full_name?: string }
 export interface OtpRequestResponse { challenge_id: string; development_otp?: string }
 export interface OtpVerifyBody { challenge_id: string; code: string }
-export interface LoginResponse { access_token: string; token_type: string; role: string; email: string }
+export interface LoginResponse { role: string; email: string }
 export interface EmployeeProfile {
   user_id: string;
   email: string;
@@ -103,17 +103,6 @@ export interface PurchaseOrderResponse {
   quote_id?: string;
   internal_notification?: unknown;
   supplier_confirmation_count?: number;
-}
-export interface PurchaseOrderReviewRecord {
-  id: string;
-  po_number: string;
-  customer_email: string | null;
-  total_amount: number | null;
-  status: string;
-  quote_id: string | null;
-  rfq_id: string | null;
-  attachment_metadata?: Array<{ attachment_id: string }> | null;
-  created_at?: IsoDateTime;
 }
 export interface ShipmentTraceResponse {
   shipment_id: string;
@@ -278,7 +267,6 @@ export interface ApiRouteContracts {
   'POST /api/quotes/{quote_id}/approve': { request: ApproveQuoteBody; response: { status: string; quote_id: string; message: string } };
   'POST /api/quotes/{quote_id}/reject': { request: RejectQuoteBody; response: { status: string; quote_id: string; message: string } };
   'POST /api/purchase-orders': { request: PurchaseOrderBody; response: PurchaseOrderResponse };
-  'GET /api/internal/purchase-orders': { response: PurchaseOrderReviewRecord[] };
   'POST /api/internal/rfqs/{rfq_id}/trace-decision': { request: TraceDecisionBody; response: { decision: string; automation_paused: boolean } };
   'POST /api/internal/rfqs/{rfq_id}/automation': { request: AutomationPauseBody; response: Record<string, unknown> };
   'POST /api/internal/commands': { request: InternalCommandBody; response: CommandResponse };

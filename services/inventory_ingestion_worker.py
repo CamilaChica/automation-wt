@@ -12,15 +12,20 @@ import json
 import logging
 import os
 import time
+from email.utils import parseaddr
 from typing import Any, Callable
 
 from services.async_database import create_engine_from_environment, preflight_database, session_scope, upsert_aviation_part, upsert_supplier_quote
 from services.document_parser import build_email_context
 from services.mailbox_service import fetch_inbox_messages
-from services.inbound_email_archive import archive_inbound_message
+from services.inbound_email_archive import archive_inbound_message, _received_at
 from services.supplier_database import supplier_db
 from services.supplier_email_loader import SupplierEmailLoader
-from services.supplier_inventory_importer import import_inventory_attachments
+from services.supplier_inventory_importer import (
+    has_inventory_table_attachments,
+    import_inventory_attachments,
+    import_inventory_attachments_async,
+)
 from services.negotiation_service import SupplierNegotiationService
 from services.communication_service import communication_service
 from services.operations_store import operations_store
@@ -96,18 +101,26 @@ class InventoryIngestionWorker:
 
     async def _enqueue_waiting_rfqs_postgres(self, part_number: str) -> None:
         from repositories.runtime import create_operational_repositories
-        from services.db_service import db_service
 
         engine = create_engine_from_environment()
         try:
             async with session_scope(engine) as session:
                 repositories = create_operational_repositories(session)
-                rfqs = await db_service.list_rfqs_async(repositories)
-                for rfq in rfqs:
-                    if rfq.status != "Supplier_Sourcing":
-                        continue
+                rfq_records = await repositories.records.list_by_payload_value(
+                    "rfqs", "status", "Supplier_Sourcing"
+                )
+                rfqs = [
+                    (str(payload.get("id") or record_id), str(payload.get("status") or ""))
+                    for record_id, payload in rfq_records.items()
+                ]
+                if not rfq_records and not await repositories.records.has_domain("rfqs"):
+                    rfqs = [
+                        (record.id, record.status)
+                        for record in await repositories.rfq.list_by_status("Supplier_Sourcing")
+                    ]
+                for rfq_id, _status in rfqs:
                     item_records = await repositories.records.list_by_payload_value(
-                        "rfq_items", "rfq_id", rfq.id
+                        "rfq_items", "rfq_id", rfq_id
                     )
                     if not any(
                         str(item.get("resolved_part_number") or item.get("requested_part_number") or "").upper()
@@ -115,9 +128,52 @@ class InventoryIngestionWorker:
                         for item in item_records.values()
                     ):
                         continue
-                    self._record_resume_event(rfq.id, part_number)
+                    await repositories.records.record_automation_event(
+                        event_type="resume_waiting_rfq",
+                        entity_type="rfq",
+                        entity_id=rfq_id,
+                        status="QUEUED",
+                        result=json.dumps({"part_number": part_number.upper()}),
+                        idempotency_key=f"rfq-resume:{rfq_id}:{part_number.upper()}",
+                        max_attempts=3,
+                    )
         finally:
             await engine.dispose()
+
+    async def _enqueue_waiting_rfqs_async(self, repositories, part_number: str) -> None:
+        if not part_number:
+            return
+        rfq_records = await repositories.records.list_by_payload_value(
+            "rfqs", "status", "Supplier_Sourcing"
+        )
+        rfqs = [
+            (str(payload.get("id") or record_id), str(payload.get("status") or ""))
+            for record_id, payload in rfq_records.items()
+        ]
+        if not rfq_records and not await repositories.records.has_domain("rfqs"):
+            rfqs = [
+                (record.id, record.status)
+                for record in await repositories.rfq.list_by_status("Supplier_Sourcing")
+            ]
+        for rfq_id, _status in rfqs:
+            item_records = await repositories.records.list_by_payload_value(
+                "rfq_items", "rfq_id", rfq_id
+            )
+            if not any(
+                str(item.get("resolved_part_number") or item.get("requested_part_number") or "").upper()
+                == part_number.upper()
+                for item in item_records.values()
+            ):
+                continue
+            await repositories.records.record_automation_event(
+                event_type="resume_waiting_rfq",
+                entity_type="rfq",
+                entity_id=rfq_id,
+                status="QUEUED",
+                result=json.dumps({"part_number": part_number.upper()}),
+                idempotency_key=f"rfq-resume:{rfq_id}:{part_number.upper()}",
+                max_attempts=3,
+            )
 
     def _enqueue_waiting_rfqs_local(self, part_number: str) -> None:
         from services.db_service import db_service
@@ -146,10 +202,176 @@ class InventoryIngestionWorker:
         logger.info("Queued RFQ resume event=%s rfq=%s part=%s", event_id, rfq_id, part_number)
 
     def process_message(self, message: dict[str, Any]) -> dict[str, Any]:
+        async_enabled = os.getenv("USE_ASYNC_REPOS", "false").strip().lower() in {"1", "true", "yes", "on"}
+        if (
+            self.postgres_enabled
+            and async_enabled
+            and has_inventory_table_attachments(message)
+        ):
+            return asyncio.run(self._process_inventory_table_message_async(message))
+        if (
+            self.postgres_enabled
+            and async_enabled
+            and not (message.get("attachments") or [])
+        ):
+            return asyncio.run(self._process_plain_supplier_message_async(message))
         if operations_store.storage_engine == "postgresql":
             with operations_store.transaction():
                 return self._process_message(message)
         return self._process_message(message)
+
+    async def _process_inventory_table_message_async(self, message: dict[str, Any], engine=None) -> dict[str, Any]:
+        from repositories.runtime import create_operational_repositories
+
+        owns_engine = engine is None
+        if engine is None:
+            engine = create_engine_from_environment()
+        message_id = str(message.get("message_id") or "").strip()
+        try:
+            async with session_scope(engine) as session:
+                repositories = create_operational_repositories(session)
+                if message_id and not await repositories.records.claim_inbound_message(message_id, self.mailbox):
+                    return {"success": True, "skipped": True, "message_id": message_id}
+                if message_id:
+                    attachments = [
+                        {
+                            "filename": str(item.get("filename") or "attachment"),
+                            "content_type": str(item.get("content_type") or "application/octet-stream"),
+                            "size": len(item.get("content") or b""),
+                        }
+                        for item in message.get("attachments") or []
+                    ]
+                    await repositories.records.archive_raw_email(
+                        mailbox=self.mailbox,
+                        provider_message_id=message_id,
+                        internet_message_id=message.get("internet_message_id"),
+                        conversation_id=message.get("conversation_id"),
+                        sender=str(message.get("from") or "") or None,
+                        subject=str(message.get("subject") or "") or None,
+                        received_at=_received_at(message.get("date")),
+                        body=str(message.get("body") or ""),
+                        raw_mime=message.get("raw_mime"),
+                        headers=message.get("headers") or [],
+                        attachments=attachments,
+                        processing_status="received",
+                    )
+                result = await import_inventory_attachments_async(message, self.mailbox, repositories)
+                if result is None:
+                    if message_id:
+                        await repositories.records.release_inbound_message(message_id)
+                    return {"success": False, "skipped": True, "message_id": message_id}
+                if result.get("success"):
+                    await self._record_supplier_negotiations_async(repositories, message, result)
+                for part_number in result.get("part_numbers") or []:
+                    await self._enqueue_waiting_rfqs_async(repositories, str(part_number))
+                if message_id:
+                    await repositories.records.mark_inbound_message_processed(message_id)
+                return {"message_id": message_id, "result": result, "success": bool(result.get("success"))}
+        finally:
+            if owns_engine:
+                await engine.dispose()
+
+    async def _process_plain_supplier_message_async(
+        self, message: dict[str, Any], engine=None
+    ) -> dict[str, Any]:
+        message_id = str(message.get("message_id") or "").strip()
+        owns_engine = engine is None
+        if engine is None:
+            engine = create_engine_from_environment()
+        try:
+            async with session_scope(engine) as session:
+                from repositories.runtime import create_operational_repositories
+
+                repositories = create_operational_repositories(session)
+                if message_id and not await repositories.records.claim_inbound_message(message_id, self.mailbox):
+                    return {"success": True, "skipped": True, "message_id": message_id}
+                if message_id:
+                    await repositories.records.archive_raw_email(
+                        mailbox=self.mailbox,
+                        provider_message_id=message_id,
+                        internet_message_id=message.get("internet_message_id"),
+                        conversation_id=message.get("conversation_id"),
+                        sender=str(message.get("from") or "") or None,
+                        subject=str(message.get("subject") or "") or None,
+                        received_at=_received_at(message.get("date")),
+                        body=str(message.get("body") or ""),
+                        raw_mime=message.get("raw_mime"),
+                        headers=message.get("headers") or [],
+                        attachments=[],
+                        processing_status="processing",
+                    )
+                result = await self.loader.ingestion_service.ingest_email_async(
+                    self._email_text(message),
+                    repositories,
+                    mailbox=self.mailbox,
+                    message_id=message_id or None,
+                )
+                if not result.get("success") and "no part number" in str(result.get("error", "")).lower():
+                    pdf_attachments = [
+                        attachment for attachment in message.get("attachments") or []
+                        if str(attachment.get("content_type", "")).lower() == "application/pdf"
+                        or str(attachment.get("filename", "")).lower().endswith(".pdf")
+                    ]
+                    sender = str(message.get("from") or "").strip()
+                    sender_email = parseaddr(sender)[1] or sender
+                    if pdf_attachments and "@" in sender_email:
+                        await communication_service.request_supplier_body_quote_async(
+                            repositories,
+                            recipient=sender_email,
+                            part_reference=str(message.get("subject") or "supplier quotation"),
+                            reply_to=message_id or message.get("internet_message_id"),
+                        )
+                        await repositories.records.save_inbound_email(
+                            mailbox=self.mailbox,
+                            message_id=message_id or str(message.get("internet_message_id") or ""),
+                            sender=sender_email,
+                            subject=str(message.get("subject") or ""),
+                            body=self._email_text(message),
+                            processing_status="clarification_sent",
+                        )
+                        result = {
+                            **result,
+                            "success": False,
+                            "status": "Unreadable_PDF_Clarification_Sent",
+                        }
+                if result.get("success"):
+                    await self._record_supplier_negotiations_async(repositories, message, result)
+                successful = bool(result.get("success"))
+                held_for_review = result.get("status") == "Pending_Human_Review"
+                if message_id:
+                    if successful or held_for_review or "no part number" in str(result.get("error", "")).lower():
+                        await repositories.records.mark_inbound_message_processed(message_id)
+                    else:
+                        await repositories.records.release_inbound_message(message_id)
+                if successful:
+                    for item in result.get("items") or [result]:
+                        await self._enqueue_waiting_rfqs_async(
+                            repositories, str(item.get("part_number") or result.get("part_number") or "")
+                        )
+                return {"message_id": message_id, "result": result, "success": successful}
+        finally:
+            if owns_engine:
+                await engine.dispose()
+
+    async def _record_supplier_negotiations_async(self, repositories, message, result) -> None:
+        from email.utils import parseaddr
+
+        sender = str(message.get("from") or "")
+        sender_name, sender_email = parseaddr(sender)
+        supplier_email = str(result.get("supplier_email") or sender_email or sender).strip()
+        supplier_name = str(result.get("supplier_name") or sender_name or "Supplier Team")
+        message_id = str(message.get("internet_message_id") or message.get("message_id") or "")
+        for item in result.get("items") or []:
+            await self.negotiation_service.record_supplier_quote_async(
+                repositories,
+                supplier_email=supplier_email,
+                supplier_name=supplier_name,
+                part_number=str(item.get("part_number") or result.get("part_number") or ""),
+                quantity=int(item.get("quantity_available") or item.get("quantity") or 1),
+                unit_cost=float(item.get("unit_cost") or item.get("unit_price") or 0),
+                source_email_id=str(item.get("source_email_id") or result.get("source_email_id") or message_id),
+                reply_to=message_id or None,
+            )
 
     def _process_message(self, message: dict[str, Any]) -> dict[str, Any]:
         message_id = str(message.get("message_id") or "").strip()

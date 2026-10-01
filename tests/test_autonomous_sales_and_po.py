@@ -73,6 +73,34 @@ class AutonomousSalesAndPoTests(unittest.TestCase):
         send_quote.assert_called_once()
         self.assertEqual(send_quote.call_args.kwargs["subject_override"], "Quotation QTE-1001")
 
+    def test_customer_quote_draft_only_returns_draft_without_storage_or_send(self):
+        provider = FakeCommunicationProvider()
+        agent = CustomerCommunicationAgent(LLMRouter({"openai": provider}))
+
+        with patch("agents.customer_communication_agent.operations_store.record_llm_telemetry", side_effect=AssertionError("sync telemetry used")), patch(
+            "agents.customer_communication_agent.operations_store.record_automation_event",
+            side_effect=AssertionError("sync automation event used"),
+        ), patch(
+            "agents.customer_communication_agent.communication_service.send_customer_quote",
+            side_effect=AssertionError("synchronous sender used"),
+        ):
+            result = asyncio.run(agent.execute({
+                "customer_email": "buyer@example.com",
+                "customer_name": "Buyer",
+                "quote_details": {
+                    "quote_id": "QTE-1001",
+                    "subtotal": 1000,
+                    "total_amount": 1100,
+                    "items": [{"part_number": "PN-1", "quantity": 2, "unit_price": 500}],
+                },
+            }, context={"draft_only": True}))
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.data["subject"], "Quotation QTE-1001")
+        self.assertIn("telemetry", result.data)
+        self.assertIn("automation_event", result.data)
+        self.assertFalse(result.data["llm_fallback_used"])
+
     def test_po_notification_is_actionable_and_human_gated(self):
         service = CommunicationService()
         with patch.object(service, "_send", return_value={"transmission_status": "DRY_RUN"}) as send:

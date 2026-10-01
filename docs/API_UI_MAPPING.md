@@ -22,12 +22,11 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 | `GET /api/rfqs` | Customer sees own records; internal roles see queue | None | `RFQ[]`. Customer dashboard, Sales, Procurement, Sourcing, Trace. `useRFQs`. |
 | `GET /api/rfqs/{rfq_id}` | Authenticated; customer ownership checked | Path `rfq_id` | RFQ, items and optional quote detail; internal response also includes audit logs. `useRFQDetail` / `useQuotes(rfqId)`. There is no quote collection endpoint. |
 | `POST /api/rfqs/{rfq_id}/process` | Admin/manager/sales/purchasing | Path `rfq_id` | Procurement explicitly starts pipeline processing for an RFQ in `Intake`; this endpoint does not itself reset failed intake. |
-| `POST /api/internal/rfqs/{rfq_id}/reset-intake` | Admin/manager | `reason` (required) | Procurement resets only `Intake_Failed` to `Intake`, records the operator/reason in the audit log, and requires a separate explicit process action. `NEEDS_HUMAN_REVIEW` is rejected. |
-| `POST /api/quotes/{quote_id}/approve` | Admin/manager/sales | `ApproveRequest` | Approval/dispatch result. Customer Dashboard uses `useDispatchQuote`; Sales issues a quote. |
+| `POST /api/internal/rfqs/{rfq_id}/reset-intake` | Admin/manager | `reason` (required, 1-1000 characters) | Procurement resets only `Intake_Failed` to `Intake`, records the operator/reason in the audit log, and requires a separate explicit process action. `NEEDS_HUMAN_REVIEW` is rejected. |
+| `POST /api/quotes/{quote_id}/approve` | Admin/manager/sales | `ApproveRequest` | Approval/dispatch result. A queued PostgreSQL outbox message returns `Quote_Dispatch_Pending`/`PENDING` without advancing persisted RFQ or quote status; statuses advance to `Quote_Sent`/`Sent` only after delivery is confirmed `SENT`. Ambiguous delivery moves the records to operator review. Customer Dashboard uses `useDispatchQuote`; Sales issues a quote. |
 | `POST /api/quotes/{quote_id}/reject` | Admin/manager/sales | `RejectRequest` | Rejection result. Sales Command rejects the selected quote with an audited reason. There is no quote-collection view. |
 | `POST /api/purchase-orders` | Authenticated; customer quote ownership checked | `PurchaseOrderRequest` with exactly three attachment IDs | `Pending_PO_Review`, PO and quote IDs. Customer Portal uses `useCreatePurchaseOrder`; this is not quote approval. |
-| `GET /api/internal/purchase-orders?status=Pending_PO_Review` | Admin/manager/purchasing | Optional status filter | Pending PO queue in Aero Procurement with customer, quote/RFQ IDs, total, and attachment IDs. |
-| `POST /api/purchase-orders/{quote_id}/approve` | Admin/manager/purchasing | `PurchaseOrderApprovalRequest` | Aero Procurement approves a pending PO with operator/comments; the RFQ and persisted PO status are updated and the item leaves the queue. |
+| `POST /api/purchase-orders/{quote_id}/approve` | Admin/manager/purchasing | `PurchaseOrderApprovalRequest` | Backend approval mutation updates the RFQ. There is no registered pending-PO list endpoint, so the internal UI cannot discover and review queued POs end to end. |
 | `GET /api/attachments/{attachment_id}` | Authenticated and authorized | Path `attachment_id` | Binary attachment download. Sales/document preview. |
 | `POST /api/attachments` | Authenticated and authorized | Multipart `file` | Accepted attachment ID/name/status. Customer RFQ and PO uploads. |
 
@@ -36,10 +35,10 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 | Method and path | Access | Request | Response / UI mapping |
 | --- | --- | --- | --- |
 | `GET /api/catalog/search` | Customer/admin/manager/sales/purchasing | `query`, optional `condition` | Customer-safe catalog rows only. Portal search; fallback rows are tagged as sample. |
-| `GET /api/inventory` | Admin/manager/purchasing | None | Role-gated Procurement inventory tab; internal cost/location fields are never shown to sales/customer roles, and fallback rows are marked sample. |
-| `GET /api/suppliers` | Admin/manager/purchasing | None | Role-gated Procurement supplier directory; fallback rows are marked sample. |
-| `GET /api/suppliers/{supplier_id}` | Admin/manager/purchasing | Path `supplier_id` | Selected supplier profile in the Procurement directory. |
-| `GET /api/supplier-offers?part_number=...` | Admin/manager/purchasing/sales | Part number query | Supplier offers. Procurement and Sourcing views use `useSupplierOffers`. |
+| `GET /api/inventory` | Admin/manager/purchasing | None | Role-gated Procurement inventory tab; uses the request-scoped async operational repository when enabled, with internal cost/location fields never shown to sales/customer roles and fallback rows marked sample. |
+| `GET /api/suppliers` | Admin/manager/purchasing | None | Role-gated Procurement supplier directory; uses the request-scoped async supplier repository when enabled, with fallback rows marked sample. |
+| `GET /api/suppliers/{supplier_id}` | Admin/manager/purchasing | Path `supplier_id` | Selected Procurement supplier profile; uses the request-scoped async supplier repository when enabled. |
+| `GET /api/supplier-offers?part_number=...` | Admin/manager/purchasing/sales | Part number query | Supplier offers. Procurement and Sourcing use `useSupplierOffers`; the request-scoped async supplier repository is used when enabled. |
 | `POST /api/internal/freight/quote` | Admin/manager/purchasing/sales | `FreightRequest` | Procurement collects route/weight/package/service inputs and shows provider rates or `DRY_RUN`; dry-run charges are not applied to quotes and no shipment is booked. |
 
 ## Internal operations and compliance
@@ -64,12 +63,12 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 | Method and path | Access | Request | Response / UI mapping |
 | --- | --- | --- | --- |
 | `POST /api/internal/shipments` | Admin/manager/purchasing | `ShipmentCreateRequest` | Fulfillment Hub creates a shipment from an eligible RFQ after confirmation and shows the tracking-link notification result. |
-| `GET /api/internal/shipments` | Admin/manager/purchasing | None | Persisted shipment records. Fulfillment Hub `useShipments` / `useFulfillmentStages`. |
-| `POST /api/internal/shipments/{shipment_id}/events` | Admin/manager/purchasing | `ShipmentEventRequest` | Fulfillment Hub records a confirmed operational event and refreshes shipment state. |
-| `POST /api/internal/shipments/{shipment_id}/tracking` | Admin/manager/purchasing | `CarrierTrackingRequest` | Fulfillment Hub registers carrier tracking after confirmation and displays provider result. |
-| `POST /api/internal/shipments/{shipment_id}/tracking/refresh` | Admin/manager/purchasing | Path `shipment_id` | Fulfillment Hub refreshes registered tracking after confirmation and displays the returned event. |
-| `POST /api/internal/shipments/{shipment_id}/sms` | Admin/manager/purchasing/sales | `ShipmentSmsRequest` | Fulfillment Hub sends an E.164 customer update after explicit confirmation; current shipment selection is restricted to admin/manager/purchasing roles. |
-| `GET /api/shipments/track/{public_token}` | Public opaque token | Path `public_token` | Customer-safe trace: status, parts, quantity, carrier/tracking, ETA, events. Portal `useShipmentTrace`. There is no `GET /api/shipments/{id}`. |
+| `GET /api/internal/shipments` | Admin/manager/purchasing | None | Persisted shipment records. Uses the request-scoped async repository when async persistence is enabled, with the local fallback preserved. Fulfillment Hub `useShipments` / `useFulfillmentStages`. |
+| `POST /api/internal/shipments/{shipment_id}/events` | Admin/manager/purchasing | `ShipmentEventRequest` | Fulfillment Hub records a confirmed operational event and refreshes shipment state; uses an async repository transaction when enabled. |
+| `POST /api/internal/shipments/{shipment_id}/tracking` | Admin/manager/purchasing | `CarrierTrackingRequest` | Fulfillment Hub registers carrier tracking after confirmation and displays provider result; shipment persistence uses the async repository when enabled. |
+| `POST /api/internal/shipments/{shipment_id}/tracking/refresh` | Admin/manager/purchasing | Path `shipment_id` | Fulfillment Hub refreshes registered tracking after confirmation and displays the returned event; shipment lookup/event persistence use async repositories when enabled. |
+| `POST /api/internal/shipments/{shipment_id}/sms` | Admin/manager/purchasing/sales | `ShipmentSmsRequest` | Fulfillment Hub sends an E.164 customer update after explicit confirmation; shipment lookup uses the async repository when enabled. Current shipment selection is restricted to admin/manager/purchasing roles. |
+| `GET /api/shipments/track/{public_token}` | Public opaque token | Path `public_token` | Customer-safe trace: status, parts, quantity, carrier/tracking, ETA, events. Uses the request-scoped async repository when async persistence is enabled, with the local fallback preserved. Portal `useShipmentTrace`. There is no `GET /api/shipments/{id}`. |
 | `POST /api/webhooks/carriers/aftership` | Signed provider request | Carrier webhook body/signature | Applies normalized carrier event. Backend-only. |
 
 ## Voice
@@ -104,6 +103,7 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 ## Contract gaps
 
 - The backend does not expose `GET /api/v1/quotes`, `POST /api/v1/quotes/{id}/dispatch`, `GET /api/v1/fulfillment/stages`, or `GET /api/shipments/{id}`. Existing quote data comes from `GET /api/rfqs/{rfq_id}` and quote dispatch from `POST /api/quotes/{quote_id}/approve`.
+- The pending-PO list route is not registered. The backend has a PO-approval mutation, but without a list endpoint the internal UI cannot discover and review queued POs end to end.
 - `useFulfillmentStages` derives a single human-readable stage from each persisted shipment status. It does not claim that the backend returned a multi-stage milestone history or inventory reservation.
 - Compliance evidence and historical KPI endpoints do not exist. Those panels remain visibly sample until backend read contracts and persisted data are added.
 

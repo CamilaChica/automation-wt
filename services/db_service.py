@@ -49,21 +49,109 @@ class _PostgresRecordMap(MutableMapping):
             return default
 
 class MockDatabaseService:
+    async def get_rfq_async(self, repositories, rfq_id: str) -> Optional[RFQ]:
+        payload = await repositories.rfq.get_operational_record("rfqs", rfq_id)
+        if payload:
+            return RFQ.model_validate(payload)
+        record = await repositories.rfq.get(rfq_id)
+        if record is None:
+            return None
+        return RFQ(
+            id=record.id,
+            customer_name=record.customer_name,
+            customer_email=record.customer_email,
+            status=record.status,
+            raw_text=record.raw_text,
+            thread_id=record.thread_id,
+            created_at=record.created_at,
+        )
+
     async def get_shipment_async(self, repositories, shipment_id: str) -> Optional[Shipment]:
         payload = await repositories.records.get("shipments", shipment_id)
         return Shipment.model_validate(payload) if payload else None
 
+    async def create_shipment_async(
+        self, repositories, rfq_id: str, quote_id: Optional[str], customer_email: str,
+        part_numbers: List[str], quantity: int, public_token: str,
+    ) -> Shipment:
+        shipment_id = f"SHP-{uuid.uuid4().hex[:8].upper()}"
+        shipment = Shipment(
+            id=shipment_id,
+            rfq_id=rfq_id,
+            quote_id=quote_id,
+            customer_email=customer_email,
+            part_numbers=part_numbers,
+            quantity=quantity,
+            public_token=public_token,
+        )
+        event = ShipmentEvent(
+            id=f"SHE-{uuid.uuid4().hex[:8].upper()}",
+            shipment_id=shipment_id,
+            status="Preparing Shipment",
+            location=None,
+            description="Order received and awaiting fulfillment processing.",
+        )
+        shipment.updated_at = event.occurred_at
+        await repositories.records.upsert(
+            "shipments", shipment_id, shipment.model_dump(mode="json")
+        )
+        await repositories.records.upsert(
+            "shipment_events", event.id, event.model_dump(mode="json")
+        )
+        return shipment
+
+    async def add_shipment_event_async(
+        self, repositories, shipment_id: str, status: str,
+        location: Optional[str], description: str,
+    ) -> Optional[ShipmentEvent]:
+        shipment = await self.get_shipment_async(repositories, shipment_id)
+        if shipment is None:
+            return None
+        event = ShipmentEvent(
+            id=f"SHE-{uuid.uuid4().hex[:8].upper()}",
+            shipment_id=shipment_id,
+            status=status,
+            location=location,
+            description=description,
+        )
+        shipment.status = status
+        shipment.updated_at = datetime.now(timezone.utc)
+        await repositories.records.upsert(
+            "shipments", shipment_id, shipment.model_dump(mode="json")
+        )
+        await repositories.records.upsert(
+            "shipment_events", event.id, event.model_dump(mode="json")
+        )
+        return event
+
+    async def update_shipment_tracking_async(
+        self, repositories, shipment_id: str, carrier: str, tracking_number: str
+    ) -> Optional[Shipment]:
+        shipment = await self.get_shipment_async(repositories, shipment_id)
+        if shipment is None:
+            return None
+        shipment.carrier = carrier
+        shipment.tracking_number = tracking_number
+        shipment.updated_at = datetime.now(timezone.utc)
+        await repositories.records.upsert(
+            "shipments", shipment_id, shipment.model_dump(mode="json")
+        )
+        return shipment
+
     async def get_shipment_by_token_async(self, repositories, public_token: str) -> Optional[Shipment]:
-        records = await repositories.records.list("shipments")
-        payload = next((value for value in records.values() if value.get("public_token") == public_token), None)
+        records = await repositories.records.list_by_payload_value(
+            "shipments", "public_token", public_token
+        )
+        payload = next(iter(records.values()), None)
         return Shipment.model_validate(payload) if payload else None
 
     async def get_shipment_events_async(self, repositories, shipment_id: str) -> List[ShipmentEvent]:
-        records = await repositories.records.list("shipment_events")
+        records = await repositories.records.list_by_payload_value(
+            "shipment_events", "shipment_id", shipment_id
+        )
         events = [
             ShipmentEvent.model_validate(value)
             for value in records.values()
-            if value.get("shipment_id") == shipment_id
         ]
         return sorted(events, key=lambda event: event.occurred_at)
 
@@ -88,6 +176,22 @@ class MockDatabaseService:
             )
             for record in await repositories.rfq.list()
         ]
+
+    async def create_rfq_async(
+        self, repositories, customer_name: str, customer_email: str,
+        raw_text: str, thread_id: Optional[str] = None,
+    ) -> RFQ:
+        rfq = RFQ(
+            id=f"RFQ-{uuid.uuid4().hex[:6].upper()}",
+            customer_name=customer_name,
+            customer_email=customer_email,
+            status="Intake",
+            raw_text=raw_text,
+            thread_id=thread_id,
+            created_at=datetime.now(timezone.utc),
+        )
+        await repositories.rfq.create_from_payload(rfq.model_dump(mode="json"))
+        return rfq
 
     async def get_audit_logs_async(self, repositories, rfq_id: str) -> List[AgentAuditLog]:
         return [

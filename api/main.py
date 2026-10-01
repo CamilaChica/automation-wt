@@ -30,7 +30,8 @@ from config.env_check import validate_production_environment
 validate_production_environment()
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from models.db_models import InventoryItem, RFQ, RFQItem, Quote, QuoteItem, AgentAuditLog, Supplier
+from models.db_models import RFQ, RFQItem, Quote, QuoteItem, AgentAuditLog, InventoryItem, Supplier
+from models.operational_models import AuditLogRecord
 from services.db_service import db_service
 from services.orchestration_service import (
     ReviewDecisionConflict,
@@ -59,7 +60,18 @@ from services.voice_service import (
     log_customer_concern,
 )
 from services.voice_media import initialize_voice_media
-from api.auth import current_user, init_auth_db, request_otp, require_roles, verify_otp, ROLE_CUSTOMER
+from api.auth import (
+    AUTH_STORAGE_BACKEND,
+    MAX_OTP_REQUESTS_PER_HOUR,
+    current_user,
+    init_auth_db,
+    request_otp,
+    require_roles,
+    revoke_session,
+    verify_otp,
+    ROLE_CUSTOMER,
+)
+from services.shared_rate_limit import SharedRateLimitUnavailable, check_shared_rate_limit
 from services.employee_profile_service import (
     employee_session,
     get_profile,
@@ -111,12 +123,16 @@ _rate_limit_events: dict[tuple[str, str], deque[float]] = defaultdict(deque)
 
 
 def _client_key(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-    return forwarded or (request.client.host if request.client else "unknown")
+    return request.client.host if request.client else "unknown"
 
 
 def _rate_limit(request: Request) -> tuple[bool, int]:
     rule = _RATE_LIMIT_RULES.get(request.url.path)
+    otp_route = request.url.path in {"/api/auth/otp/request", "/api/auth/otp/verify"}
+    production_auth = os.getenv("WT_AUTH_ENV", "development").strip().lower() == "production"
+    if rule and otp_route and production_auth:
+        limit, window = rule
+        return check_shared_rate_limit(request.url.path, _client_key(request), limit, window)
     if not rule or os.getenv("RATE_LIMIT_ENABLED", "true").strip().lower() in {"0", "false", "no", "off"}:
         return True, 0
     limit, window = rule
@@ -136,7 +152,15 @@ def _rate_limit(request: Request) -> tuple[bool, int]:
 async def security_headers(request: Request, call_next):
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
     started = time.perf_counter()
-    allowed, retry_after = _rate_limit(request)
+    try:
+        allowed, retry_after = _rate_limit(request)
+    except SharedRateLimitUnavailable as exc:
+        logger.error("otp_rate_limit_unavailable error=%s", type(exc).__name__)
+        return Response(
+            "Authentication rate limiting is unavailable.",
+            status_code=503,
+            headers={"X-Request-ID": request_id},
+        )
     if not allowed:
         response = Response("Rate limit exceeded.", status_code=429)
         response.headers["Retry-After"] = str(retry_after)
@@ -149,7 +173,6 @@ async def security_headers(request: Request, call_next):
         request.method not in _CSRF_SAFE_METHODS
         and request.url.path not in _CSRF_EXEMPT_PATHS
         and session_cookie
-        and not request.headers.get("authorization")
         and (not csrf_cookie or not csrf_header or not secrets.compare_digest(csrf_cookie, csrf_header))
     ):
         return Response("CSRF validation failed.", status_code=403, headers={"X-Request-ID": request_id})
@@ -167,9 +190,10 @@ async def security_headers(request: Request, call_next):
         csrf_token,
         httponly=False,
         secure=os.getenv("WT_AUTH_ENV", "development").strip().lower() == "production",
-        samesite="Strict",
+        samesite="None" if os.getenv("WT_AUTH_ENV", "development").strip().lower() == "production" else "Lax",
         max_age=8 * 60 * 60,
     )
+    response.headers["X-CSRF-Token"] = csrf_token
     if os.getenv("WT_AUTH_ENV", "development").strip().lower() == "production":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     logger.info(
@@ -206,7 +230,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
+    expose_headers=["*", "X-CSRF-Token"],
 )
 
 # API Schemas
@@ -241,8 +265,6 @@ class EmployeeClockAction(BaseModel):
     action: Literal["clock_in", "clock_out"]
 
 class LoginResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
     role: str
     email: str
 
@@ -271,6 +293,7 @@ class CustomerQuote(BaseModel):
 class CustomerQuoteDetails(BaseModel):
     quote: CustomerQuote
     items: List[CustomerQuoteItem]
+    rfq_status: Optional[str] = None
 
 class CustomerRFQDetail(BaseModel):
     rfq: RFQ
@@ -337,7 +360,7 @@ class AutomationPauseRequest(BaseModel):
     reason: Optional[str] = None
 
 class FailedIntakeResetRequest(BaseModel):
-    reason: str = Field(..., min_length=1, max_length=500)
+    reason: str = Field(..., min_length=1, max_length=1000)
 
 class TraceDecisionRequest(BaseModel):
     decision: str = Field(..., pattern="^(certify|reject|rescan|freeze)$")
@@ -407,8 +430,11 @@ VOICE_TOOL_DEFINITIONS = [
 
 @app.on_event("startup")
 async def initialize_local_voice_recordings():
+    if AUTH_STORAGE_BACKEND == "postgres":
+        await asyncio.to_thread(init_auth_db)
     production = os.getenv("WT_ENV", os.getenv("WT_AUTH_ENV", "development")).strip().lower() == "production"
-    if production:
+    runtime_enabled = os.getenv("OPERATIONAL_POSTGRES_RUNTIME_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    if production and runtime_enabled:
         await preflight_database()
     try:
         await asyncio.to_thread(initialize_voice_media)
@@ -424,6 +450,23 @@ async def otp_request(request: OtpRequest):
             status_code=503,
             detail="Internal email sign-in is unavailable until WT_AUTH_ENV=production is configured.",
         )
+    if os.getenv("WT_AUTH_ENV", "development").strip().lower() == "production":
+        try:
+            allowed, retry_after = check_shared_rate_limit(
+                "otp-request-email",
+                request.email.strip().lower(),
+                MAX_OTP_REQUESTS_PER_HOUR,
+                3600,
+            )
+        except SharedRateLimitUnavailable as exc:
+            logger.error("otp_email_rate_limit_unavailable error=%s", type(exc).__name__)
+            raise HTTPException(503, "Authentication rate limiting is unavailable.") from exc
+        if not allowed:
+            raise HTTPException(
+                429,
+                "Too many OTP requests. Try again later.",
+                headers={"Retry-After": str(retry_after)},
+            )
     challenge_id, code = request_otp(request.email, request.role, request.full_name)
     response = {"challenge_id": challenge_id, "message": "If eligible, an OTP has been sent."}
     auth_env = os.getenv("WT_AUTH_ENV", "development").strip().lower()
@@ -445,24 +488,41 @@ async def otp_request(request: OtpRequest):
 @app.post("/api/auth/otp/verify", response_model=LoginResponse)
 async def otp_verify(request: OtpVerifyRequest, response: Response):
     result = verify_otp(request.challenge_id, request.code)
+    response.status_code = 200
+    response.headers["Cache-Control"] = "no-store"
     auth_env = os.getenv("WT_AUTH_ENV", "development").strip().lower()
     response.set_cookie(
         key="wt_session",
         value=result["access_token"],
         httponly=True,
         secure=auth_env == "production",
-        samesite="Strict",
+        samesite="None" if auth_env == "production" else "Lax",
         max_age=8 * 60 * 60,
     )
     return LoginResponse(
-        access_token=result["access_token"],
         role=result["role"],
         email=result["email"],
     )
 
+@app.get("/api/auth/session")
+async def auth_session(user: dict = Depends(current_user)):
+    return {"email": user["email"], "role": user["role"]}
+
 @app.post("/api/auth/logout", status_code=204)
-async def logout(response: Response):
-    response.delete_cookie("wt_session", secure=os.getenv("WT_AUTH_ENV", "development").strip().lower() == "production", samesite="Strict")
+async def logout(request: Request, response: Response):
+    revoke_session(request.cookies.get("wt_session"))
+    production = os.getenv("WT_AUTH_ENV", "development").strip().lower() == "production"
+    response.delete_cookie(
+        "wt_session",
+        secure=production,
+        httponly=True,
+        samesite="None" if production else "Lax",
+    )
+
+
+@app.get("/api/auth/csrf")
+async def auth_csrf():
+    return {"status": "ok"}
 
 
 @app.get("/api/internal/profile")
@@ -589,8 +649,10 @@ async def ready():
         migration_status=migration_status,
     )
     postgresql_mirroring = bool(persistence["inventory_postgres_mirror_enabled"])
-    full_operational_postgresql = bool(persistence.get("full_operational_persistence_ready"))
-    if production and not (postgresql_mirroring and full_operational_postgresql):
+    operational_postgres_cutover_ready = bool(
+        persistence.get("operational_postgres_cutover_ready")
+    )
+    if production and not (postgresql_mirroring and operational_postgres_cutover_ready):
         raise HTTPException(
             status_code=503,
             detail=(
@@ -700,8 +762,16 @@ async def create_realtime_session(
 
 
 @app.get("/api/voice/dashboard")
-async def voice_dashboard(_user: dict = Depends(require_roles("ROLE_INTERNAL", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"))):
-    return get_voice_dashboard(db_service.list_rfqs())
+async def voice_dashboard(
+    _user: dict = Depends(require_roles("ROLE_INTERNAL", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
+    session=Depends(get_async_db),
+):
+    rfqs = (
+        db_service.list_rfqs()
+        if session is None
+        else await db_service.list_rfqs_async(create_operational_repositories(session))
+    )
+    return get_voice_dashboard(rfqs)
 
 
 @app.post("/api/voice/tools/{tool_name}")
@@ -709,17 +779,23 @@ async def execute_voice_tool(
     tool_name: str,
     request: VoiceToolRequest,
     user: dict = Depends(require_roles("ROLE_CUSTOMER", "ROLE_INTERNAL", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
+    session=Depends(get_async_db),
 ):
     if tool_name == "check_inventory_availability":
         return check_inventory_availability(request.part_number or "")
     if tool_name == "get_order_status":
+        rfqs = (
+            db_service.list_rfqs()
+            if session is None
+            else await db_service.list_rfqs_async(create_operational_repositories(session))
+        )
         if user.get("role") == "ROLE_CUSTOMER":
             return get_customer_order_status(
                 request.rfq_or_order_id or "",
                 user.get("email", ""),
-                db_service.list_rfqs(),
+                rfqs,
             )
-        return get_order_status(request.rfq_or_order_id or "", db_service.list_rfqs())
+        return get_order_status(request.rfq_or_order_id or "", rfqs)
     if tool_name == "log_customer_concern":
         return log_customer_concern(
             request.issue_type or "unspecified",
@@ -808,21 +884,38 @@ async def submit_rfq(
             thread_id=request.reply_to,
         )
         await RFQRepository(session).create_from_payload(rfq.model_dump(mode="json"))
+        session.add(AuditLogRecord(
+            rfq_id=rfq.id,
+            agent_name="GatewayAPI",
+            action_type="intake_submission",
+            message=f"RFQ submitted successfully for customer '{customer_name}'.",
+            status="SUCCESS",
+        ))
+        if request.attachment_ids:
+            session.add(AuditLogRecord(
+                rfq_id=rfq.id,
+                agent_name="AttachmentService",
+                action_type="attachments_linked",
+                message=f"Linked {len(request.attachment_ids)} customer attachment(s) to the RFQ.",
+                status="SUCCESS",
+                payload_json=json.dumps({"attachment_ids": request.attachment_ids}),
+            ))
         await session.commit()
-    
-    db_service.add_audit_log(
-        rfq.id, "GatewayAPI", "intake_submission",
-        f"RFQ submitted successfully for customer '{customer_name}'."
-    )
-    if request.attachment_ids:
+
+    if session is None:
         db_service.add_audit_log(
-            rfq.id,
-            "AttachmentService",
-            "attachments_linked",
-            f"Linked {len(request.attachment_ids)} customer attachment(s) to the RFQ.",
-            "SUCCESS",
-            json.dumps({"attachment_ids": request.attachment_ids}),
+            rfq.id, "GatewayAPI", "intake_submission",
+            f"RFQ submitted successfully for customer '{customer_name}'."
         )
+        if request.attachment_ids:
+            db_service.add_audit_log(
+                rfq.id,
+                "AttachmentService",
+                "attachments_linked",
+                f"Linked {len(request.attachment_ids)} customer attachment(s) to the RFQ.",
+                "SUCCESS",
+                json.dumps({"attachment_ids": request.attachment_ids}),
+            )
 
     if os.getenv("SWARM_SHADOW_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}:
         try:
@@ -903,27 +996,52 @@ async def reset_failed_intake(
     rfq_id: str,
     request: FailedIntakeResetRequest,
     user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER")),
+    session=Depends(get_async_db),
 ):
-    rfq = db_service.get_rfq(rfq_id)
-    if not rfq:
-        raise HTTPException(status_code=404, detail="RFQ not found.")
-    if rfq.status != "Intake_Failed":
-        raise HTTPException(status_code=409, detail="Only Intake_Failed RFQs can be reset. Human-review RFQs must be resolved through their review queue.")
     reason = request.reason.strip()
     if not reason:
         raise HTTPException(status_code=422, detail="A reset reason is required.")
-    transaction = operations_store.transaction() if operations_store.storage_engine == "postgresql" else nullcontext()
-    with transaction:
-        updated = db_service.update_rfq_status(rfq_id, "Intake")
+
+    audit_message = f"Failed intake reset to Intake by {user['email']}. Reason: {reason}"
+    if session is not None:
+        repositories = create_operational_repositories(session)
+        payload = await repositories.rfq.get_operational_record("rfqs", rfq_id)
+        record = await repositories.rfq.get(rfq_id) if payload is None else None
+        if payload is None and record is None:
+            raise HTTPException(status_code=404, detail="RFQ not found.")
+        status = payload.get("status") if payload is not None else record.status
+        if status != "Intake_Failed":
+            raise HTTPException(
+                status_code=409,
+                detail="Only Intake_Failed RFQs can be reset. Human-review RFQs must be resolved through their review queue.",
+            )
+        try:
+            updated = await repositories.rfq.reset_failed_intake(rfq_id, audit_message)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if not updated:
             raise HTTPException(status_code=404, detail="RFQ not found.")
-        db_service.add_audit_log(
-            rfq_id,
-            "AutomationControl",
-            "intake_reset",
-            f"Failed intake reset to Intake by {user['email']}. Reason: {reason}",
-            "WARNING",
-        )
+    else:
+        rfq = db_service.get_rfq(rfq_id)
+        if rfq is None:
+            raise HTTPException(status_code=404, detail="RFQ not found.")
+        if rfq.status != "Intake_Failed":
+            raise HTTPException(
+                status_code=409,
+                detail="Only Intake_Failed RFQs can be reset. Human-review RFQs must be resolved through their review queue.",
+            )
+        transaction = operations_store.transaction() if operations_store.storage_engine == "postgresql" else nullcontext()
+        with transaction:
+            updated = db_service.update_rfq_status(rfq_id, "Intake")
+            if updated is None:
+                raise HTTPException(status_code=404, detail="RFQ not found.")
+            db_service.add_audit_log(
+                rfq_id,
+                "AutomationControl",
+                "intake_reset",
+                audit_message,
+                "WARNING",
+            )
     return {"rfq_id": rfq_id, "status": "Intake", "reset_by": user["email"], "reason": reason}
 
 @app.post("/api/internal/rfqs/{rfq_id}/automation")
@@ -931,7 +1049,15 @@ async def set_automation_pause(
     rfq_id: str,
     request: AutomationPauseRequest,
     user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER")),
+    session=Depends(get_async_db),
 ):
+    if session is not None:
+        result = await create_operational_repositories(session).rfq.set_automation_paused(
+            rfq_id, request.paused, request.reason, user["email"]
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"RFQ {rfq_id} not found.")
+        return result
     try:
         return orchestration_service.set_automation_pause(
             rfq_id, request.paused, request.reason, user["email"]
@@ -944,8 +1070,16 @@ async def record_trace_decision(
     rfq_id: str,
     request: TraceDecisionRequest,
     user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+    session=Depends(get_async_db),
 ):
     reason = request.reason or f"Trace decision '{request.decision}' recorded by {user['email']}."
+    if session is not None:
+        result = await create_operational_repositories(session).rfq.record_trace_decision(
+            rfq_id, request.decision, reason
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"RFQ {rfq_id} not found.")
+        return result
     try:
         return orchestration_service.record_trace_decision(
             rfq_id, request.decision, reason, user["email"]
@@ -1140,6 +1274,7 @@ async def get_rfq_detail(
                     total_amount=quote.total_amount,
                     status=quote.status,
                 ),
+                rfq_status=rfq.status,
                 items=[
                     CustomerQuoteItem(
                         part_number=item.part_number,
@@ -1176,12 +1311,92 @@ async def get_rfq_detail(
         "quote_details": quote_details
     }
 
+@app.get("/api/quotes/{quote_id}", response_model=CustomerQuoteDetails)
+async def get_customer_quote(
+    quote_id: str,
+    user: dict = Depends(current_user),
+    session=Depends(get_async_db),
+):
+    if user["role"] != ROLE_CUSTOMER:
+        raise HTTPException(status_code=403, detail="Customer access is required.")
+
+    repositories = create_operational_repositories(session) if session is not None else None
+    if repositories is None:
+        quote = db_service.get_quote(quote_id)
+        rfq = db_service.get_rfq(quote.rfq_id) if quote else None
+        quote_items = db_service.get_quote_items(quote_id) if quote else []
+    else:
+        quote_payload = await repositories.quote.get_operational_record("quotes", quote_id)
+        if quote_payload is None:
+            raise HTTPException(status_code=404, detail="Quote not found.")
+        quote = Quote.model_validate(quote_payload)
+        rfq = await db_service.get_rfq_async(repositories, quote.rfq_id)
+        item_records = await repositories.records.list_by_payload_value(
+            "quote_items", "quote_id", quote_id
+        )
+        quote_items = [QuoteItem.model_validate(value) for value in item_records.values()]
+
+    if quote is None or rfq is None:
+        raise HTTPException(status_code=404, detail="Quote not found.")
+    if rfq.customer_email.lower() != user["email"].lower():
+        raise HTTPException(status_code=403, detail="You can only access your own quotes.")
+
+    return CustomerQuoteDetails(
+        quote=CustomerQuote(
+            id=quote.id,
+            rfq_id=quote.rfq_id,
+            subtotal=quote.subtotal,
+            shipping_cost=quote.shipping_cost,
+            total_amount=quote.total_amount,
+            status=quote.status,
+        ),
+        rfq_status=rfq.status,
+        items=[
+            CustomerQuoteItem(
+                part_number=item.part_number,
+                quantity=item.quantity,
+                unit_price=item.unit_price,
+                certificate_type=item.certificate_type,
+                compliance_status=item.compliance_status,
+            )
+            for item in quote_items
+        ],
+    )
+
 @app.post("/api/quotes/{quote_id}/approve")
-async def approve_quote(quote_id: str, request: ApproveRequest, _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES"))):
+async def approve_quote(
+    quote_id: str,
+    request: ApproveRequest,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES")),
+    session=Depends(get_async_db),
+):
     """
     Performs Human-in-the-Loop quote approval and sends final offer.
     Supports pricing overrides.
     """
+    if session is not None:
+        repositories = create_operational_repositories(session)
+        result = await orchestration_service.approve_and_queue_quote_async(
+            repositories,
+            quote_id=quote_id,
+            operator_name=request.operator_name,
+            overrides=[
+                {"quote_item_id": item.quote_item_id, "unit_price": item.unit_price}
+                for item in request.items_override or []
+            ],
+            comments=request.comments,
+            expected_version=request.expected_version,
+        )
+        if result.get("error"):
+            raise HTTPException(
+                status_code=int(result.get("status_code") or 409),
+                detail=result["error"],
+            )
+        if not result.get("status") or result.get("error"):
+            raise HTTPException(status_code=409, detail="Quote approval failed.")
+        await session.commit()
+        return result
+
     quote = db_service.get_quote(quote_id)
     if not quote:
         raise HTTPException(status_code=404, detail="Quote not found.")
@@ -1208,33 +1423,64 @@ async def approve_quote(quote_id: str, request: ApproveRequest, _user: dict = De
     return res
 
 @app.post("/api/quotes/{quote_id}/reject")
-async def reject_quote(quote_id: str, request: RejectRequest, _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES"))):
+async def reject_quote(
+    quote_id: str,
+    request: RejectRequest,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES")),
+    session=Depends(get_async_db),
+):
     """
     Rejects proposal and shifts state.
     """
-    quote = db_service.get_quote(quote_id)
+    repositories = create_operational_repositories(session) if session is not None else None
+    quote = (
+        db_service.get_quote(quote_id)
+        if repositories is None
+        else await repositories.quote.get_operational_record("quotes", quote_id)
+        or await repositories.quote.get(quote_id)
+    )
     if not quote:
         raise HTTPException(status_code=404, detail="Quote not found.")
-        
-    result = orchestration_service.reject_quote(quote_id, request.operator_name, request.comments)
-    if result.get("error"):
-        raise HTTPException(status_code=409, detail=result["error"])
-    return result
+    rfq_id = quote.rfq_id if hasattr(quote, "rfq_id") else quote.get("rfq_id")
+    if repositories is None:
+        result = orchestration_service.reject_quote(quote_id, request.operator_name, request.comments)
+        if result.get("error"):
+            raise HTTPException(status_code=409, detail=result["error"])
+        return result
 
-@app.get("/api/internal/purchase-orders")
-async def list_pending_purchase_orders(
-    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
-):
-    return operations_store.list_purchase_orders(status="Pending_PO_Review")
-
+    rfq = await db_service.get_rfq_async(repositories, rfq_id)
+    if not rfq:
+        raise HTTPException(status_code=404, detail="RFQ not found.")
+    rejected = await repositories.rfq.reject_quote(
+        quote_id, rfq_id, request.operator_name, request.comments
+    )
+    if not rejected:
+        raise HTTPException(status_code=409, detail="Quote state changed before rejection could be recorded.")
+    await session.commit()
+    return {"status": "Rejected", "quote_id": quote_id}
 
 @app.post("/api/purchase-orders")
-async def submit_purchase_order(request: PurchaseOrderRequest, user: dict = Depends(current_user)):
+async def submit_purchase_order(
+    request: PurchaseOrderRequest,
+    user: dict = Depends(current_user),
+    session=Depends(get_async_db),
+):
     """Receive a customer PO and route its purchasing details to the human team."""
-    quote = db_service.get_quote(request.quote_id)
+    repositories = create_operational_repositories(session) if session is not None else None
+    quote = (
+        db_service.get_quote(request.quote_id)
+        if repositories is None
+        else await repositories.quote.get_operational_record("quotes", request.quote_id)
+        or await repositories.quote.get(request.quote_id)
+    )
     if not quote:
         raise HTTPException(status_code=404, detail="Quote not found.")
-    rfq = db_service.get_rfq(quote.rfq_id)
+    rfq_id = quote.rfq_id if hasattr(quote, "rfq_id") else quote.get("rfq_id")
+    rfq = (
+        db_service.get_rfq(rfq_id)
+        if repositories is None
+        else await db_service.get_rfq_async(repositories, rfq_id)
+    )
     if not rfq:
         raise HTTPException(status_code=404, detail="RFQ not found.")
     if rfq.status in {"Purchase_Order_Received", "Pending_PO_Review"}:
@@ -1258,59 +1504,100 @@ async def submit_purchase_order(request: PurchaseOrderRequest, user: dict = Depe
         previous_quote_id=previous_quote_id,
     )
 
-    quote_items = db_service.get_quote_items(request.quote_id)
+    if repositories is None:
+        quote_items = db_service.get_quote_items(request.quote_id)
+    else:
+        quote_item_records = await repositories.records.list_by_payload_value(
+            "quote_items", "quote_id", request.quote_id
+        )
+        quote_items = list(quote_item_records.values())
     internal_items = []
     supplier_groups: Dict[str, Dict[str, Any]] = {}
     for item in quote_items:
+        part_number = item.part_number if hasattr(item, "part_number") else item.get("part_number", "")
+        item_quantity = item.quantity if hasattr(item, "quantity") else item.get("quantity", 1)
+        item_unit_cost = item.unit_cost if hasattr(item, "unit_cost") else item.get("unit_cost", 0)
+        item_unit_price = item.unit_price if hasattr(item, "unit_price") else item.get("unit_price", 0)
         offers = (
-            operations_store.get_supplier_offers(item.part_number, item.quantity)
-            if operations_store.storage_engine == "postgresql"
-            else supplier_db.find_supplier_offers(item.part_number, quantity_needed=item.quantity)
+            operations_store.get_supplier_offers(part_number, item_quantity)
+            if repositories is None and operations_store.storage_engine == "postgresql"
+            else supplier_db.find_supplier_offers(part_number, quantity_needed=item_quantity)
+            if repositories is None
+            else await repositories.supplier.offers_for_part(part_number, quantity_needed=item_quantity)
         )
         selected = next(
-            (offer for offer in offers if abs(float(offer.get("unit_cost") or 0) - float(item.unit_cost or 0)) < 0.01),
+            (offer for offer in offers if abs(float(offer.get("unit_cost") or 0) - float(item_unit_cost or 0)) < 0.01),
             offers[0] if offers else None,
         )
         supplier_name = selected.get("supplier_name") if selected else "Internal inventory"
         supplier_email = selected.get("supplier_email") if selected else ""
         internal_item = {
-            "part_number": item.part_number,
-            "quantity": item.quantity,
-            "unit_price": item.unit_price,
+            "part_number": part_number,
+            "quantity": item_quantity,
+            "unit_price": item_unit_price,
             "supplier_name": supplier_name,
             "supplier_email": supplier_email,
-            "supplier_unit_cost": float(selected.get("unit_cost") or item.unit_cost or 0) if selected else float(item.unit_cost or 0),
+            "supplier_unit_cost": float(selected.get("unit_cost") or item_unit_cost or 0) if selected else float(item_unit_cost or 0),
         }
         internal_items.append(internal_item)
         if supplier_email:
             supplier_groups.setdefault(supplier_email, {"supplier_name": supplier_name, "items": []})["items"].append(internal_item)
 
-    transaction = operations_store.transaction() if operations_store.storage_engine == "postgresql" else nullcontext()
-    with transaction:
+    recipient = os.getenv("CAMILA_NOTIFICATION_EMAIL", os.getenv("PURCHASE_ORDER_NOTIFICATION_EMAIL", "camila@wingedtycoons.com"))
+    customer_name = rfq.customer_name if hasattr(rfq, "customer_name") else rfq.get("customer_name", "")
+    total_amount = quote.total_amount if hasattr(quote, "total_amount") else quote.get("total_amount", 0)
+    review_url = os.getenv("SALES_DASHBOARD_URL") or os.getenv("PUBLIC_APP_URL", "http://localhost:3000")
+    if repositories is not None:
         requested_po_id = f"PO-{uuid.uuid4().hex[:20].upper()}"
-        purchase_order = operations_store.record_purchase_order(
+        accepted = await repositories.rfq.receive_purchase_order(
             po_id=requested_po_id,
             po_number=request.po_number,
-            customer_email=customer_email,
-            total_amount=float(quote.total_amount or 0),
-            status="Pending_PO_Review",
             quote_id=request.quote_id,
             rfq_id=rfq.id,
-            received_message_id=None,
+            customer_email=customer_email,
+            total_amount=float(total_amount or 0),
             attachment_metadata=[{"attachment_id": value} for value in request.attachment_ids],
         )
-        if purchase_order.get("id") and purchase_order["id"] != requested_po_id:
+        if not accepted:
             raise HTTPException(status_code=409, detail="Purchase order already received.")
-        notification = communication_service.notify_purchase_order(
-            recipient=os.getenv("CAMILA_NOTIFICATION_EMAIL", os.getenv("PURCHASE_ORDER_NOTIFICATION_EMAIL", "camila@wingedtycoons.com")),
+        notification = await communication_service.notify_purchase_order_async(
+            repositories,
+            recipient=recipient,
             po_number=request.po_number,
-            customer_name=rfq.customer_name,
+            customer_name=customer_name,
             customer_email=customer_email,
             quote_id=request.quote_id,
             items=internal_items,
-            review_url=os.getenv("SALES_DASHBOARD_URL") or os.getenv("PUBLIC_APP_URL", "http://localhost:3000"),
+            review_url=review_url,
         )
-        orchestration_service.mark_purchase_order_received(rfq.id, request.po_number, request.attachment_ids)
+        await session.commit()
+    else:
+        transaction = operations_store.transaction() if operations_store.storage_engine == "postgresql" else nullcontext()
+        with transaction:
+            requested_po_id = f"PO-{uuid.uuid4().hex[:20].upper()}"
+            purchase_order = operations_store.record_purchase_order(
+                po_id=requested_po_id,
+                po_number=request.po_number,
+                customer_email=customer_email,
+                total_amount=float(total_amount or 0),
+                status="Pending_PO_Review",
+                quote_id=request.quote_id,
+                rfq_id=rfq.id,
+                received_message_id=None,
+                attachment_metadata=[{"attachment_id": value} for value in request.attachment_ids],
+            )
+            if purchase_order.get("id") and purchase_order["id"] != requested_po_id:
+                raise HTTPException(status_code=409, detail="Purchase order already received.")
+            notification = communication_service.notify_purchase_order(
+                recipient=recipient,
+                po_number=request.po_number,
+                customer_name=customer_name,
+                customer_email=customer_email,
+                quote_id=request.quote_id,
+                items=internal_items,
+                review_url=review_url,
+            )
+            orchestration_service.mark_purchase_order_received(rfq.id, request.po_number, request.attachment_ids)
     return {
         "status": "Pending_PO_Review",
         "po_number": request.po_number,
@@ -1324,19 +1611,38 @@ async def approve_purchase_order(
     quote_id: str,
     request: PurchaseOrderApprovalRequest,
     _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+    session=Depends(get_async_db),
 ):
     """Release a previously held PO for downstream purchasing work."""
-    quote = db_service.get_quote(quote_id)
+    repositories = create_operational_repositories(session) if session is not None else None
+    quote = (
+        db_service.get_quote(quote_id)
+        if repositories is None
+        else await repositories.quote.get_operational_record("quotes", quote_id)
+        or await repositories.quote.get(quote_id)
+    )
     if not quote:
         raise HTTPException(status_code=404, detail="Quote not found.")
-    rfq = db_service.get_rfq(quote.rfq_id)
+    rfq_id = quote.rfq_id if hasattr(quote, "rfq_id") else quote.get("rfq_id")
+    rfq = (
+        db_service.get_rfq(rfq_id)
+        if repositories is None
+        else await db_service.get_rfq_async(repositories, rfq_id)
+    )
     if not rfq:
         raise HTTPException(status_code=404, detail="RFQ not found.")
     if rfq.status != "Pending_PO_Review":
         raise HTTPException(status_code=409, detail="PO is not waiting for human review.")
 
-    orchestration_service.approve_purchase_order(rfq.id, request.operator_name, request.comments)
-    operations_store.update_purchase_order_status(quote_id, "APPROVED")
+    if repositories is None:
+        orchestration_service.approve_purchase_order(rfq.id, request.operator_name, request.comments)
+    else:
+        approved = await repositories.rfq.approve_purchase_order(
+            rfq.id, quote_id, request.operator_name, request.comments
+        )
+        if not approved:
+            raise HTTPException(status_code=409, detail="PO is no longer waiting for human review.")
+        await session.commit()
     return {"status": "Purchase_Order_Received", "quote_id": quote_id, "rfq_id": rfq.id}
 
 @app.get("/api/shipments/track/{public_token}")
@@ -1370,25 +1676,42 @@ async def track_shipment(public_token: str, session=Depends(get_async_db)):
 async def create_shipment(
     request: ShipmentCreateRequest,
     _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+    session=Depends(get_async_db),
 ):
-    rfq = db_service.get_rfq(request.rfq_id)
+    repositories = create_operational_repositories(session) if session is not None else None
+    rfq = (
+        db_service.get_rfq(request.rfq_id)
+        if repositories is None
+        else await db_service.get_rfq_async(repositories, request.rfq_id)
+    )
     if not rfq:
         raise HTTPException(status_code=404, detail="RFQ not found.")
     if rfq.status == "Pending_PO_Review":
         raise HTTPException(status_code=409, detail="Fulfillment is blocked until the purchase order is approved by a human operator.")
-    shipment = db_service.create_shipment(
-        rfq_id=request.rfq_id,
-        quote_id=request.quote_id,
-        customer_email=rfq.customer_email,
-        part_numbers=request.part_numbers,
-        quantity=request.quantity,
-        public_token=secrets.token_urlsafe(24),
-    )
-    tracking_notification = communication_service.send_shipment_tracking_link(
-        recipient=rfq.customer_email,
-        shipment_id=shipment.id,
-        public_token=shipment.public_token,
-    )
+    shipment_values = {
+        "rfq_id": request.rfq_id,
+        "quote_id": request.quote_id,
+        "customer_email": rfq.customer_email,
+        "part_numbers": request.part_numbers,
+        "quantity": request.quantity,
+        "public_token": secrets.token_urlsafe(24),
+    }
+    if repositories is None:
+        shipment = db_service.create_shipment(**shipment_values)
+        tracking_notification = communication_service.send_shipment_tracking_link(
+            recipient=rfq.customer_email,
+            shipment_id=shipment.id,
+            public_token=shipment.public_token,
+        )
+    else:
+        shipment = await db_service.create_shipment_async(repositories, **shipment_values)
+        tracking_notification = await communication_service.send_shipment_tracking_link_async(
+            repositories,
+            recipient=rfq.customer_email,
+            shipment_id=shipment.id,
+            public_token=shipment.public_token,
+        )
+        await session.commit()
     return {
         "shipment_id": shipment.id,
         "tracking_url": f"/track/{shipment.public_token}",
@@ -1410,10 +1733,19 @@ async def add_shipment_event(
     shipment_id: str,
     request: ShipmentEventRequest,
     _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+    session=Depends(get_async_db),
 ):
-    if not db_service.get_shipment(shipment_id):
-        raise HTTPException(status_code=404, detail="Shipment not found.")
-    event = db_service.add_shipment_event(shipment_id, request.status, request.location, request.description)
+    if session is None:
+        if not db_service.get_shipment(shipment_id):
+            raise HTTPException(status_code=404, detail="Shipment not found.")
+        event = db_service.add_shipment_event(shipment_id, request.status, request.location, request.description)
+    else:
+        repositories = create_operational_repositories(session)
+        event = await db_service.add_shipment_event_async(
+            repositories, shipment_id, request.status, request.location, request.description
+        )
+        if event is None:
+            raise HTTPException(status_code=404, detail="Shipment not found.")
     return {"status": "updated", "event": event}
 
 @app.post("/api/internal/shipments/{shipment_id}/tracking")
@@ -1421,8 +1753,17 @@ async def register_carrier_tracking(
     shipment_id: str,
     request: CarrierTrackingRequest,
     _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+    session=Depends(get_async_db),
 ):
-    shipment = db_service.update_shipment_tracking(shipment_id, request.carrier, request.tracking_number)
+    if session is None:
+        shipment = db_service.update_shipment_tracking(
+            shipment_id, request.carrier, request.tracking_number
+        )
+    else:
+        repositories = create_operational_repositories(session)
+        shipment = await db_service.update_shipment_tracking_async(
+            repositories, shipment_id, request.carrier, request.tracking_number
+        )
     if not shipment:
         raise HTTPException(status_code=404, detail="Shipment not found.")
     provider_result = carrier_tracking_service.create_tracker(
@@ -1441,17 +1782,26 @@ async def register_carrier_tracking(
 async def refresh_carrier_tracking(
     shipment_id: str,
     _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING")),
+    session=Depends(get_async_db),
 ):
-    shipment = db_service.get_shipment(shipment_id)
+    repositories = create_operational_repositories(session) if session is not None else None
+    shipment = (
+        db_service.get_shipment(shipment_id)
+        if repositories is None
+        else await db_service.get_shipment_async(repositories, shipment_id)
+    )
     if not shipment or not shipment.carrier or not shipment.tracking_number:
         raise HTTPException(status_code=404, detail="Shipment tracking is not registered.")
     payload = carrier_tracking_service.get_tracker(shipment.carrier, shipment.tracking_number)
     normalized = carrier_tracking_service.normalize_webhook(payload)
-    event = db_service.add_shipment_event(
-        shipment_id,
-        normalized["status"],
-        normalized.get("location"),
-        normalized["description"],
+    event = (
+        db_service.add_shipment_event(
+            shipment_id, normalized["status"], normalized.get("location"), normalized["description"]
+        )
+        if repositories is None
+        else await db_service.add_shipment_event_async(
+            repositories, shipment_id, normalized["status"], normalized.get("location"), normalized["description"]
+        )
     )
     return {"shipment_id": shipment_id, "event": event, "provider": payload}
 
@@ -1460,8 +1810,14 @@ async def send_shipment_sms(
     shipment_id: str,
     request: ShipmentSmsRequest,
     _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING", "ROLE_SALES")),
+    session=Depends(get_async_db),
 ):
-    if not db_service.get_shipment(shipment_id):
+    shipment = (
+        db_service.get_shipment(shipment_id)
+        if session is None
+        else await db_service.get_shipment_async(create_operational_repositories(session), shipment_id)
+    )
+    if not shipment:
         raise HTTPException(status_code=404, detail="Shipment not found.")
     return twilio_service.send_shipment_update(
         recipient=request.recipient,
@@ -1497,12 +1853,7 @@ async def carrier_webhook(request: Request):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 @app.get("/api/catalog/search", response_model=List[CatalogItem])
-async def search_catalog(
-    query: str = "",
-    condition: Optional[str] = None,
-    _user: dict = Depends(require_roles("ROLE_CUSTOMER", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
-    session=Depends(get_async_db),
-):
+async def search_catalog(query: str = "", condition: Optional[str] = None, _user: dict = Depends(require_roles("ROLE_CUSTOMER", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"))):
     """Public, customer-safe catalog availability search.
 
     Deliberately omits internal costs, serial numbers, and warehouse locations.
@@ -1516,19 +1867,7 @@ async def search_catalog(
         raise HTTPException(status_code=400, detail="Condition must be NE, FN, NS, OH, SVC, RP, AR, or IN.")
     results = []
     seen_parts: set[tuple[str, str]] = set()
-    if session is None:
-        inventory_items = list(db_service.inventory.values())
-        supplier_offers = (
-            operations_store.search_supplier_offers(query, normalized_condition or None)
-            if operations_store.storage_engine == "postgresql"
-            else supplier_db.search_supplier_offers(query, normalized_condition or None)
-        )
-    else:
-        repositories = create_operational_repositories(session)
-        inventory_records = await repositories.records.list("inventory")
-        inventory_items = [InventoryItem.model_validate(value) for value in inventory_records.values()]
-        supplier_offers = await repositories.supplier.search_offers(query, normalized_condition or None)
-    for item in inventory_items:
+    for item in db_service.inventory.values():
         if normalized_query and normalized_query not in item.part_number.lower():
             continue
         if normalized_condition and item.condition_code.upper() != normalized_condition:
@@ -1564,11 +1903,15 @@ async def search_catalog(
                 ))
         except Exception:
             logger.exception("postgres_catalog_search_failed")
+    supplier_offers = (
+        operations_store.search_supplier_offers(query, normalized_condition or None)
+        if operations_store.storage_engine == "postgresql"
+        else supplier_db.search_supplier_offers(query, normalized_condition or None)
+    )
     for offer in supplier_offers:
         key = (str(offer.get("part_number", "")).upper(), str(offer.get("condition_code") or "NE").upper())
         if key in seen_parts:
             continue
-        seen_parts.add(key)
         results.append(CatalogItem(
             part_number=key[0],
             condition_code=key[1],
@@ -1584,12 +1927,38 @@ async def get_inventory(
     session=Depends(get_async_db),
 ):
     """
-    Fetch mock internal stock inventory.
+    Fetch internal stock inventory.
     """
     if session is None:
         return list(db_service.inventory.values())
     records = await create_operational_repositories(session).records.list("inventory")
     return [InventoryItem.model_validate(payload) for payload in records.values()]
+
+
+def _supplier_response(row: dict[str, Any]) -> Supplier:
+    company_name = str(row.get("company_name") or "")
+    return Supplier(
+        id=str(row["id"]),
+        company_name=company_name,
+        dba_name=row.get("dba_name"),
+        contact_name=str(row.get("contact_name") or company_name),
+        contact_title=row.get("contact_title"),
+        phone=str(row.get("phone") or ""),
+        phone_alt=row.get("phone_alt"),
+        email=str(row.get("email") or ""),
+        email_quotes=row.get("email_quotes"),
+        website=row.get("website"),
+        address_line1=str(row.get("address_line1") or ""),
+        address_line2=row.get("address_line2"),
+        city=str(row.get("city") or ""),
+        state_province=str(row.get("state_province") or ""),
+        postal_code=str(row.get("postal_code") or ""),
+        country=str(row.get("country") or "US"),
+        approval_status=str(row.get("approval_status") or "Pending"),
+        itar_certified=bool(row.get("itar_certified", False)),
+        account_manager=row.get("account_manager"),
+        notes=row.get("notes"),
+    )
 
 @app.get("/api/suppliers", response_model=List[Supplier])
 async def list_suppliers(
@@ -1607,24 +1976,7 @@ async def list_suppliers(
         )
     else:
         rows = await create_operational_repositories(session).supplier.list_suppliers()
-    return [
-        Supplier(
-            id=row["id"],
-            company_name=row["company_name"],
-            contact_name=row["company_name"],
-            phone=row["phone"] or "",
-            email=row["email"] or "",
-            address_line1="",
-            city="",
-            state_province="",
-            postal_code="",
-            country="US",
-            approval_status=row["approval_status"],
-            itar_certified=bool(row.get("itar_certified", 0)),
-            account_manager=None,
-        )
-        for row in rows
-    ]
+    return [_supplier_response(row) for row in rows]
 
 @app.get("/api/supplier-offers")
 async def list_supplier_offers(
@@ -1634,11 +1986,25 @@ async def list_supplier_offers(
 ):
     if not part_number.strip():
         return []
-    if session is not None:
-        return await create_operational_repositories(session).supplier.offers_for_part(
-            part_number.strip().upper(), quantity_needed=1
+    normalized_part = part_number.strip().upper()
+    if session is None:
+        offers = (
+            operations_store.get_supplier_offers(normalized_part, quantity_needed=1)
+            if operations_store.storage_engine == "postgresql"
+            else supplier_db.find_supplier_offers(normalized_part, quantity_needed=1)
         )
-    return operations_store.get_supplier_offers(part_number.strip().upper(), quantity_needed=1) if operations_store.storage_engine == "postgresql" else supplier_db.find_supplier_offers(part_number.strip().upper(), quantity_needed=1)
+    else:
+        offers = await create_operational_repositories(session).supplier.offers_for_part(
+            normalized_part, quantity_needed=1
+        )
+    return [
+        {
+            **offer,
+            "id": str(offer.get("id") or offer.get("supplier_part_id") or ""),
+            "condition": offer.get("condition") or offer.get("condition_code"),
+        }
+        for offer in offers
+    ]
 
 @app.get("/api/suppliers/{supplier_id}", response_model=Supplier)
 async def get_supplier(
@@ -1649,11 +2015,12 @@ async def get_supplier(
     """
     Returns a single supplier's full contact and compliance profile.
     """
-    if session is None:
-        supplier = db_service.suppliers.get(supplier_id)
-    else:
+    if session is not None:
         profile = await create_operational_repositories(session).supplier.get_profile(supplier_id)
-        supplier = Supplier.model_validate(profile) if profile else None
+        if profile is None:
+            raise HTTPException(status_code=404, detail=f"Supplier '{supplier_id}' not found.")
+        return _supplier_response(profile)
+    supplier = db_service.suppliers.get(supplier_id)
     if not supplier:
         raise HTTPException(status_code=404, detail=f"Supplier '{supplier_id}' not found.")
     return supplier

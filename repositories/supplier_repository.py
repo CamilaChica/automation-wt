@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from sqlalchemy import func, or_, select
+import json
+import uuid
+
+from sqlalchemy import func, or_, select, text
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.operational_models import OperationalRecord, SupplierPartRecord, SupplierRecord
@@ -139,3 +143,75 @@ class SupplierRepository:
         self.session.add(record)
         await self.session.flush()
         return record
+
+    async def save_inventory_offer(
+        self,
+        *,
+        supplier_name: str,
+        supplier_email: str | None,
+        part_number: str,
+        quantity_available: int | None,
+        unit_cost: float | None,
+        certificate_type: str | None,
+        lead_time_days: int | None,
+        condition_code: str | None,
+        source_email_id: str,
+        description: str = "",
+        availability_location: str | None = None,
+        warranty_terms: str | None = None,
+        trace_documents: list[str] | None = None,
+        currency: str = "USD",
+        confidence: float = 1.0,
+        approval_status: str = "Pending",
+    ) -> dict:
+        normalized_email = supplier_email.strip().lower() if supplier_email else None
+        existing_query = select(SupplierRecord).where(
+            or_(
+                SupplierRecord.company_name == supplier_name,
+                func.lower(SupplierRecord.email) == normalized_email if normalized_email else text("false"),
+            )
+        ).limit(1)
+        supplier = await self.session.scalar(existing_query)
+        if supplier is None:
+            identity = normalized_email or supplier_name.strip().lower()
+            supplier_id = f"SUP-{uuid.uuid5(uuid.NAMESPACE_URL, identity).hex[:16].upper()}"
+            supplier = SupplierRecord(
+                id=supplier_id,
+                company_name=supplier_name,
+                email=normalized_email,
+                approval_status=approval_status,
+                source="email",
+            )
+            self.session.add(supplier)
+            await self.session.flush()
+
+        normalized_part = part_number.strip().upper()
+        offer_id = f"SPO-{uuid.uuid5(uuid.NAMESPACE_URL, source_email_id).hex[:24].upper()}"
+        values = {
+            "id": offer_id,
+            "supplier_id": supplier.id,
+            "part_number": normalized_part,
+            "condition_code": condition_code,
+            "description": description,
+            "quantity_available": quantity_available,
+            "unit_cost": unit_cost,
+            "currency": currency,
+            "certificate_type": certificate_type,
+            "lead_time_days": lead_time_days,
+            "availability_location": availability_location,
+            "warranty_terms": warranty_terms,
+            "trace_documents": json.dumps(trace_documents or []),
+            "source_email_id": source_email_id,
+            "confidence": confidence,
+            "approval_status": approval_status,
+        }
+        statement = postgres_insert(SupplierPartRecord).values(**values).on_conflict_do_update(
+            index_elements=[SupplierPartRecord.source_email_id],
+            set_={
+                key: value for key, value in values.items()
+                if key not in {"id", "source_email_id"}
+            } | {"updated_at": func.now()},
+        ).returning(SupplierPartRecord.id)
+        saved_id = await self.session.scalar(statement)
+        await self.session.flush()
+        return {**values, "id": str(saved_id or offer_id), "supplier_name": supplier_name, "supplier_email": normalized_email}

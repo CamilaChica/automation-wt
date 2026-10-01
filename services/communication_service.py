@@ -1,5 +1,6 @@
 """Natural-language supplier and customer email workflows."""
 
+import asyncio
 import os
 import re
 import json
@@ -31,6 +32,18 @@ from services.operations_store import operations_store
 from services.supplier_database import supplier_db
 
 customer_question_service = CustomerQuestionService()
+
+
+def _next_customer_business_window(due: datetime) -> datetime:
+    while due.weekday() >= 5 or due.hour < 8 or due.hour >= 18:
+        if due.weekday() >= 5:
+            due += timedelta(days=7 - due.weekday())
+            due = due.replace(hour=9, minute=0, second=0, microsecond=0)
+        elif due.hour < 8:
+            due = due.replace(hour=9, minute=0, second=0, microsecond=0)
+        else:
+            due = (due + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    return due
 
 
 class PartItem(BaseModel):
@@ -227,6 +240,42 @@ class CommunicationService:
         body = self._missing_fields_request(part_number, missing_fields)
         return self._send("purchasing", recipient, subject, body, reply_to=reply_to)
 
+    async def request_missing_supplier_fields_async(
+        self,
+        repositories,
+        recipient: str,
+        part_number: str,
+        missing_fields: List[str],
+        reply_to: Optional[str] = None,
+        *,
+        entity_id: str | None = None,
+    ) -> Dict[str, Any]:
+        if not self._is_valid_email(recipient):
+            raise ValueError("Recipient email is invalid. Email dispatch aborted.")
+        subject = f"Re: RFQ request: {part_number.upper()} - information needed"
+        body = self._missing_fields_request(part_number, missing_fields)
+        key = hashlib.sha256(
+            "\0".join(("purchasing", recipient.lower(), subject, body, reply_to or "", "", entity_id or "")).encode("utf-8")
+        ).hexdigest()
+        queued = await repositories.records.enqueue_outbox_message(
+            deduplication_key=key,
+            mailbox="purchasing",
+            recipient=recipient,
+            subject=subject,
+            body=body,
+            reply_to=reply_to,
+            entity_id=entity_id,
+        )
+        return {
+            "mailbox": "purchasing",
+            "recipient": recipient,
+            "subject": subject,
+            "reply_to": reply_to,
+            "transmission_status": queued["status"],
+            "communication_id": queued["id"],
+            "outbox_id": queued["id"],
+        }
+
     def request_stale_supplier_confirmation(
         self,
         recipient: str,
@@ -269,6 +318,51 @@ class CommunicationService:
         )
         return self._send("purchasing", recipient, subject, body, reply_to=reply_to)
 
+    async def request_supplier_body_quote_async(
+        self,
+        repositories,
+        recipient: str,
+        part_reference: str = "the quoted part",
+        reply_to: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not self._is_valid_email(recipient):
+            raise ValueError("Recipient email is invalid. Email dispatch aborted.")
+        subject = f"Re: Quote details required - {part_reference}"
+        body = (
+            "Hello,\n\n"
+            "We could not read the quotation attachment in your email. Please reply in this same email thread "
+            "with the quotation details in the message body so we can process your response:\n"
+            "- Part number\n"
+            "- Quantity available\n"
+            "- Unit price and currency\n"
+            "- Condition\n"
+            "- Release certificate and trace documentation\n"
+            "- Lead time\n"
+            "- Quote validity or expiration date\n\n"
+            "Please do not send a new thread; replying here preserves the quote reference.\n\n"
+            "Best regards,\nWinged Tycoons Purchasing Team"
+        )
+        deduplication_key = hashlib.sha256(
+            "\0".join(("purchasing", recipient.lower(), subject, body, reply_to or "")).encode("utf-8")
+        ).hexdigest()
+        queued = await repositories.records.enqueue_outbox_message(
+            deduplication_key=deduplication_key,
+            mailbox="purchasing",
+            recipient=recipient,
+            subject=subject,
+            body=body,
+            reply_to=reply_to,
+        )
+        return {
+            "mailbox": "purchasing",
+            "recipient": recipient,
+            "subject": subject,
+            "reply_to": reply_to,
+            "transmission_status": queued["status"],
+            "communication_id": queued["id"],
+            "outbox_id": queued["id"],
+        }
+
     def notify_purchase_order(
         self,
         recipient: str,
@@ -281,6 +375,23 @@ class CommunicationService:
         previous_quote_id: Optional[str] = None,
         review_url: Optional[str] = None,
     ) -> Dict[str, Any]:
+        subject, body = self._purchase_order_notification_content(
+            po_number, customer_name, customer_email, quote_id, items,
+            previous_po_number, previous_quote_id, review_url,
+        )
+        return self._send("sales", recipient, subject, body, reply_to=None)
+
+    def _purchase_order_notification_content(
+        self,
+        po_number: str,
+        customer_name: str,
+        customer_email: str,
+        quote_id: str,
+        items: List[Dict[str, Any]],
+        previous_po_number: Optional[str] = None,
+        previous_quote_id: Optional[str] = None,
+        review_url: Optional[str] = None,
+    ) -> tuple[str, str]:
         self.validate_purchase_order_metadata(
             po_number=po_number,
             customer_email=customer_email,
@@ -306,15 +417,56 @@ class CommunicationService:
             "Do not fulfill, invoice, or contact suppliers until a human operator approves this PO. "
             "Supplier details are included for internal use only."
         )
-        return self._send(
-            "sales",
-            recipient,
+        return (
             f"[ACTION REQUIRED] New Purchase Order Received - PO #{po_number}",
             body,
-            reply_to=None,
         )
 
+    async def notify_purchase_order_async(
+        self,
+        repositories,
+        recipient: str,
+        po_number: str,
+        customer_name: str,
+        customer_email: str,
+        quote_id: str,
+        items: List[Dict[str, Any]],
+        previous_po_number: Optional[str] = None,
+        previous_quote_id: Optional[str] = None,
+        review_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        subject, body = self._purchase_order_notification_content(
+            po_number, customer_name, customer_email, quote_id, items,
+            previous_po_number, previous_quote_id, review_url,
+        )
+        if not self._is_valid_email(recipient):
+            raise ValueError("Recipient email is invalid. Email dispatch aborted.")
+        deduplication_key = hashlib.sha256(
+            "\0".join(("sales", recipient.lower(), subject, body, "", "", quote_id)).encode("utf-8")
+        ).hexdigest()
+        queued = await repositories.records.enqueue_outbox_message(
+            deduplication_key=deduplication_key,
+            mailbox="sales",
+            recipient=recipient,
+            subject=subject,
+            body=body,
+            entity_id=quote_id,
+        )
+        return {
+            "mailbox": "sales",
+            "recipient": recipient,
+            "subject": subject,
+            "reply_to": None,
+            "transmission_status": queued["status"],
+            "communication_id": queued["id"],
+            "outbox_id": queued["id"],
+        }
+
     def send_shipment_tracking_link(self, recipient: str, shipment_id: str, public_token: str) -> Dict[str, Any]:
+        subject, body = self._shipment_tracking_content(shipment_id, public_token)
+        return self._send("sales", recipient, subject, body, reply_to=None)
+
+    def _shipment_tracking_content(self, shipment_id: str, public_token: str) -> tuple[str, str]:
         portal_url = os.getenv("PUBLIC_APP_URL", "http://localhost:3000")
         tracking_url = f"{portal_url.rstrip('/')}/track/{public_token}"
         body = (
@@ -325,13 +477,34 @@ class CommunicationService:
             "The tracking page will show carrier updates, latest location, and estimated delivery when available.\n\n"
             "Kind regards,\nWinged Tycoons Logistics Team"
         )
-        return self._send(
-            "sales",
-            recipient,
-            f"Shipment tracking available - {shipment_id}",
-            body,
-            reply_to=None,
+        return f"Shipment tracking available - {shipment_id}", body
+
+    async def send_shipment_tracking_link_async(
+        self, repositories, recipient: str, shipment_id: str, public_token: str
+    ) -> Dict[str, Any]:
+        subject, body = self._shipment_tracking_content(shipment_id, public_token)
+        if not self._is_valid_email(recipient):
+            raise ValueError("Recipient email is invalid. Email dispatch aborted.")
+        deduplication_key = hashlib.sha256(
+            "\0".join(("sales", recipient.lower(), subject, body, "", "", shipment_id)).encode("utf-8")
+        ).hexdigest()
+        queued = await repositories.records.enqueue_outbox_message(
+            deduplication_key=deduplication_key,
+            mailbox="sales",
+            recipient=recipient,
+            subject=subject,
+            body=body,
+            entity_id=shipment_id,
         )
+        return {
+            "mailbox": "sales",
+            "recipient": recipient,
+            "subject": subject,
+            "reply_to": None,
+            "transmission_status": queued["status"],
+            "communication_id": queued["id"],
+            "outbox_id": queued["id"],
+        }
 
     def request_supplier_availability_confirmation(
         self,
@@ -469,10 +642,6 @@ class CommunicationService:
                 raise ValueError("Generated customer email body is empty. Email dispatch aborted.")
         if operations_store.storage_engine == "postgresql" and quote_details:
             with operations_store.transaction():
-                db_service.update_quote_status(quote_id, "Pending_Dispatch")
-                current_rfq = db_service.get_rfq(quote_details.rfq_id)
-                if current_rfq and current_rfq.status != "Quote_Dispatch_Pending":
-                    db_service.update_rfq_status(current_rfq.id, "Quote_Dispatch_Pending")
                 result = self._send(
                     "sales", recipient, subject, body, reply_to=reply_to,
                     entity_id=quote_id, deduplication_key=f"customer-quote:{quote_id}",
@@ -495,6 +664,84 @@ class CommunicationService:
                 reply_to=reply_to,
             )
         return result
+
+    async def enqueue_customer_quote_async(
+        self,
+        repositories,
+        *,
+        recipient: str,
+        quote_id: str,
+        rfq_id: str,
+        subject: str,
+        body: str,
+        quote_items: List[Dict[str, Any]],
+        reply_to: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not self._is_valid_email(recipient):
+            raise ValueError("Customer email is invalid. Email dispatch aborted.")
+        if not str(body or "").strip():
+            raise ValueError("Customer email body is empty. Email dispatch aborted.")
+        prepare_and_validate_email(
+            rfq_id=rfq_id,
+            recipient_email=recipient,
+            subject=subject,
+            part_rows=quote_items,
+        )
+        queued = await repositories.records.enqueue_outbox_message(
+            deduplication_key=f"customer-quote:{quote_id}",
+            mailbox="sales",
+            recipient=recipient,
+            subject=subject,
+            body=body.strip(),
+            reply_to=reply_to,
+            entity_id=quote_id,
+        )
+        return {
+            "mailbox": "sales",
+            "recipient": recipient,
+            "subject": subject,
+            "reply_to": reply_to,
+            "transmission_status": queued["status"],
+            "communication_id": queued["id"],
+            "outbox_id": queued["id"],
+        }
+
+    async def schedule_customer_followups_async(
+        self,
+        repositories,
+        *,
+        recipient: str,
+        customer_name: str,
+        quote_id: str,
+        part_number: str,
+        reply_to: Optional[str] = None,
+        customer_timezone: str = "UTC",
+    ) -> list[Dict[str, Any]]:
+        try:
+            local_zone = timezone.utc if customer_timezone.upper() == "UTC" else ZoneInfo(customer_timezone)
+        except Exception as exc:
+            raise ValueError(f"Unknown customer timezone: {customer_timezone}") from exc
+        local_now = datetime.now(timezone.utc).astimezone(local_zone)
+        template = compose_customer_followup(CustomerFollowupData(
+            contact_name=safe_display_text(customer_name),
+            recipient_email=recipient,
+            part_number=part_number,
+            quote_number=quote_id,
+        ))
+        scheduled = []
+        for index, days in enumerate(chase_days(), start=1):
+            due = _next_customer_business_window(local_now + timedelta(days=days))
+            scheduled.append(await repositories.records.schedule_communication_task(
+                task_key=chase_task_keys(quote_id)[index - 1],
+                task_type="customer_followup",
+                mailbox="sales",
+                recipient=recipient,
+                subject=template.subject,
+                body=template.body,
+                due_at=due.astimezone(timezone.utc),
+                reply_to=reply_to,
+            ))
+        return scheduled
 
     def send_customer_information_response(
         self,
@@ -527,6 +774,52 @@ class CommunicationService:
             reply_to=reply_to,
         )
 
+    async def send_customer_information_response_async(
+        self,
+        repositories,
+        *,
+        recipient: str,
+        customer_name: str,
+        quote_id: str,
+        request_text: str,
+        quote,
+        items: list,
+        reply_to: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not self._is_valid_email(recipient):
+            raise ValueError("Customer email is invalid. Email dispatch aborted.")
+        grounded_answer = customer_question_service.answer_from_quote(request_text, quote, items)
+        if not grounded_answer:
+            raise ValueError("The customer question could not be answered from approved quote data.")
+        body = (
+            f"Dear {safe_display_text(customer_name)},\n\n"
+            f"Thank you for your question regarding quotation {quote_id}. The approved quote records:\n\n"
+            f"{grounded_answer}\n\n"
+            "Kind regards,\nWinged Tycoons Aviation Team"
+        )
+        subject = f"Re: Quotation {quote_id} - requested details"
+        deduplication_key = hashlib.sha256(
+            "\0".join(("sales", recipient.lower(), subject, body, reply_to or "", "", quote_id)).encode("utf-8")
+        ).hexdigest()
+        queued = await repositories.records.enqueue_outbox_message(
+            deduplication_key=deduplication_key,
+            mailbox="sales",
+            recipient=recipient,
+            subject=subject,
+            body=body,
+            reply_to=reply_to,
+            entity_id=quote_id,
+        )
+        return {
+            "mailbox": "sales",
+            "recipient": recipient,
+            "subject": subject,
+            "reply_to": reply_to,
+            "transmission_status": queued["status"],
+            "communication_id": queued["id"],
+            "outbox_id": queued["id"],
+        }
+
     def schedule_customer_followup(
         self,
         recipient: str,
@@ -551,10 +844,7 @@ class CommunicationService:
         ))
         scheduled = []
         for index, days in enumerate(chase_days(), start=1):
-            due = local_now + timedelta(days=days)
-            if due.weekday() >= 5 or due.hour < 8 or due.hour >= 18:
-                due += timedelta(days=(7 - due.weekday()) if due.weekday() >= 5 else 1)
-                due = due.replace(hour=9, minute=0, second=0, microsecond=0)
+            due = _next_customer_business_window(local_now + timedelta(days=days))
             scheduled.append(self._schedule_communication_task(
                 task_key=chase_task_keys(quote_id)[index - 1],
                 task_type="customer_followup",
@@ -610,6 +900,40 @@ class CommunicationService:
             reply_to=reply_to,
         )
 
+    async def schedule_supplier_discount_request_async(
+        self,
+        repositories,
+        *,
+        recipient: str,
+        supplier_name: str,
+        part_number: str,
+        unit_cost: float,
+        source_email_id: str,
+        reply_to: Optional[str] = None,
+        round_number: int = 1,
+        quantity: int = 1,
+    ) -> Dict[str, Any]:
+        max_rounds = int(os.getenv("SUPPLIER_DISCOUNT_MAX_ROUNDS", "2"))
+        if round_number > max_rounds:
+            return {"status": "LIMIT_REACHED", "round": round_number}
+        template = compose_supplier_discount_request(SupplierDiscountData(
+            supplier_contact=safe_display_text(supplier_name),
+            recipient_email=recipient,
+            part_number=part_number.upper(),
+            quantity=quantity,
+            quoted_price=unit_cost,
+        ))
+        return await repositories.records.schedule_communication_task(
+            task_key=f"supplier-discount:{source_email_id}:{round_number}",
+            task_type="supplier_discount_request",
+            mailbox="purchasing",
+            recipient=recipient,
+            subject=template.subject,
+            body=template.body,
+            due_at=datetime.now(timezone.utc),
+            reply_to=reply_to,
+        )
+
     @staticmethod
     def _schedule_communication_task(**task: Any) -> Dict[str, Any]:
         if operations_store.storage_engine != "postgresql":
@@ -630,6 +954,37 @@ class CommunicationService:
             communication_task_id=task.get("id"),
         )
         return result
+
+    async def process_due_task_async(self, repositories, task: Dict[str, Any]) -> Dict[str, Any]:
+        mailbox = str(task.get("mailbox") or "sales")
+        recipient = str(task.get("recipient") or "")
+        if mailbox not in MAILBOXES:
+            raise ValueError("Unknown outbound mailbox.")
+        if not self._is_valid_email(recipient):
+            raise ValueError("Recipient email is invalid. Email dispatch aborted.")
+        task_id = str(task["id"])
+        deduplication_key = hashlib.sha256(
+            "\0".join((mailbox, recipient.lower(), str(task.get("subject") or ""),
+                       str(task.get("body") or ""), str(task.get("reply_to") or ""), task_id, "")).encode("utf-8")
+        ).hexdigest()
+        queued = await repositories.records.enqueue_outbox_message(
+            deduplication_key=deduplication_key,
+            mailbox=mailbox,
+            recipient=recipient,
+            subject=str(task.get("subject") or ""),
+            body=str(task.get("body") or ""),
+            reply_to=task.get("reply_to"),
+            communication_task_id=task_id,
+        )
+        return {
+            "mailbox": mailbox,
+            "recipient": recipient,
+            "subject": task.get("subject"),
+            "reply_to": task.get("reply_to"),
+            "transmission_status": queued["status"],
+            "communication_id": queued["id"],
+            "outbox_id": queued["id"],
+        }
 
     def send_manual_message(self, *, mailbox: str, recipient: str, subject: str, body: str, reply_to: str | None = None) -> Dict[str, Any]:
         if mailbox not in MAILBOXES:
@@ -738,11 +1093,14 @@ class CommunicationService:
                 )
                 if delivery_state == "MANUAL_REVIEW_REQUIRED" and message.get("entity_id"):
                     quote = db_service.get_quote(str(message["entity_id"]))
-                    if quote and quote.status == "Pending_Dispatch":
+                    if quote and quote.status in {"Draft", "Approved", "Pending_Dispatch", "Dispatch_Pending"}:
                         db_service.update_quote_status(quote.id, "Pending_Internal_Review")
                         operations_store.update_customer_quote_status(quote.id, "Pending_Internal_Review")
                         rfq = db_service.get_rfq(quote.rfq_id)
-                        if rfq and rfq.status == "Quote_Dispatch_Pending":
+                        if rfq and rfq.status in {
+                            "Quote_Generation", "Pending_Approval", "Pending_Approval_Low_Margin",
+                            "Quote_Dispatch_Pending",
+                        }:
                             db_service.update_rfq_status(rfq.id, "Pending_Internal_Review")
                         self.cancel_customer_followups(quote.id)
                 failed += 1
@@ -764,11 +1122,14 @@ class CommunicationService:
                     operations_store.mark_outbox_sent(message["id"])
                     if message.get("entity_id"):
                         quote = db_service.get_quote(str(message["entity_id"]))
-                        if quote and quote.status == "Pending_Dispatch":
+                        if quote and quote.status in {"Draft", "Approved", "Pending_Dispatch", "Dispatch_Pending"}:
                             db_service.update_quote_status(quote.id, "Sent")
                             operations_store.update_customer_quote_status(quote.id, "Sent")
                             rfq = db_service.get_rfq(quote.rfq_id)
-                            if rfq and rfq.status == "Quote_Dispatch_Pending":
+                            if rfq and rfq.status in {
+                                "Quote_Generation", "Pending_Approval", "Pending_Approval_Low_Margin",
+                                "Quote_Dispatch_Pending",
+                            }:
                                 db_service.update_rfq_status(rfq.id, "Quote_Sent")
                 sent += 1
             except Exception as exc:
@@ -777,6 +1138,89 @@ class CommunicationService:
                     f"Delivery accepted but database finalization failed: {type(exc).__name__}: {exc}",
                     retryable=False,
                 )
+                failed += 1
+        return {"sent": sent, "failed": failed}
+
+    async def dispatch_outbox_once_async(self, engine, *, limit: int = 25) -> dict[str, int]:
+        from repositories.runtime import create_operational_repositories
+        from services.async_database import session_scope
+
+        async with session_scope(engine) as session:
+            repositories = create_operational_repositories(session)
+            await repositories.records.recover_stale_outbox_messages()
+            claimed = await repositories.records.claim_outbox_messages(limit=limit)
+
+        sent = 0
+        failed = 0
+        for message in claimed:
+            payload = message.get("payload") or {}
+            body = payload.get("body", "") if isinstance(payload, dict) else str(payload)
+            error = None
+            retryable = False
+            try:
+                await asyncio.to_thread(
+                    send_message,
+                    message["mailbox"],
+                    message["recipient"],
+                    message["subject"],
+                    body,
+                    reply_to=message.get("reply_to"),
+                )
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                response = getattr(exc, "response", None)
+                status_code = getattr(response, "status_code", None) or getattr(exc, "status_code", None) or getattr(exc, "smtp_code", None)
+                try:
+                    status_code = int(status_code) if status_code is not None else None
+                except (TypeError, ValueError):
+                    status_code = None
+                retryable = status_code == 429 or bool(status_code and 500 <= status_code < 600)
+
+            try:
+                async with session_scope(engine) as session:
+                    repositories = create_operational_repositories(session)
+                    if error is not None:
+                        delivery_state = await repositories.records.fail_outbox_message(
+                            message["id"], error, retryable=retryable
+                        )
+                        if delivery_state == "MANUAL_REVIEW_REQUIRED" and message.get("entity_id"):
+                            await repositories.quote.finalize_outbox_delivery(
+                                str(message["entity_id"]), delivered=False, error=error
+                            )
+                        failed += 1
+                        continue
+
+                    await repositories.records.record_communication(
+                        entity_type="email",
+                        entity_id=message["id"],
+                        recipient=message["recipient"],
+                        sender=MAILBOXES[message["mailbox"]].address,
+                        channel="email",
+                        subject=message["subject"],
+                        message=body,
+                        message_type="outbound",
+                        status="SENT",
+                    )
+                    await repositories.records.mark_outbox_sent(message["id"])
+                    if message.get("entity_id"):
+                        await repositories.quote.finalize_outbox_delivery(
+                            str(message["entity_id"]), delivered=True
+                        )
+                    sent += 1
+            except Exception as exc:
+                try:
+                    async with session_scope(engine) as session:
+                        repositories = create_operational_repositories(session)
+                        error = f"Delivery accepted but database finalization failed: {type(exc).__name__}: {exc}"
+                        delivery_state = await repositories.records.fail_outbox_message(
+                            message["id"], error, retryable=False
+                        )
+                        if delivery_state == "MANUAL_REVIEW_REQUIRED" and message.get("entity_id"):
+                            await repositories.quote.finalize_outbox_delivery(
+                                str(message["entity_id"]), delivered=False, error=error
+                            )
+                except Exception:
+                    logger.exception("Failed to quarantine outbox message after finalization error id=%s", message["id"])
                 failed += 1
         return {"sent": sent, "failed": failed}
 

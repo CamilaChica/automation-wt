@@ -2,19 +2,34 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "API (Uvicorn, reload)",
+      "name": "API (Uvicorn)",
       "type": "debugpy",
       "request": "launch",
       "module": "uvicorn",
       "args": [
         "api.main:app",
-        "--reload",
         "--host",
         "127.0.0.1",
         "--port",
         "8000"
       ],
-      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "WT_ENV": "development",
+        "WT_AUTH_ENV": "development",
+        "WT_AUTH_SECRET": "local-development-only-change-this-secret",
+        "EMAIL_SEND_ENABLED": "false",
+        "AZURE_TENANT_ID": "",
+        "AZURE_CLIENT_ID": "",
+        "AZURE_CLIENT_SECRET": "",
+        "SALES_EMAIL_USERNAME": "",
+        "SALES_EMAIL_PASSWORD": "",
+        "PURCHASING_EMAIL_USERNAME": "",
+        "PURCHASING_EMAIL_PASSWORD": "",
+        "GRAPH_MAILBOX_USER": "",
+        "GRAPH_MAILBOX_USER_SALES": "",
+        "GRAPH_MAILBOX_USER_PURCHASING": ""
+      },
+      "envFile": "${workspaceFolder}/.env.local",
       "console": "integratedTerminal",
       "justMyCode": false
     },
@@ -23,7 +38,10 @@
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/worker.py",
-      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "WT_ENV": "development"
+      },
+      "envFile": "${workspaceFolder}/.env.local",
       "console": "integratedTerminal",
       "justMyCode": false
     },
@@ -33,7 +51,7 @@
       "request": "launch",
       "module": "alembic",
       "args": ["upgrade", "head"],
-      "envFile": "${workspaceFolder}/.env",
+      "envFile": "${workspaceFolder}/.env.local",
       "console": "integratedTerminal",
       "justMyCode": false
     }
@@ -41,7 +59,7 @@
   "compounds": [
     {
       "name": "Run API + Worker Simultaneously",
-      "configurations": ["API (Uvicorn, reload)", "Mailbox Worker"],
+      "configurations": ["API (Uvicorn)", "Mailbox Worker"],
       "stopAll": true
     }
   ]

@@ -22,6 +22,15 @@ class TestWorkflowStates(unittest.TestCase):
         with self.assertRaises(InvalidWorkflowTransition):
             validate_transition("Intake", "MYSTERY_STATE")
 
+    def test_ambiguous_quote_delivery_can_be_held_for_internal_review(self):
+        for status in (
+            "Quote_Generation",
+            "Pending_Approval",
+            "Pending_Approval_Low_Margin",
+            "Quote_Dispatch_Pending",
+        ):
+            validate_transition(status, "Pending_Internal_Review")
+
     def test_restored_rfq_can_carry_canonical_state(self):
         with tempfile.TemporaryDirectory() as directory:
             store = OperationsStore(Path(directory) / "operations.db")

@@ -1,8 +1,10 @@
 import unittest
 import asyncio
-from unittest.mock import patch
+from unittest.mock import AsyncMock, PropertyMock, patch
+from agents.base_agent import AgentResponse
 from services.db_service import db_service
-from services.orchestration_service import orchestration_service
+from services.operations_store import operations_store
+from services.orchestration_service import OrchestrationService, orchestration_service
 
 class TestRFQQuoteWorkflow(unittest.TestCase):
     def setUp(self):
@@ -173,6 +175,85 @@ class TestRFQQuoteWorkflow(unittest.TestCase):
         self.assertIn("Attachments:", summary)
         self.assertIn("FAA-8130-3.pdf", summary)
         self.assertIn("spec-sheet.pdf", summary)
+
+    def test_pipeline_resumes_quote_generation_from_persisted_draft(self):
+        rfq = db_service.create_rfq(
+            "Recovery Buyer",
+            "recovery@example.test",
+            "Please quote test part TEST-1 quantity 2.",
+        )
+        rfq.status = "Quote_Generation"
+        db_service.rfqs[rfq.id] = rfq
+        db_service._persist_state()
+
+        persisted_states = {}
+        draft = [{
+            "rfq_item_id": "RITM-RECOVERY",
+            "part_number": "TEST-1",
+            "description": "Test part",
+            "quantity": 2,
+            "uom": "EA",
+            "unit_price": 12.5,
+            "unit_cost": 10.0,
+            "margin_percent": 20.0,
+            "source": "Inventory",
+            "certificate_type": "FAA 8130-3",
+            "condition": "NE",
+            "lead_time_days": 3,
+            "compliance_status": "Pass",
+            "attachments": [],
+        }]
+        quote_generation = {
+            "quote_items_draft": draft,
+            "shipping_total": 0.0,
+            "has_low_margin_escalation": False,
+            "margin_esc_rule": None,
+        }
+
+        def load_state(domain, record_id):
+            self.assertEqual(domain, "rfq_pipeline_state")
+            return persisted_states.get(record_id)
+
+        def save_state(domain, record_id, payload):
+            self.assertEqual(domain, "rfq_pipeline_state")
+            persisted_states[record_id] = payload
+
+        async def run_scenario():
+            service = OrchestrationService()
+            service.quote_agent.execute = AsyncMock(return_value=AgentResponse(
+                success=True,
+                data={
+                    "subtotal": 25.0,
+                    "shipping_cost": 0.0,
+                    "total_amount": 25.0,
+                    "quote_validity_days": 30,
+                },
+            ))
+            service._dispatch_customer_quote = AsyncMock(return_value=AgentResponse(
+                success=True,
+                data={"transmission_status": "SENT", "formatted_body": "Quote sent."},
+            ))
+            return await service.process_rfq_pipeline(rfq.id)
+
+        with (
+            patch.object(
+                type(operations_store),
+                "storage_engine",
+                new_callable=PropertyMock,
+                return_value="postgresql",
+            ),
+            patch.object(operations_store, "get_operational_record", side_effect=load_state),
+            patch.object(operations_store, "save_operational_record", side_effect=save_state),
+        ):
+            OrchestrationService()._save_pipeline_state(
+                rfq.id, quote_generation=quote_generation
+            )
+            result = asyncio.run(run_scenario())
+
+        self.assertEqual(result["status"], "Quote_Sent")
+        quote_items = db_service.get_quote_items(result["quote_id"])
+        self.assertEqual(len(quote_items), 1)
+        self.assertEqual(quote_items[0].unit_cost, 10.0)
 
 if __name__ == "__main__":
     unittest.main()

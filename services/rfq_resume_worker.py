@@ -14,7 +14,12 @@ logger = logging.getLogger("winged-tycoons-rfq-resume-worker")
 
 
 def dispatch_once(limit: int = 10) -> dict[str, int]:
-    events = operations_store.claim_automation_events(event_type="resume_waiting_rfq", limit=limit)
+    events = []
+    for event_type in ("process_new_rfq", "resume_waiting_rfq"):
+        remaining = max(0, limit - len(events))
+        if remaining == 0:
+            break
+        events.extend(operations_store.claim_automation_events(event_type=event_type, limit=remaining))
     succeeded = failed = 0
     if not events:
         return {"succeeded": succeeded, "failed": failed}

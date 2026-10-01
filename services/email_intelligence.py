@@ -226,8 +226,9 @@ def extract_email_intelligence(
     router: LLMRouter | None = None,
     attachments: list[dict[str, Any]] | None = None,
     human_escalation: bool = False,
+    persist: bool = True,
 ) -> EmailIntelligenceExtraction:
-    """Extract structured email data using mini first and review-gated escalation."""
+    """Extract structured email data; persistence can be deferred to an async caller."""
     if os.getenv("LLM_LIVE_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
         raise RuntimeError("Live LLM extraction is disabled; use deterministic fallback.")
     router = router or LLMRouter()
@@ -382,7 +383,7 @@ def extract_email_intelligence(
     )
     result.needs_escalation = bool(review_reason)
     result.escalation_reason = review_reason or None
-    if review_reason:
+    if review_reason and persist:
         for item in result.items:
             item.needs_escalation = True
             item.escalation_reason = review_reason
@@ -397,32 +398,35 @@ def extract_email_intelligence(
         "token_usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
         "pending_human_review": bool(review_reason),
         "escalation_reason": review_reason or None,
+        "validation_result": validation_result,
         "model_escalation_reason": model_escalation_reason,
     }
     if review_reason:
         normalized_source = _normalize_source_text(context)
         source_digest = hashlib.sha256(normalized_source.encode("utf-8")).hexdigest()
-        review_id = operations_store.enqueue_operator_review(
-            idempotency_key=f"extraction:{task}:{source_digest}",
-            task=task,
-            source_text=context,
-            extraction=result.model_dump(),
-            reason=review_reason,
-            prompt_version=contract.prompt_version,
-            hold_flags=result.missing_fields,
-        )
-        telemetry["review_queue_id"] = review_id
+        telemetry["review_idempotency_key"] = f"extraction:{task}:{source_digest}"
+        if persist:
+            telemetry["review_queue_id"] = operations_store.enqueue_operator_review(
+                idempotency_key=telemetry["review_idempotency_key"],
+                task=task,
+                source_text=context,
+                extraction=result.model_dump(),
+                reason=review_reason,
+                prompt_version=contract.prompt_version,
+                hold_flags=result.missing_fields,
+            )
     result._telemetry = telemetry
-    operations_store.record_llm_telemetry(
-        task=task,
-        prompt_version=contract.prompt_version,
-        model_id=model_calls[-1] if model_calls else contract.allowed_models[0],
-        model_calls=model_calls,
-        latency_ms=telemetry["latency_ms"],
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        estimated_cost_usd=response_cost,
-        validation_result=validation_result,
-        review_queue_id=telemetry.get("review_queue_id"),
-    )
+    if persist:
+        operations_store.record_llm_telemetry(
+            task=task,
+            prompt_version=contract.prompt_version,
+            model_id=model_calls[-1] if model_calls else contract.allowed_models[0],
+            model_calls=model_calls,
+            latency_ms=telemetry["latency_ms"],
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            estimated_cost_usd=response_cost,
+            validation_result=validation_result,
+            review_queue_id=telemetry.get("review_queue_id"),
+        )
     return result

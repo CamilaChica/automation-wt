@@ -882,6 +882,10 @@ def reconcile(
     backup: Path, *, apply: bool, url: str | None,
     approve_disposition_policy: bool = False, approval_reference: str = "",
 ) -> dict[str, Any]:
+    raise RuntimeError(
+        "Historical SQLite-to-PostgreSQL reconciliation is canceled; target-connected runs are disabled."
+    )
+
     source = read_source(backup)
     warnings = reconciliation_warnings(source)
     summary: dict[str, Any] = {
@@ -965,15 +969,17 @@ def reconcile(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backup-dir", type=Path, default=None, help="Timestamped backup directory; defaults to newest local backup")
-    parser.add_argument("--apply", action="store_true", help="Insert reconciled rows and commit. Without this option, runs a rolled-back dry run.")
-    parser.add_argument("--approve-disposition-policy", action="store_true", help="Confirm the release owner's approved disposition for flagged quote items and supplier profiles.")
-    parser.add_argument("--approval-reference", default="", help="Sanitized approval/ticket reference required with --apply when review records exist.")
+    parser.add_argument("--apply", action="store_true", help="Disabled: historical SQLite data import has been canceled.")
+    parser.add_argument("--approve-disposition-policy", action="store_true", help="Retained for compatibility; target-connected reconciliation is disabled.")
+    parser.add_argument("--approval-reference", default="", help="Retained for compatibility; target-connected reconciliation is disabled.")
     parser.add_argument("--plan-only", action="store_true", help="Print source row counts without requiring PostgreSQL connectivity.")
     args = parser.parse_args()
     try:
         backup = args.backup_dir or latest_backup()
         source = read_source(backup)
         mapped = target_rows(source)
+        if args.apply:
+            raise RuntimeError("Historical SQLite data import is canceled; --apply is disabled.")
         if args.plan_only:
             print(json.dumps({
                 "backup": str(backup), "mode": "plan-only",
@@ -982,18 +988,7 @@ def main() -> int:
                 "warnings": reconciliation_warnings(source),
             }, indent=2))
             return 0
-        url = os.getenv("DATABASE_URL", "").strip()
-        if url.startswith("postgresql://"):
-            url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
-        result = reconcile(
-            backup,
-            apply=args.apply,
-            url=url or None,
-            approve_disposition_policy=args.approve_disposition_policy,
-            approval_reference=args.approval_reference,
-        )
-        print(json.dumps(result, indent=2, default=str))
-        return 0
+        raise RuntimeError("Only source-only --plan-only mode is available; historical data reconciliation is canceled.")
     except Exception as exc:
         print(f"reconciliation failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1

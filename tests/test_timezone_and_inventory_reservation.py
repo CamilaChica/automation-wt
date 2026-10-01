@@ -3,11 +3,19 @@ import unittest
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from services.communication_service import CommunicationService
+from services.communication_service import CommunicationService, _next_customer_business_window
 from services.db_service import db_service
 
 
 class TestTimezoneAndInventoryReservation(unittest.TestCase):
+    def test_followup_friday_evening_rolls_forward_to_monday(self):
+        friday_evening = datetime(2026, 10, 2, 19, 30, tzinfo=ZoneInfo("America/Los_Angeles"))
+
+        due = _next_customer_business_window(friday_evening)
+
+        self.assertEqual(due.weekday(), 0)
+        self.assertEqual((due.hour, due.minute), (9, 0))
+
     def test_followup_due_time_is_inside_customer_business_window(self):
         service = CommunicationService()
         result = service.schedule_customer_followup(

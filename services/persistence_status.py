@@ -26,10 +26,11 @@ def persistence_status(
     checks = repository_checks or {}
     repositories_ready = all(checks.get(name) is True for name in required_repositories)
     migration_ready = bool(migration_status and migration_status.get("ready") is True)
-    postgres_primary = bool(
+    postgres_cutover_ready = bool(
         adapter_complete and postgres_healthy and schema_status["ready"]
-        and repositories_ready and migration_ready and runtime_cutover_enabled
+        and repositories_ready and migration_ready
     )
+    postgres_primary = postgres_cutover_ready and runtime_cutover_enabled
     return {
         "operational_store": (
             "postgresql_store_adapter_runtime_incomplete"
@@ -41,6 +42,7 @@ def persistence_status(
         "operational_schema_ready": bool(schema_status["ready"]),
         "operational_schema_missing_tables": schema_status["missing_tables"],
         "database_migration_status": migration_status or {"ready": False, "error": "not checked"},
+        "operational_postgres_cutover_ready": postgres_cutover_ready,
         "postgres_repository_checks": {
             name: checks.get(name, False) for name in sorted(required_repositories)
         },

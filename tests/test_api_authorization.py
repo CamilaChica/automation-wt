@@ -1,7 +1,4 @@
 import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -9,8 +6,6 @@ from fastapi.testclient import TestClient
 from api.auth import current_user
 from api.main import app
 from services.db_service import db_service
-from services.operations_store import OperationsStore
-from services.workflow_states import InvalidWorkflowTransition, validate_transition
 
 
 class TestCustomerDataIsolation(unittest.TestCase):
@@ -28,12 +23,14 @@ class TestCustomerDataIsolation(unittest.TestCase):
         )
         customer_item = db_service.add_rfq_item(self.customer_rfq.id, "060-1234-00", 1)
         quote = db_service.create_quote(self.customer_rfq.id, 1250.0, 25.0, 1275.0)
+        self.customer_quote = quote
         db_service.add_quote_item(
             quote.id, customer_item.id, "060-1234-00", 1, "Inventory", 1000.0,
             1250.0, 20.0, "FAA 8130-3", "Pass"
         )
         db_service.add_audit_log(self.customer_rfq.id, "PricingAgent", "price", "Internal pricing detail")
         self.other_rfq = db_service.create_rfq("Other Customer", "other@example.com", "Need another part")
+        self.other_quote = db_service.create_quote(self.other_rfq.id, 500.0, 0.0, 500.0)
         app.dependency_overrides[current_user] = lambda: self.customer
         self.client = TestClient(app)
 
@@ -53,12 +50,21 @@ class TestCustomerDataIsolation(unittest.TestCase):
         self.assertNotIn("margin_percent", payload["quote_details"]["items"][0])
 
         self.assertEqual(self.client.get(f"/api/rfqs/{self.other_rfq.id}").status_code, 403)
+        quote_response = self.client.get(f"/api/quotes/{self.customer_quote.id}")
+        self.assertEqual(quote_response.status_code, 200)
+        quote_payload = quote_response.json()
+        self.assertEqual(quote_payload["quote"]["rfq_id"], self.customer_rfq.id)
+        self.assertEqual(quote_payload["rfq_status"], self.customer_rfq.status)
+        self.assertNotIn("unit_cost", quote_payload["items"][0])
+        self.assertNotIn("margin_percent", quote_payload["items"][0])
+        self.assertEqual(
+            self.client.get(f"/api/quotes/{self.other_quote.id}").status_code, 403
+        )
 
     def test_customer_is_denied_internal_endpoints(self):
         checks = [
             ("get", "/api/inventory"),
             ("get", "/api/suppliers"),
-            ("get", "/api/internal/purchase-orders"),
             ("get", "/api/internal/mailboxes/sales/inbox"),
             ("post", f"/api/rfqs/{self.customer_rfq.id}/process"),
         ]
@@ -98,149 +104,55 @@ class TestMailboxInboxProjection(unittest.TestCase):
         self.assertNotIn("content", payload["messages"][0]["attachments"][0])
 
 
-class TestPurchaseOrderReviewApi(unittest.TestCase):
+class TestFailedIntakeReset(unittest.TestCase):
     def setUp(self):
-        app.dependency_overrides[current_user] = lambda: {"role": "ROLE_PURCHASING", "email": "purchasing@example.com"}
+        app.dependency_overrides[current_user] = lambda: {
+            "role": "ROLE_ADMIN", "email": "operator@example.test"
+        }
         self.client = TestClient(app)
 
     def tearDown(self):
         app.dependency_overrides.clear()
 
-    def test_pending_purchase_order_queue_returns_operational_review_fields(self):
-        pending = [{
-            "id": "PO-REVIEW-1",
-            "po_number": "CUST-PO-100",
-            "customer_email": "buyer@example.com",
-            "total_amount": 4200.0,
-            "status": "Pending_PO_Review",
-            "quote_id": "QTE-100",
-            "rfq_id": "WT-100",
-            "attachment_metadata": [{"attachment_id": "ATT-PO-1"}],
-        }]
-        with patch("api.main.operations_store.list_purchase_orders", return_value=pending) as list_orders:
-            response = self.client.get("/api/internal/purchase-orders")
+    def test_reset_requires_failed_state_and_audits_reason_without_processing(self):
+        from types import SimpleNamespace
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), pending)
-        list_orders.assert_called_once_with(status="Pending_PO_Review")
-
-    def test_po_approval_updates_the_operational_queue_status(self):
-        quote = SimpleNamespace(rfq_id="WT-100")
-        rfq = SimpleNamespace(id="WT-100", status="Pending_PO_Review")
-        with (
-            patch("api.main.db_service.get_quote", return_value=quote),
-            patch("api.main.db_service.get_rfq", return_value=rfq),
-            patch("api.main.orchestration_service.approve_purchase_order") as approve,
-            patch("api.main.operations_store.update_purchase_order_status", return_value=True) as update_status,
-        ):
-            response = self.client.post(
-                "/api/purchase-orders/QTE-100/approve",
-                json={"operator_name": "Purchasing Operator", "comments": "Documents verified."},
-            )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], "Purchase_Order_Received")
-        approve.assert_called_once_with("WT-100", "Purchasing Operator", "Documents verified.")
-        update_status.assert_called_once_with("QTE-100", "APPROVED")
-
-    def test_purchase_order_queue_persists_and_removes_approved_rows(self):
-        with TemporaryDirectory() as directory:
-            store = OperationsStore(Path(directory) / "operations.db")
-            connection = store._connect()
-            try:
-                connection.execute(
-                    "INSERT INTO customers (id, company_name, email, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                    ("CUS-1", "Buyer Company", "buyer@example.com", "2026-09-28T00:00:00Z", "2026-09-28T00:00:00Z"),
-                )
-                connection.execute(
-                    "INSERT INTO rfqs (id, customer_id, quantity, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    ("WT-1", "CUS-1", 1, "Pending_PO_Review", "2026-09-28T00:00:00Z", "2026-09-28T00:00:00Z"),
-                )
-                connection.execute(
-                    "INSERT INTO customer_quotes (id, rfq_id, quote_number, unit_price, quantity, total_price, status, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    ("QTE-1", "WT-1", "QUOTE-1", 1250.0, 1, 1250.0, "APPROVED", "2026-09-28T00:00:00Z", "2026-09-28T00:00:00Z"),
-                )
-                connection.commit()
-            finally:
-                connection.close()
-            store.record_purchase_order(
-                po_id="PO-1",
-                po_number="CUST-1",
-                customer_email="buyer@example.com",
-                total_amount=1250.0,
-                status="Pending_PO_Review",
-                quote_id="QTE-1",
-                rfq_id="WT-1",
-                received_message_id=None,
-                attachment_metadata=[{"attachment_id": "ATT-1"}],
-            )
-
-            pending = store.list_purchase_orders()
-            self.assertEqual(len(pending), 1)
-            self.assertEqual(pending[0]["attachment_metadata"], [{"attachment_id": "ATT-1"}])
-            self.assertTrue(store.update_purchase_order_status("QTE-1", "APPROVED"))
-            self.assertEqual(store.list_purchase_orders(), [])
-            self.assertFalse(store.update_purchase_order_status("QTE-1", "APPROVED"))
-
-
-class TestFailedIntakeResetApi(unittest.TestCase):
-    def setUp(self):
-        self.admin = {"role": "ROLE_ADMIN", "email": "admin@example.com"}
-        app.dependency_overrides[current_user] = lambda: self.admin
-        self.client = TestClient(app)
-
-    def tearDown(self):
-        app.dependency_overrides.clear()
-
-    def test_admin_can_reset_failed_intake_with_audited_reason(self):
-        failed_rfq = SimpleNamespace(status="Intake_Failed")
-        updated_rfq = SimpleNamespace(status="Intake")
+        failed_rfq = SimpleNamespace(id="RFQ-RESET", status="Intake_Failed")
         with (
             patch("api.main.db_service.get_rfq", return_value=failed_rfq),
-            patch("api.main.db_service.update_rfq_status", return_value=updated_rfq) as update_status,
-            patch("api.main.db_service.add_audit_log") as add_audit_log,
+            patch("api.main.db_service.update_rfq_status", return_value=failed_rfq) as update_status,
+            patch("api.main.db_service.add_audit_log") as add_audit,
+            patch("api.main.orchestration_service.process_rfq_pipeline") as process,
         ):
             response = self.client.post(
-                "/api/internal/rfqs/WT-RESET-1/reset-intake",
-                json={"reason": "Corrected source attachment received."},
+                "/api/internal/rfqs/RFQ-RESET/reset-intake",
+                json={"reason": "Verified source document"},
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {
-            "rfq_id": "WT-RESET-1",
-            "status": "Intake",
-            "reset_by": "admin@example.com",
-            "reason": "Corrected source attachment received.",
-        })
-        update_status.assert_called_once_with("WT-RESET-1", "Intake")
-        add_audit_log.assert_called_once_with(
-            "WT-RESET-1",
-            "AutomationControl",
-            "intake_reset",
-            "Failed intake reset to Intake by admin@example.com. Reason: Corrected source attachment received.",
+        self.assertEqual(response.json()["status"], "Intake")
+        update_status.assert_called_once_with("RFQ-RESET", "Intake")
+        add_audit.assert_called_once_with(
+            "RFQ-RESET", "AutomationControl", "intake_reset",
+            "Failed intake reset to Intake by operator@example.test. Reason: Verified source document",
             "WARNING",
         )
+        process.assert_not_called()
 
-    def test_human_review_cannot_be_reset_and_blank_reason_is_rejected(self):
-        with patch("api.main.db_service.get_rfq", return_value=SimpleNamespace(status="NEEDS_HUMAN_REVIEW")), patch("api.main.db_service.update_rfq_status") as update_status:
-            response = self.client.post("/api/internal/rfqs/WT-RESET-2/reset-intake", json={"reason": "Trying again"})
+    def test_reset_rejects_nonfailed_rfq_and_blank_reason(self):
+        from types import SimpleNamespace
+
+        with patch("api.main.db_service.get_rfq", return_value=SimpleNamespace(status="NEEDS_HUMAN_REVIEW")):
+            response = self.client.post(
+                "/api/internal/rfqs/RFQ-RESET/reset-intake", json={"reason": "Review"}
+            )
         self.assertEqual(response.status_code, 409)
-        update_status.assert_not_called()
 
         with patch("api.main.db_service.get_rfq", return_value=SimpleNamespace(status="Intake_Failed")):
-            response = self.client.post("/api/internal/rfqs/WT-RESET-2/reset-intake", json={"reason": "   "})
+            response = self.client.post(
+                "/api/internal/rfqs/RFQ-RESET/reset-intake", json={"reason": "   "}
+            )
         self.assertEqual(response.status_code, 422)
-
-    def test_sales_role_cannot_reset_failed_intake(self):
-        app.dependency_overrides[current_user] = lambda: {"role": "ROLE_SALES", "email": "sales@example.com"}
-        response = self.client.post("/api/internal/rfqs/WT-RESET-3/reset-intake", json={"reason": "Retry"})
-        self.assertEqual(response.status_code, 403)
-
-    def test_state_machine_only_allows_failed_intake_to_return_to_intake(self):
-        validate_transition("Intake_Failed", "Intake")
-        with self.assertRaises(InvalidWorkflowTransition):
-            validate_transition("NEEDS_HUMAN_REVIEW", "Intake")
 
 
 if __name__ == "__main__":

@@ -13,6 +13,20 @@ from services.supplier_inventory_parser import normalize_inventory_row, parse_su
 from services.communication_service import communication_service
 
 
+def has_inventory_table_attachments(message: dict[str, Any]) -> bool:
+    for attachment in message.get("attachments") or []:
+        content = attachment.get("content") or b""
+        if not isinstance(content, bytes):
+            continue
+        if parse_supplier_inventory_attachment(
+            str(attachment.get("filename") or "attachment"),
+            str(attachment.get("content_type") or "application/octet-stream"),
+            content,
+        ):
+            return True
+    return False
+
+
 def _save_offer(**offer: Any) -> Any:
     if operations_store.storage_engine == "postgresql":
         return operations_store.save_supplier_offer(**offer)
@@ -43,6 +57,7 @@ def import_inventory_attachments(message: dict[str, Any], mailbox: str) -> dict[
     source_message_id = str(message.get("internet_message_id") or message.get("message_id") or f"inventory-{uuid.uuid4().hex}")
     summaries = []
     imported_part_numbers: set[str] = set()
+    imported_items: list[dict[str, Any]] = []
 
     for attachment, content, blocks in parsed_files:
         filename = str(attachment.get("filename") or "attachment")
@@ -154,5 +169,199 @@ def import_inventory_attachments(message: dict[str, Any], mailbox: str) -> dict[
         "status": "Inventory_Table_Imported" if imported_part_numbers else "Inventory_Followup_Requested" if any(summary.get("supplier_followups") for summary in summaries) else "Inventory_Table_Rejected",
         "source_email_id": source_message_id,
         "part_numbers": sorted(imported_part_numbers),
+        "imports": summaries,
+    }
+
+
+async def import_inventory_attachments_async(
+    message: dict[str, Any], mailbox: str, repositories
+) -> dict[str, Any] | None:
+    """Import recognized tables through the request-scoped PostgreSQL repositories."""
+    parsed_files = []
+    for attachment in message.get("attachments") or []:
+        filename = str(attachment.get("filename") or "attachment")
+        content = attachment.get("content") or b""
+        if not isinstance(content, bytes):
+            continue
+        blocks = parse_supplier_inventory_attachment(
+            filename,
+            str(attachment.get("content_type") or "application/octet-stream"),
+            content,
+        )
+        if blocks:
+            parsed_files.append((attachment, content, blocks))
+    if not parsed_files:
+        return None
+
+    sender_header = str(message.get("from") or "")
+    sender_name, sender_email = parseaddr(sender_header)
+    sender_email = sender_email or (sender_header if "@" in sender_header else "")
+    supplier_name = sender_name or (
+        sender_email.rsplit("@", 1)[-1] if "@" in sender_email else "Unknown Supplier"
+    )
+    source_message_id = str(
+        message.get("internet_message_id")
+        or message.get("message_id")
+        or f"inventory-{uuid.uuid4().hex}"
+    )
+    summaries = []
+    imported_part_numbers: set[str] = set()
+    imported_items: list[dict[str, Any]] = []
+
+    for attachment, content, blocks in parsed_files:
+        filename = str(attachment.get("filename") or "attachment")
+        digest = hashlib.sha256(content).hexdigest()
+        if await repositories.inventory.import_for_source(source_message_id, digest):
+            summaries.append({"filename": filename, "skipped": True, "reason": "duplicate attachment"})
+            continue
+
+        normalized_rows = []
+        imported = rejected = 0
+        header_maps = {}
+        parser_names = set()
+        followups: dict[str, set[str]] = {}
+        for block in blocks:
+            block_name = str(block.get("sheet_name") or "table")
+            header_maps[block_name] = block.get("header_map") or {}
+            parser_names.add(str(block.get("parser") or "table"))
+            for row in block.get("rows") or []:
+                normalized, error = normalize_inventory_row(row)
+                missing_fields = [
+                    label for field, label in (
+                        ("unit_price", "unit price and currency"),
+                        ("lead_time_days", "lead time"),
+                        ("certificate_type", "release certificate and trace documentation"),
+                    )
+                    if normalized.get(field) in (None, "")
+                ]
+                if not error and missing_fields:
+                    error = "Supplier follow-up required: " + ", ".join(missing_fields)
+                    part_number = str(normalized.get("part_number") or "").strip().upper()
+                    if part_number:
+                        followups.setdefault(part_number, set()).update(missing_fields)
+                row_number = len(normalized_rows) + 1
+                normalized["source_row_number"] = normalized.get("row_number")
+                normalized.update({
+                    "id": f"SIR-{uuid.uuid4().hex[:24].upper()}",
+                    "row_number": row_number,
+                    "status": (
+                        "needs_supplier_followup"
+                        if error and error.startswith("Supplier follow-up required:")
+                        else "rejected" if error else "imported"
+                    ),
+                    "error": error,
+                })
+                if not error:
+                    try:
+                        async with repositories.supplier.session.begin_nested():
+                            await repositories.supplier.save_inventory_offer(
+                                supplier_name=supplier_name,
+                                supplier_email=sender_email or None,
+                                part_number=normalized["part_number"],
+                                quantity_available=normalized["quantity_available"],
+                                unit_cost=normalized.get("unit_price"),
+                                currency=normalized.get("currency") or "USD",
+                                certificate_type=normalized.get("certificate_type"),
+                                lead_time_days=normalized.get("lead_time_days"),
+                                condition_code=normalized.get("condition_code"),
+                                source_email_id=f"{source_message_id}:{digest[:12]}:{row_number}",
+                                confidence=1.0,
+                                description=normalized.get("description") or "",
+                                availability_location=normalized.get("availability_location"),
+                                trace_documents=(
+                                    [normalized["certificate_type"]]
+                                    if normalized.get("certificate_type") else []
+                                ),
+                            )
+                        imported_part_numbers.add(normalized["part_number"])
+                        imported_items.append({
+                            "part_number": normalized["part_number"],
+                            "quantity_available": normalized["quantity_available"],
+                            "unit_cost": normalized.get("unit_price"),
+                            "source_email_id": f"{source_message_id}:{digest[:12]}:{row_number}",
+                        })
+                        imported += 1
+                    except Exception as exc:
+                        normalized["status"] = "rejected"
+                        normalized["error"] = f"Inventory upsert failed: {type(exc).__name__}"
+                        rejected += 1
+                else:
+                    rejected += 1
+                normalized_rows.append(normalized)
+
+        import_status = (
+            "imported" if imported and not rejected
+            else "partial" if imported
+            else "awaiting_supplier_data" if followups
+            else "rejected"
+        )
+        import_record = await repositories.inventory.create_import(
+            id=f"INV-{uuid.uuid4().hex[:20].upper()}",
+            mailbox=mailbox,
+            source_message_id=source_message_id,
+            sender=sender_email or None,
+            filename=filename,
+            content_sha256=digest,
+            parser=",".join(sorted(parser_names)),
+            sheet_name=next(iter(header_maps), None),
+            header_map=header_maps,
+            rows_total=len(normalized_rows),
+            rows_imported=imported,
+            rows_rejected=rejected,
+            rejected_rows=[
+                {"row_number": row["row_number"], "error": row["error"], "raw_values": row.get("raw_values")}
+                for row in normalized_rows if row["status"] != "imported"
+            ],
+            status=import_status,
+        )
+        await repositories.inventory.add_rows([{
+            "id": row["id"],
+            "import_id": import_record.id,
+            "row_number": row["row_number"],
+            "part_number": row.get("part_number"),
+            "description": row.get("description"),
+            "quantity_available": row.get("quantity_available"),
+            "condition_code": row.get("condition_code"),
+            "unit_price": row.get("unit_price"),
+            "currency": row.get("currency"),
+            "lead_time_days": row.get("lead_time_days"),
+            "certificate_type": row.get("certificate_type"),
+            "availability_location": row.get("availability_location"),
+            "raw_values": row.get("raw_values") or {},
+            "status": row["status"],
+            "error": row.get("error"),
+        } for row in normalized_rows])
+
+        followup_results = []
+        if sender_email and followups:
+            reply_to = str(message.get("message_id") or message.get("internet_message_id") or "").strip() or None
+            for part_number, missing_fields in sorted(followups.items()):
+                result = await communication_service.request_missing_supplier_fields_async(
+                    repositories,
+                    recipient=sender_email,
+                    part_number=part_number,
+                    missing_fields=sorted(missing_fields),
+                    reply_to=reply_to,
+                    entity_id=import_record.id,
+                )
+                followup_results.append({"part_number": part_number, **result})
+        summaries.append({
+            "filename": filename,
+            "import_id": import_record.id,
+            "rows_total": len(normalized_rows),
+            "rows_imported": imported,
+            "rows_rejected": rejected,
+            "status": import_status,
+            "supplier_followups": followup_results,
+        })
+
+    return {
+        "success": True,
+        "status": "Inventory_Table_Imported" if imported_part_numbers else "Inventory_Followup_Requested" if any(summary.get("supplier_followups") for summary in summaries) else "Inventory_Table_Rejected",
+        "source_email_id": source_message_id,
+        "supplier_name": supplier_name,
+        "supplier_email": sender_email,
+        "part_numbers": sorted(imported_part_numbers),
+        "items": imported_items,
         "imports": summaries,
     }

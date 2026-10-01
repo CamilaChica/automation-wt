@@ -4,7 +4,7 @@ import asyncio
 import socket
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from services.async_database import _database_url, preflight_database
 from services.communication_service import CommunicationService
@@ -75,6 +75,69 @@ def test_postgres_send_path_only_enqueues_outbox(monkeypatch):
     assert result["transmission_status"] == "PENDING"
     assert result["outbox_id"] == "OUT-1"
     store.enqueue_outbox_message.assert_called_once()
+
+
+def test_customer_quote_enqueue_does_not_advance_quote_or_rfq_before_delivery(monkeypatch):
+    store = MagicMock()
+    store.storage_engine = "postgresql"
+    store.enqueue_outbox_message.return_value = {"id": "OUT-QUOTE-1", "status": "PENDING"}
+    quote = SimpleNamespace(id="QUOTE-1", rfq_id="RFQ-1", lead_time_days=2, valid_until="2026-10-29")
+    rfq = SimpleNamespace(id="RFQ-1", customer_name="Buyer", customer_email="buyer@example.test", thread_id=None)
+    quote_status = Mock()
+    rfq_status = Mock()
+    monkeypatch.setattr("services.communication_service.operations_store", store)
+    monkeypatch.setattr("services.communication_service.db_service.get_quote", Mock(return_value=quote))
+    monkeypatch.setattr("services.communication_service.db_service.get_quote_items", Mock(return_value=[]))
+    monkeypatch.setattr("services.communication_service.db_service.get_rfq", Mock(return_value=rfq))
+    monkeypatch.setattr("services.communication_service.db_service.get_rfq_items", Mock(return_value=[]))
+    monkeypatch.setattr("services.communication_service.db_service.update_quote_status", quote_status)
+    monkeypatch.setattr("services.communication_service.db_service.update_rfq_status", rfq_status)
+    monkeypatch.setattr("services.communication_service.prepare_and_validate_email", Mock(return_value=True))
+    monkeypatch.setattr(CommunicationService, "schedule_customer_followup", Mock())
+
+    result = CommunicationService().send_customer_quote(
+        recipient="buyer@example.test",
+        customer_name="Buyer",
+        quote_id="QUOTE-1",
+        quote_summary="Quote total: $100.00",
+    )
+
+    assert result["transmission_status"] == "PENDING"
+    quote_status.assert_not_called()
+    rfq_status.assert_not_called()
+
+
+def test_sent_outbox_finalization_advances_quote_and_rfq(monkeypatch):
+    store = MagicMock()
+    store.storage_engine = "postgresql"
+    store.claim_outbox_messages.return_value = [{
+        "id": "OUT-QUOTE-1", "mailbox": "sales", "recipient": "buyer@example.test",
+        "subject": "Quote", "payload": {"body": "Approved quote"}, "reply_to": None,
+        "entity_id": "QUOTE-1",
+    }]
+    quote = SimpleNamespace(id="QUOTE-1", rfq_id="RFQ-1", status="Approved")
+    rfq = SimpleNamespace(id="RFQ-1", status="Pending_Approval")
+    quote_transitions = []
+    rfq_transitions = []
+    monkeypatch.setattr("services.communication_service.operations_store", store)
+    monkeypatch.setattr("services.communication_service.db_service.get_quote", Mock(return_value=quote))
+    monkeypatch.setattr("services.communication_service.db_service.get_rfq", Mock(return_value=rfq))
+    monkeypatch.setattr(
+        "services.communication_service.db_service.update_quote_status",
+        lambda _quote_id, status: quote_transitions.append(status),
+    )
+    monkeypatch.setattr(
+        "services.communication_service.db_service.update_rfq_status",
+        lambda _rfq_id, status: rfq_transitions.append(status),
+    )
+    monkeypatch.setattr("services.communication_service.send_message", Mock())
+
+    result = CommunicationService().dispatch_outbox_once()
+
+    assert result == {"sent": 1, "failed": 0}
+    assert quote_transitions == ["Sent"]
+    assert rfq_transitions == ["Quote_Sent"]
+    store.mark_outbox_sent.assert_called_once_with("OUT-QUOTE-1")
 
 
 def test_outbox_dispatch_sends_only_after_claim_transaction_has_closed(monkeypatch):
@@ -157,10 +220,10 @@ def test_outbox_retries_throttling_and_server_errors_but_quarantines_timeouts(mo
     ambiguous_store = Store()
     monkeypatch.setattr("services.communication_service.operations_store", ambiguous_store)
     monkeypatch.setattr("services.communication_service.db_service.get_quote", lambda _quote_id: SimpleNamespace(
-        id="QUOTE-1", rfq_id="RFQ-1", status="Pending_Dispatch"
+        id="QUOTE-1", rfq_id="RFQ-1", status="Approved"
     ))
     monkeypatch.setattr("services.communication_service.db_service.get_rfq", lambda _rfq_id: SimpleNamespace(
-        id="RFQ-1", status="Quote_Dispatch_Pending"
+        id="RFQ-1", status="Pending_Approval"
     ))
     quote_transitions = []
     rfq_transitions = []
@@ -375,3 +438,14 @@ def test_reconciliation_dry_run_transaction_rolls_back_and_apply_commits():
     assert dry_run.rolled_back and not dry_run.committed
     assert finish_transaction(apply, apply=True) == "committed"
     assert apply.committed and not apply.rolled_back
+
+
+def test_historical_reconciliation_entrypoint_is_disabled():
+    from scripts.reconcile_sqlite_to_postgres import reconcile
+
+    try:
+        reconcile(Path("unused"), apply=True, url="postgresql://unused")
+    except RuntimeError as exc:
+        assert "Historical SQLite-to-PostgreSQL reconciliation is canceled" in str(exc)
+    else:
+        raise AssertionError("Canceled historical reconciliation must not connect or write")

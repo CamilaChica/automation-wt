@@ -9,10 +9,10 @@ import type {
   EmployeeProfile,
   EmployeeWorkHours,
   EmployeeWorkHoursReport,
-  FreightQuoteBody,
-  FreightQuoteResponse,
   FailedIntakeResetBody,
   FailedIntakeResetResponse,
+  FreightQuoteBody,
+  FreightQuoteResponse,
   IntakeResponse,
   LoginResponse,
   LlmHealthResponse,
@@ -25,7 +25,6 @@ import type {
   OtpRequestResponse,
   OtpVerifyBody,
   PurchaseOrderApprovalRequest,
-  PurchaseOrderReviewRecord,
   ShipmentEventBody,
   ShipmentSmsBody,
   ShipmentTraceResponse,
@@ -49,6 +48,12 @@ axios.defaults.timeout = 10000;
 axios.defaults.withCredentials = true;
 
 const AUTH_STORAGE_KEYS = ['wt_access_token', 'wt_role', 'wt_email'];
+let csrfToken: string | null = null;
+let csrfBootstrap: Promise<void> | null = null;
+
+for (const storage of [localStorage, sessionStorage]) {
+  storage.removeItem('wt_access_token');
+}
 
 function storedValue(key: string): string | null {
   return localStorage.getItem(key) || sessionStorage.getItem(key);
@@ -85,14 +90,12 @@ export const getApiErrorMessage = (error: unknown, fallback = 'The request could
   return typeof detail === 'string' ? detail : error.message || fallback;
 };
 
-axios.interceptors.request.use(config => {
-  const token = storedValue('wt_access_token');
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
-
 axios.interceptors.response.use(
-  response => response,
+  response => {
+    const token = response.headers['x-csrf-token'];
+    if (typeof token === 'string' && token) csrfToken = token;
+    return response;
+  },
   error => {
     if (import.meta.env.DEV) {
       console.warn('API request failed', {
@@ -102,12 +105,34 @@ axios.interceptors.response.use(
         hasRequest: Boolean(error.request),
       });
     }
+    const token = error.response?.headers?.['x-csrf-token'];
+    if (typeof token === 'string' && token) csrfToken = token;
     const path = requestPath(error.config?.url);
     const isOtpFlow = /\/auth\/otp\/(request|verify)$/.test(path);
     if (error.response?.status === 401 && !isOtpFlow) clearStoredAuth();
     return Promise.reject(error);
   },
 );
+
+axios.interceptors.request.use(async config => {
+  const method = (config.method || 'get').toUpperCase();
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && !csrfToken) {
+    csrfBootstrap ??= axios.get(`${API_BASE}/auth/csrf`, { withCredentials: true })
+      .then(response => {
+        const token = response.headers['x-csrf-token'];
+        if (typeof token === 'string' && token) csrfToken = token;
+      })
+      .finally(() => {
+        csrfBootstrap = null;
+      });
+    await csrfBootstrap;
+  }
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && csrfToken) {
+    config.headers.set('X-CSRF-Token', csrfToken);
+  }
+  delete config.headers.Authorization;
+  return config;
+});
 
 const rethrowAuthError = (error: unknown): never => {
   if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) {
@@ -352,7 +377,6 @@ export const apiService = {
   async verifyOtp(challengeId: string, code: string): Promise<LoginResponse> {
     const body: OtpVerifyBody = { challenge_id: challengeId, code };
     const res = await axios.post(`${API_BASE}/auth/otp/verify`, body);
-    localStorage.setItem('wt_access_token', res.data.access_token);
     localStorage.setItem('wt_role', res.data.role);
     localStorage.setItem('wt_email', res.data.email);
     return res.data;
@@ -386,7 +410,7 @@ export const apiService = {
   },
 
   isAuthenticated() {
-    return Boolean(storedValue('wt_access_token'));
+    return this.getRole() !== null;
   },
 
   async getRFQsWithSource(): Promise<{ rfqs: RFQ[]; isFallback: boolean }> {
@@ -410,7 +434,7 @@ export const apiService = {
   },
 
   async resetFailedIntake(rfqId: string, body: FailedIntakeResetBody): Promise<FailedIntakeResetResponse> {
-    const res = await axios.post<FailedIntakeResetResponse>(`${API_BASE}/internal/rfqs/${encodeURIComponent(rfqId)}/reset-intake`, body);
+    const res = await axios.post(`${API_BASE}/internal/rfqs/${encodeURIComponent(rfqId)}/reset-intake`, body);
     return res.data;
   },
 
@@ -493,10 +517,6 @@ export const apiService = {
       customer_email,
       attachment_ids,
     });
-    return res.data;
-  },
-  async getPendingPurchaseOrders(): Promise<PurchaseOrderReviewRecord[]> {
-    const res = await axios.get<PurchaseOrderReviewRecord[]>(`${API_BASE}/internal/purchase-orders`, { params: { status: 'Pending_PO_Review' } });
     return res.data;
   },
   async trackShipment(public_token: string): Promise<ShipmentTraceResponse> {

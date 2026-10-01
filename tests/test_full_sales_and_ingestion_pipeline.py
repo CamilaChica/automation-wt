@@ -124,16 +124,20 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
 
     def test_postgres_inventory_resume_uses_scoped_async_repository_reads(self):
         events = []
-        rfqs = [
-            SimpleNamespace(id="RFQ-MATCH", status="Supplier_Sourcing"),
-            SimpleNamespace(id="RFQ-NO-MATCH", status="Supplier_Sourcing"),
-            SimpleNamespace(id="RFQ-OTHER-STATE", status="Intake"),
-        ]
-        records = SimpleNamespace(list_by_payload_value=AsyncMock(side_effect=[
+        records = SimpleNamespace(
+            list_by_payload_value=AsyncMock(side_effect=[
+            {
+                "RFQ-MATCH": {"id": "RFQ-MATCH", "status": "Supplier_Sourcing"},
+                "RFQ-NO-MATCH": {"id": "RFQ-NO-MATCH", "status": "Supplier_Sourcing"},
+            },
             {"ITEM-MATCH": {"resolved_part_number": "PN-1"}},
             {"ITEM-OTHER": {"requested_part_number": "PN-2"}},
-        ]))
-        repositories = SimpleNamespace(records=records)
+            ]),
+            has_domain=AsyncMock(return_value=True),
+            record_automation_event=AsyncMock(side_effect=lambda **values: events.append(values) or "EVENT-1"),
+        )
+        rfq_repository = SimpleNamespace(list_by_status=AsyncMock(return_value=[]))
+        repositories = SimpleNamespace(records=records, rfq=rfq_repository)
 
         class Engine:
             disposed = False
@@ -161,20 +165,62 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
             patch("services.inventory_ingestion_worker.create_engine_from_environment", return_value=engine),
             patch("services.inventory_ingestion_worker.session_scope", fake_session_scope),
             patch("repositories.runtime.create_operational_repositories", return_value=repositories),
-            patch("services.db_service.db_service.list_rfqs_async", new=AsyncMock(return_value=rfqs)),
         ):
             worker._enqueue_waiting_rfqs("pn-1")
 
         self.assertEqual(
             records.list_by_payload_value.await_args_list,
             [
+                unittest.mock.call("rfqs", "status", "Supplier_Sourcing"),
                 unittest.mock.call("rfq_items", "rfq_id", "RFQ-MATCH"),
                 unittest.mock.call("rfq_items", "rfq_id", "RFQ-NO-MATCH"),
             ],
         )
+        rfq_repository.list_by_status.assert_not_awaited()
+        records.has_domain.assert_not_awaited()
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["entity_id"], "RFQ-MATCH")
         self.assertEqual(events[0]["idempotency_key"], "rfq-resume:RFQ-MATCH:PN-1")
+        self.assertTrue(engine.disposed)
+
+        events.clear()
+        engine.disposed = False
+        records.list_by_payload_value = AsyncMock(side_effect=[
+            {},
+            {"ITEM-RELATIONAL": {"requested_part_number": "PN-1"}},
+        ])
+        records.has_domain = AsyncMock(return_value=False)
+        rfq_repository.list_by_status = AsyncMock(return_value=[
+            SimpleNamespace(id="RFQ-RELATIONAL", status="Supplier_Sourcing"),
+        ])
+        with (
+            patch("services.inventory_ingestion_worker.operations_store", StoreStub()),
+            patch("services.inventory_ingestion_worker.create_engine_from_environment", return_value=engine),
+            patch("services.inventory_ingestion_worker.session_scope", fake_session_scope),
+            patch("repositories.runtime.create_operational_repositories", return_value=repositories),
+        ):
+            worker._enqueue_waiting_rfqs("PN-1")
+
+        rfq_repository.list_by_status.assert_awaited_once_with("Supplier_Sourcing")
+        records.has_domain.assert_awaited_once_with("rfqs")
+        self.assertEqual(events[0]["entity_id"], "RFQ-RELATIONAL")
+        self.assertTrue(engine.disposed)
+
+        events.clear()
+        engine.disposed = False
+        records.list_by_payload_value = AsyncMock(return_value={})
+        records.has_domain = AsyncMock(return_value=True)
+        rfq_repository.list_by_status.reset_mock()
+        with (
+            patch("services.inventory_ingestion_worker.operations_store", StoreStub()),
+            patch("services.inventory_ingestion_worker.create_engine_from_environment", return_value=engine),
+            patch("services.inventory_ingestion_worker.session_scope", fake_session_scope),
+            patch("repositories.runtime.create_operational_repositories", return_value=repositories),
+        ):
+            worker._enqueue_waiting_rfqs("PN-1")
+
+        rfq_repository.list_by_status.assert_not_awaited()
+        self.assertEqual(events, [])
         self.assertTrue(engine.disposed)
 
     def test_real_supplier_loader_parses_subject_part_number(self):

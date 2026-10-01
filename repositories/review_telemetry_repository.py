@@ -889,8 +889,8 @@ class PostgresReviewTelemetryRepository:
         with self._begin() as connection:
             row = connection.execute(text(
                 "INSERT INTO outbox_messages "
-                "(id, deduplication_key, entity_id, mailbox, recipient, subject, payload, reply_to, communication_task_id, status, max_retries, available_at, created_at) "
-                "VALUES (:id, :key, :entity_id, :mailbox, :recipient, :subject, CAST(:payload AS json), :reply_to, :task_id, 'PENDING', :max_retries, now(), now()) "
+                "(id, deduplication_key, entity_id, mailbox, recipient, subject, payload, reply_to, communication_task_id, status, retry_count, max_retries, available_at, created_at) "
+                "VALUES (:id, :key, :entity_id, :mailbox, :recipient, :subject, CAST(:payload AS json), :reply_to, :task_id, 'PENDING', 0, :max_retries, now(), now()) "
                 "ON CONFLICT (deduplication_key) DO UPDATE SET deduplication_key = EXCLUDED.deduplication_key "
                 "RETURNING id, status, retry_count, created_at"
             ), {
@@ -975,15 +975,16 @@ class PostgresReviewTelemetryRepository:
 
     def recover_stale_outbox_messages(self, *, sending_timeout_seconds: int = 300) -> int:
         with self._begin() as connection:
-            result = connection.execute(text(
+            recovered_count = connection.execute(text(
                 "WITH recovered AS (UPDATE outbox_messages SET status = 'MANUAL_REVIEW_REQUIRED', sending_started_at = NULL, "
                 "error_message = 'Delivery outcome unknown after stale SENDING lease; manual verification required' "
                 "WHERE status = 'SENDING' AND sending_started_at < now() - make_interval(secs => :timeout) "
-                "RETURNING communication_task_id) UPDATE communication_tasks SET status = 'manual_review_required', "
+                "RETURNING communication_task_id), updated_tasks AS (UPDATE communication_tasks SET status = 'manual_review_required', "
                 "last_error = 'Outbox delivery outcome unknown; manual verification required' "
-                "WHERE id IN (SELECT communication_task_id FROM recovered WHERE communication_task_id IS NOT NULL)"
-            ), {"timeout": max(1, int(sending_timeout_seconds))})
-            return int(result.rowcount or 0)
+                "WHERE id IN (SELECT communication_task_id FROM recovered WHERE communication_task_id IS NOT NULL) "
+                "RETURNING id) SELECT count(*) FROM recovered"
+            ), {"timeout": max(1, int(sending_timeout_seconds))}).scalar_one()
+            return int(recovered_count)
 
     def upsert_supplier(self, supplier_name: str, supplier_email: str | None = None, phone: str | None = None, approval_status: str = "Pending") -> str:
         supplier_id = f"SUP-{uuid.uuid5(uuid.NAMESPACE_URL, (supplier_email or supplier_name).strip().lower()).hex[:16].upper()}"

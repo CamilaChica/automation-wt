@@ -63,6 +63,26 @@ class OrchestrationService:
         self.pricing_agent = PricingAgent()
         self.quote_agent = QuoteGenerationAgent()
         self.comm_agent = CustomerCommunicationAgent()
+        self._pipeline_state_cache: Dict[str, Dict[str, Any]] = {}
+
+    def _load_pipeline_state(self, rfq_id: str) -> Dict[str, Any]:
+        if operations_store.storage_engine == "postgresql":
+            return operations_store.get_operational_record(
+                "rfq_pipeline_state", rfq_id
+            ) or {}
+        return dict(self._pipeline_state_cache.get(rfq_id, {}))
+
+    def _save_pipeline_state(self, rfq_id: str, **updates: Any) -> Dict[str, Any]:
+        state = self._load_pipeline_state(rfq_id)
+        state.update(updates)
+        if operations_store.storage_engine == "postgresql":
+            with operations_store.transaction():
+                operations_store.save_operational_record(
+                    "rfq_pipeline_state", rfq_id, state
+                )
+        else:
+            self._pipeline_state_cache[rfq_id] = state
+        return state
 
     @staticmethod
     def _requested_certification(raw_text: str) -> str:
@@ -379,6 +399,8 @@ class OrchestrationService:
         Steps: Intake -> Validate -> Inventory -> Supplier Sourcing -> Compliance -> Pricing -> Quote Gen.
         Halts on any validation issues, compliance blocks, or pricing anomalies.
         """
+        pipeline_state = self._load_pipeline_state(rfq_id)
+        allocated_sources = dict(pipeline_state.get("allocated_sources") or {})
         rfq = db_service.get_rfq(rfq_id)
         if not rfq:
             return {"error": f"RFQ {rfq_id} not found."}
@@ -534,13 +556,14 @@ class OrchestrationService:
             rfq = db_service.update_rfq_status(rfq_id, "Inventory_Lookup")
 
         # 3. Inventory & Sourcing Check Stage
-        allocated_sources = {}  # item_id -> {source, unit_cost, certificate_type, has_full_trace, details}
-
         if rfq.status == "Inventory_Lookup" or rfq.status == "Supplier_Sourcing":
             items = db_service.get_rfq_items(rfq_id)
             db_service.add_audit_log(rfq_id, "Orchestrator", "transition", "Checking internal inventory allocations.")
 
             for item in items:
+                if item.id in allocated_sources:
+                    continue
+
                 # ── Query internal stock via InventoryAgent ──────────────────
                 inv_res = await self.inventory_agent.execute({
                     "part_number": item.resolved_part_number,
@@ -639,6 +662,9 @@ class OrchestrationService:
                         "certificate_type": best_quote["certificate_type"],
                         "has_full_trace": True
                     }
+                    pipeline_state = self._save_pipeline_state(
+                        rfq_id, allocated_sources=allocated_sources
+                    )
 
                     db_service.add_audit_log(
                         rfq_id, "SupplierDiscoveryAgent", "supplier_search",
@@ -660,6 +686,9 @@ class OrchestrationService:
                         "certificate_type": inv_data.get("certificate_type", "None"),
                         "has_full_trace":   inv_data.get("has_full_trace", True),
                     }
+                    pipeline_state = self._save_pipeline_state(
+                        rfq_id, allocated_sources=allocated_sources
+                    )
                     db_service.add_audit_log(
                         rfq_id, "InventoryAgent", "stock_lookup",
                         (
@@ -676,6 +705,19 @@ class OrchestrationService:
         if rfq.status == "Compliance_Check":
             db_service.add_audit_log(rfq_id, "Orchestrator", "transition", "Running regulatory compliance checks.")
             items = db_service.get_rfq_items(rfq_id)
+            missing_allocations = [
+                item.id for item in items if item.id not in allocated_sources
+            ]
+            if missing_allocations:
+                message = (
+                    "Cannot resume compliance checks because saved source allocations "
+                    "are missing for one or more RFQ items."
+                )
+                db_service.add_audit_log(
+                    rfq_id, "Orchestrator", "pipeline_resume_blocked", message,
+                    "FAILURE", json.dumps({"missing_item_ids": missing_allocations}),
+                )
+                return {"status": rfq.status, "error": message}
             
             for item in items:
                 source_details = allocated_sources.get(item.id, {})
@@ -691,6 +733,9 @@ class OrchestrationService:
                 })
                 
                 source_details["compliance_status"] = comp_res.data.get("compliance_status", "Pass")
+                pipeline_state = self._save_pipeline_state(
+                    rfq_id, allocated_sources=allocated_sources
+                )
                 
                 if not comp_res.success:
                     db_service.update_rfq_status(rfq_id, "Compliance_Blocked")
@@ -734,6 +779,19 @@ class OrchestrationService:
         if rfq.status == "Pricing":
             db_service.add_audit_log(rfq_id, "Orchestrator", "transition", "Executing pricing margins engine.")
             items = db_service.get_rfq_items(rfq_id)
+            missing_allocations = [
+                item.id for item in items if item.id not in allocated_sources
+            ]
+            if missing_allocations:
+                message = (
+                    "Cannot safely resume pricing because saved source allocations "
+                    "are missing for one or more RFQ items."
+                )
+                db_service.add_audit_log(
+                    rfq_id, "Orchestrator", "pipeline_resume_blocked", message,
+                    "FAILURE", json.dumps({"missing_item_ids": missing_allocations}),
+                )
+                return {"status": rfq.status, "error": message}
             
             has_low_margin_escalation = False
             margin_esc_rule = None
@@ -781,16 +839,29 @@ class OrchestrationService:
                     "attachments": getattr(item, "attachments", [])
                 })
                 
-            # Generate actual Quote structures
-            rfq = db_service.update_rfq_status(rfq_id, "Quote_Generation")
-            
-            # Save state context to proceed to Quote Gen
             context = {
                 "quote_items_draft": quote_items_draft,
                 "shipping_total": 0.0,
                 "has_low_margin_escalation": has_low_margin_escalation,
                 "margin_esc_rule": margin_esc_rule
             }
+            if margin_esc_rule is not None and hasattr(margin_esc_rule, "model_dump"):
+                context["margin_esc_rule"] = margin_esc_rule.model_dump(mode="json")
+            self._save_pipeline_state(rfq_id, quote_generation=context)
+            rfq = db_service.update_rfq_status(rfq_id, "Quote_Generation")
+        elif rfq.status == "Quote_Generation":
+            context = pipeline_state.get("quote_generation")
+            if not isinstance(context, dict) or not isinstance(
+                context.get("quote_items_draft"), list
+            ):
+                message = (
+                    "Cannot resume quote generation because the saved pricing draft "
+                    "is missing. Return this RFQ to operator review before continuing."
+                )
+                db_service.add_audit_log(
+                    rfq_id, "Orchestrator", "pipeline_resume_blocked", message, "FAILURE"
+                )
+                return {"status": rfq.status, "error": message}
         else:
             return {"status": rfq.status, "message": "RFQ is not in a pricing-ready state."}
 
@@ -946,6 +1017,142 @@ class OrchestrationService:
             },
             "reply_to": reply_to,
         }, context={"pipeline_state": pipeline_state})
+
+    async def approve_and_queue_quote_async(
+        self,
+        repositories,
+        quote_id: str,
+        operator_name: str,
+        overrides: Optional[List[Dict[str, Any]]] = None,
+        comments: Optional[str] = None,
+        expected_version: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        quote_payload = await repositories.records.get("quotes", quote_id)
+        if quote_payload is None:
+            return {"error": f"Quote {quote_id} not found.", "status_code": 404}
+        if quote_payload.get("status") in {"Approved", "Pending_Dispatch", "Dispatch_Pending", "Sent"}:
+            return {"error": f"Quote {quote_id} has already been approved or dispatched."}
+
+        rfq_id = str(quote_payload.get("rfq_id") or "")
+        rfq = await db_service.get_rfq_async(repositories, rfq_id)
+        if rfq is None:
+            return {"error": f"RFQ {rfq_id} not found.", "status_code": 404}
+        if quote_payload.get("status") == "Sent" or rfq.status == "Quote_Sent":
+            return {
+                "status": "Quote_Sent",
+                "quote_id": quote_id,
+                "message": "Quote was already dispatched autonomously.",
+            }
+
+        quote_items = list((await repositories.records.list_by_payload_value(
+            "quote_items", "quote_id", quote_id
+        )).values())
+        quote_items.sort(key=lambda item: str(item.get("id") or ""))
+        if not quote_items:
+            return {"error": "Persisted quote item data is required before dispatch."}
+
+        requested_overrides = overrides or []
+        override_map = {str(item.get("quote_item_id")): float(item["unit_price"]) for item in requested_overrides}
+        if len(override_map) != len(requested_overrides):
+            return {"error": "Each quote item can be overridden only once."}
+        item_ids = {str(item.get("id")) for item in quote_items}
+        if set(override_map) - item_ids:
+            return {"error": "An override references an item outside this quote."}
+
+        updated_items = []
+        override_audit_messages = []
+        for original in quote_items:
+            item = dict(original)
+            item_id = str(item.get("id"))
+            if item_id in override_map:
+                unit_price = override_map[item_id]
+                unit_cost = float(item.get("unit_cost") or 0)
+                margin = round(((unit_price - unit_cost) / unit_price) * 100, 2) if unit_price else 0.0
+                item["unit_price"] = unit_price
+                item["margin_percent"] = margin
+                override_audit_messages.append(
+                    f"Operator override on item '{item.get('part_number', '')}': "
+                    f"set price to ${unit_price:.2f} (new margin {margin}%)."
+                )
+            updated_items.append(item)
+
+        quote_payload = dict(quote_payload)
+        if requested_overrides:
+            subtotal = round(sum(
+                int(item.get("quantity") or 0) * float(item.get("unit_price") or 0)
+                for item in updated_items
+            ), 2)
+            quote_payload["subtotal"] = subtotal
+            quote_payload["total_amount"] = round(
+                subtotal + float(quote_payload.get("shipping_cost") or 0), 2
+            )
+        version = int(quote_payload.get("version") or 1)
+        if expected_version is not None and expected_version != version:
+            return {"error": f"Quote {quote_id} was updated by another operation."}
+
+        quote_details = {
+            "quote_id": quote_id,
+            "subtotal": quote_payload.get("subtotal", quote_payload.get("total_amount", 0)),
+            "shipping_cost": quote_payload.get("shipping_cost", 0),
+            "total_amount": quote_payload.get("total_amount", 0),
+            "items": [{
+                "part_number": item.get("part_number", ""),
+                "quantity": item.get("quantity", 0),
+                "uom": item.get("uom", "EA"),
+                "unit_price": item.get("unit_price", 0),
+                "attachments": item.get("attachments", []),
+            } for item in updated_items],
+        }
+        draft_result = await self.comm_agent.execute({
+            "customer_email": rfq.customer_email,
+            "customer_name": rfq.customer_name,
+            "quote_details": quote_details,
+            "reply_to": rfq.thread_id,
+        }, context={"draft_only": True})
+        if not draft_result.success:
+            return {"error": draft_result.error_message or "Quote email drafting failed."}
+
+        draft = draft_result.data
+        if not await repositories.quote.approve_for_dispatch(
+            quote_id=quote_id,
+            rfq_id=rfq_id,
+            expected_version=version,
+            operator_name=operator_name,
+            comments=comments,
+            quote_payload=quote_payload,
+            item_payloads=updated_items,
+            override_audit_messages=override_audit_messages,
+        ):
+            return {"error": f"Quote {quote_id} is no longer awaiting approval."}
+
+        telemetry = dict(draft["telemetry"])
+        await repositories.records.record_llm_telemetry(**telemetry)
+        await repositories.records.record_automation_event(**draft["automation_event"])
+        transmission = await communication_service.enqueue_customer_quote_async(
+            repositories,
+            recipient=rfq.customer_email,
+            quote_id=quote_id,
+            rfq_id=rfq_id,
+            subject=draft["subject"],
+            body=draft["formatted_body"],
+            quote_items=updated_items,
+            reply_to=rfq.thread_id,
+        )
+        await communication_service.schedule_customer_followups_async(
+            repositories,
+            recipient=rfq.customer_email,
+            customer_name=rfq.customer_name,
+            quote_id=quote_id,
+            part_number=str(updated_items[0].get("part_number") or "the quoted part"),
+            reply_to=rfq.thread_id,
+        )
+        await repositories.rfq.session.flush()
+        return {
+            "status": "Quote_Dispatch_Pending",
+            "quote_id": quote_id,
+            "transmission_status": transmission["transmission_status"],
+            "email_body": draft["formatted_body"],
+        }
 
     async def approve_and_send_quote(
         self,

@@ -4,12 +4,12 @@ import type {
   ApiStatus,
   ExtractionReviewDecisionBody,
   ExtractionReviewResponse,
-  FailedIntakeResetBody,
-  FailedIntakeResetResponse,
   CarrierTrackingBody,
   CreateShipmentBody,
   FreightQuoteBody,
   FreightQuoteResponse,
+  FailedIntakeResetBody,
+  FailedIntakeResetResponse,
   FulfillmentStage,
   IntakeRequestBody,
   LlmHealthResponse,
@@ -19,7 +19,6 @@ import type {
   MailboxMessageBody,
   MailboxSendResponse,
   PurchaseOrderApprovalRequest,
-  PurchaseOrderReviewRecord,
   ShipmentTraceResponse,
   ShipmentEventBody,
   ShipmentSmsBody,
@@ -281,12 +280,11 @@ export function useProcessRFQ() {
 }
 
 export function useResetFailedIntake() {
-  return useApiMutation((input: { rfqId: string; body: FailedIntakeResetBody }): Promise<FailedIntakeResetResponse> =>
-    apiService.resetFailedIntake(input.rfqId, input.body), [
-      apiQueryKeys.rfqs,
-      'rfq-detail',
-      apiQueryKeys.automationEvents,
-    ]);
+  return useApiMutation(
+    (input: { rfqId: string; body: FailedIntakeResetBody }): Promise<FailedIntakeResetResponse> =>
+      apiService.resetFailedIntake(input.rfqId, input.body),
+    [apiQueryKeys.rfqs, 'rfq-detail', apiQueryKeys.automationEvents],
+  );
 }
 
 export function useRejectQuote() {
@@ -376,12 +374,6 @@ export function useSetAutomationPause() {
           apiQueryKeys.mailboxInbox('purchasing'),
         ]);
     }
-
-      export function usePendingPurchaseOrders(enabled = true) {
-        return useApiQuery<PurchaseOrderReviewRecord[]>(apiQueryKeys.purchaseOrders, async () => ({
-          data: await apiService.getPendingPurchaseOrders(),
-        }), enabled);
-      }
 
       export function useApprovePurchaseOrder() {
         return useApiMutation((input: { quoteId: string; body: PurchaseOrderApprovalRequest }) =>

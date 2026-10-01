@@ -1,11 +1,13 @@
 import os
 import tempfile
 import unittest
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import patch
 
 from services.operations_store import OperationsStore
 from services import supplier_inventory_importer
+from services import rfq_resume_worker
 
 
 class TestPhaseOneLocalPersistence(unittest.TestCase):
@@ -93,6 +95,37 @@ class TestPhaseOneLocalPersistence(unittest.TestCase):
             self.assertEqual([event["id"] for event in claimed], [event_id])
             self.assertEqual(claimed[0]["attempts"], 1)
             self.assertEqual(store.claim_automation_events(event_type="resume_waiting_rfq", limit=1), [])
+
+    def test_rfq_resume_worker_dispatches_new_intake_events(self):
+        calls = []
+        event = {
+            "id": "AUT-NEW-1", "event_type": "process_new_rfq", "entity_id": "RFQ-NEW-1",
+            "attempts": 1, "max_attempts": 3, "result": "{}",
+        }
+
+        class QueueStub:
+            def claim_automation_events(self, *, event_type: str, limit: int):
+                calls.append(("claim", event_type, limit))
+                return [event] if event_type == "process_new_rfq" else []
+
+            def update_automation_event(self, event_id, *, status, attempts, result=None, error=None):
+                calls.append(("update", event_id, status, attempts, result, error))
+
+        class OrchestratorStub:
+            async def process_rfq_pipeline(self, rfq_id):
+                calls.append(("process", rfq_id))
+                return {"status": "Pending_Internal_Review"}
+
+        with (
+            patch.object(rfq_resume_worker, "operations_store", QueueStub()),
+            patch("services.orchestration_service.orchestration_service", OrchestratorStub()),
+        ):
+            result = rfq_resume_worker.dispatch_once(limit=4)
+
+        self.assertEqual(result, {"succeeded": 1, "failed": 0})
+        self.assertIn(("claim", "process_new_rfq", 4), calls)
+        self.assertIn(("process", "RFQ-NEW-1"), calls)
+        self.assertTrue(any(call[:3] == ("update", "AUT-NEW-1", "SUCCEEDED") for call in calls))
 
     def test_stable_dedupe_archive_audit_and_inventory_rows_use_local_sqlite(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {

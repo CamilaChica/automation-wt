@@ -1,10 +1,12 @@
 import os
 import sqlite3
+import tempfile
 import unittest
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from api import auth
 from api.auth import request_otp
 from api.main import app
 
@@ -13,7 +15,11 @@ class ProductionAuthConfigTests(unittest.TestCase):
     def setUp(self):
         self.original_env = os.environ.get("WT_AUTH_ENV")
         self.original_secret = os.environ.get("WT_AUTH_SECRET")
-        self.db_path = os.getenv("WT_AUTH_DB", "data/winged_tycoons_auth.db")
+        self.original_auth_db_path = auth.AUTH_DB_PATH
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, "auth.db")
+        auth.AUTH_DB_PATH = self.db_path
+        auth.init_auth_db()
         connection = sqlite3.connect(self.db_path)
         try:
             connection.execute("DELETE FROM otp_challenges")
@@ -42,10 +48,14 @@ class ProductionAuthConfigTests(unittest.TestCase):
             os.environ.pop("WT_AUTH_SECRET", None)
         else:
             os.environ["WT_AUTH_SECRET"] = self.original_secret
+        auth.AUTH_DB_PATH = self.original_auth_db_path
+        self.temp_dir.cleanup()
 
     def test_production_mode_never_returns_plaintext_otp(self):
         with patch.dict(os.environ, {"WT_AUTH_ENV": "production", "WT_AUTH_SECRET": "test-secret"}, clear=False):
-            with patch("api.main.send_otp_email") as mock_send_email:
+            with patch("api.main.check_shared_rate_limit", return_value=(True, 0)), patch(
+                "api.main.send_otp_email"
+            ) as mock_send_email:
                 client = TestClient(app)
                 response = client.post(
                     "/api/auth/otp/request",
@@ -53,11 +63,14 @@ class ProductionAuthConfigTests(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 200)
                 self.assertNotIn("development_otp", response.json())
+                self.assertNotIn("access_token", response.json())
                 self.assertEqual(mock_send_email.call_count, 1)
 
     def test_production_verify_sets_secure_cookie(self):
         with patch.dict(os.environ, {"WT_AUTH_ENV": "production", "WT_AUTH_SECRET": "test-secret"}, clear=False):
-            with patch("api.main.send_otp_email"):
+            with patch("api.main.check_shared_rate_limit", return_value=(True, 0)), patch(
+                "api.main.send_otp_email"
+            ):
                 client = TestClient(app)
                 challenge_id, code = request_otp("camila+prod2@wingedtycoons.com", "ROLE_INTERNAL", "Camila")
                 response = client.post(
@@ -68,7 +81,7 @@ class ProductionAuthConfigTests(unittest.TestCase):
                 set_cookie = response.headers.get("set-cookie", "")
                 self.assertIn("wt_session=", set_cookie)
                 self.assertIn("Secure", set_cookie)
-                self.assertIn("SameSite=Strict", set_cookie)
+                self.assertIn("samesite=none", set_cookie.lower())
 
     def test_internal_sign_in_rejects_non_wingedtycoons_domains(self):
         with patch.dict(os.environ, {"WT_AUTH_ENV": "production", "WT_AUTH_SECRET": "test-secret"}, clear=False):

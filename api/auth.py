@@ -4,11 +4,13 @@ import os
 import secrets
 import sqlite3
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Iterator, Optional
 
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from psycopg2 import connect as postgres_connect
+from psycopg2.extras import RealDictCursor
 
 AUTH_DB_PATH = os.getenv("WT_AUTH_DB", "data/winged_tycoons_auth.db")
 INTERNAL_DOMAIN = "wingedtycoons.com"
@@ -16,16 +18,60 @@ OTP_TTL_SECONDS = 5 * 60
 SESSION_TTL_SECONDS = 8 * 60 * 60
 MAX_OTP_REQUESTS_PER_HOUR = 3
 MAX_OTP_ATTEMPTS = 5
+OTP_LOCK_SECONDS = 15 * 60
 AUTH_ENV = os.getenv("WT_AUTH_ENV", "development").strip().lower()
+AUTH_STORAGE_BACKEND = os.getenv(
+    "WT_AUTH_STORAGE_BACKEND",
+    "postgres" if AUTH_ENV == "production" else "sqlite",
+).strip().lower()
+if AUTH_STORAGE_BACKEND not in {"sqlite", "postgres"}:
+    raise RuntimeError("WT_AUTH_STORAGE_BACKEND must be 'sqlite' or 'postgres'.")
+if AUTH_ENV == "production" and AUTH_STORAGE_BACKEND != "postgres":
+    raise RuntimeError("Production authentication requires WT_AUTH_STORAGE_BACKEND=postgres.")
 AUTH_SECRET = os.getenv("WT_AUTH_SECRET", "").strip()
 if AUTH_ENV == "production" and len(AUTH_SECRET) < 32:
     raise RuntimeError("WT_AUTH_SECRET must be at least 32 characters in production.")
 if not AUTH_SECRET:
     AUTH_SECRET = "development-only-change-this-secret"
-security = HTTPBearer(auto_error=False)
-
 ROLE_CUSTOMER = "ROLE_CUSTOMER"
 ROLE_INTERNAL = "ROLE_INTERNAL"
+
+
+class _PostgresConnection:
+    def __init__(self, connection):
+        self.connection = connection
+        self.cursor = None
+
+    def execute(self, query: str, parameters: tuple = ()):
+        if self.cursor:
+            self.cursor.close()
+        self.cursor = self.connection.cursor(cursor_factory=RealDictCursor)
+        self.cursor.execute(query.replace("?", "%s"), parameters)
+        return self.cursor
+
+    def commit(self) -> None:
+        self.connection.commit()
+
+    def rollback(self) -> None:
+        self.connection.rollback()
+
+    def close(self) -> None:
+        if self.cursor:
+            self.cursor.close()
+        self.connection.close()
+
+
+def _postgres_dsn() -> str:
+    value = os.getenv("DATABASE_URL", "").strip()
+    if not value:
+        raise RuntimeError("DATABASE_URL is required for PostgreSQL authentication storage.")
+    from services.database_safety import validate_development_database_target
+
+    validate_development_database_target(value, AUTH_ENV)
+    for prefix in ("postgresql+asyncpg://", "postgresql+psycopg2://", "postgres://"):
+        if value.startswith(prefix):
+            return value.replace(prefix, "postgresql://", 1)
+    return value
 
 
 def normalize_role(role: str) -> str:
@@ -37,14 +83,50 @@ def normalize_role(role: str) -> str:
     return normalized
 
 
-def _connect() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(AUTH_DB_PATH) or ".", exist_ok=True)
-    connection = sqlite3.connect(AUTH_DB_PATH)
-    connection.row_factory = sqlite3.Row
-    return connection
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection | _PostgresConnection]:
+    if AUTH_STORAGE_BACKEND == "postgres":
+        connection = _PostgresConnection(
+            postgres_connect(
+                _postgres_dsn(),
+                connect_timeout=3,
+                cursor_factory=RealDictCursor,
+            )
+        )
+    else:
+        os.makedirs(os.path.dirname(AUTH_DB_PATH) or ".", exist_ok=True)
+        connection = sqlite3.connect(AUTH_DB_PATH)
+        connection.row_factory = sqlite3.Row
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def init_auth_db() -> None:
+    if AUTH_STORAGE_BACKEND == "postgres":
+        with _connect() as connection:
+            tables = {
+                row["table_name"]
+                for row in connection.execute(
+                    """SELECT table_name FROM information_schema.tables
+                    WHERE table_schema = current_schema()
+                    AND table_name IN (
+                        'auth_users', 'auth_otp_challenges', 'auth_sessions', 'auth_audit_events'
+                    )"""
+                ).fetchall()
+            }
+        expected = {"auth_users", "auth_otp_challenges", "auth_sessions", "auth_audit_events"}
+        if tables != expected:
+            raise RuntimeError(
+                "PostgreSQL authentication schema is not ready; apply the reviewed Alembic migration."
+            )
+        return
+
     with _connect() as connection:
         connection.executescript(
             """
@@ -67,7 +149,8 @@ def init_auth_db() -> None:
                 attempt_count INTEGER NOT NULL DEFAULT 0,
                 request_window_started INTEGER NOT NULL,
                 request_count INTEGER NOT NULL DEFAULT 1,
-                locked_until INTEGER
+                locked_until INTEGER,
+                consumed_at INTEGER
             );
             CREATE TABLE IF NOT EXISTS sessions (
                 token_hash TEXT PRIMARY KEY,
@@ -85,6 +168,11 @@ def init_auth_db() -> None:
             );
             """
         )
+        challenge_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(otp_challenges)")
+        }
+        if "consumed_at" not in challenge_columns:
+            connection.execute("ALTER TABLE otp_challenges ADD COLUMN consumed_at INTEGER")
         existing = connection.execute(
             "SELECT id FROM users WHERE email = ?", ("camila@wingedtycoons.com",)
         ).fetchone()
@@ -101,6 +189,10 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _table(name: str) -> str:
+    return f"auth_{name}" if AUTH_STORAGE_BACKEND == "postgres" else name
+
+
 def _hash(value: str) -> str:
     return hmac.new(AUTH_SECRET.encode(), value.encode(), hashlib.sha256).hexdigest()
 
@@ -108,7 +200,7 @@ def _hash(value: str) -> str:
 def _user_row(email: str) -> Optional[sqlite3.Row]:
     with _connect() as connection:
         return connection.execute(
-            "SELECT * FROM users WHERE email = ? AND is_active = 1", (email.lower(),)
+            f"SELECT * FROM {_table('users')} WHERE email = ? AND is_active = TRUE", (email.lower(),)
         ).fetchone()
 
 
@@ -128,7 +220,7 @@ def request_otp(email: str, role: str, full_name: str = "") -> tuple[str, str]:
 
     with _connect() as connection:
         window = connection.execute(
-            """SELECT COUNT(*) AS count FROM otp_challenges
+            f"""SELECT COUNT(*) AS count FROM {_table('otp_challenges')}
             WHERE email = ? AND request_window_started > ?""",
             (normalized, now - 3600),
         ).fetchone()["count"]
@@ -137,16 +229,20 @@ def request_otp(email: str, role: str, full_name: str = "") -> tuple[str, str]:
 
         if role == "ROLE_CUSTOMER" and not user:
             connection.execute(
-                """INSERT INTO users
+                f"""INSERT INTO {_table('users')}
                 (id,email,full_name,role,is_email_verified,created_at)
                 VALUES (?,?,?,?,?,?)""",
-                (f"CUST-{secrets.token_hex(4).upper()}", normalized, full_name or normalized, role, 0, _now()),
+                (f"CUST-{secrets.token_hex(4).upper()}", normalized, full_name or normalized, role, False, _now()),
             )
 
         code = f"{secrets.randbelow(1_000_000):06d}"
         challenge_id = secrets.token_urlsafe(18)
         connection.execute(
-            """INSERT INTO otp_challenges
+            f"UPDATE {_table('otp_challenges')} SET consumed_at = ? WHERE email = ? AND consumed_at IS NULL AND expires_at >= ?",
+            (now, normalized, now),
+        )
+        connection.execute(
+            f"""INSERT INTO {_table('otp_challenges')}
             (id,email,role,code_hash,expires_at,request_window_started)
             VALUES (?,?,?,?,?,?)""",
             (challenge_id, normalized, role, _hash(code), now + OTP_TTL_SECONDS, now),
@@ -157,36 +253,53 @@ def request_otp(email: str, role: str, full_name: str = "") -> tuple[str, str]:
 def verify_otp(challenge_id: str, code: str) -> dict:
     now = int(time.time())
     with _connect() as connection:
+        if AUTH_STORAGE_BACKEND == "sqlite":
+            connection.execute("BEGIN IMMEDIATE")
         challenge = connection.execute(
-            "SELECT * FROM otp_challenges WHERE id = ?", (challenge_id,)
+            f"SELECT * FROM {_table('otp_challenges')} WHERE id = ?"
+            f"{' FOR UPDATE' if AUTH_STORAGE_BACKEND == 'postgres' else ''}",
+            (challenge_id,),
         ).fetchone()
-        if not challenge or challenge["expires_at"] < now or (
-            challenge["locked_until"] and challenge["locked_until"] > now
-        ):
+        if not challenge or challenge["expires_at"] <= now or challenge["consumed_at"] is not None:
             raise HTTPException(401, "OTP is invalid or expired.")
-        if challenge["attempt_count"] >= MAX_OTP_ATTEMPTS:
+        if (challenge["locked_until"] and challenge["locked_until"] > now) or challenge["attempt_count"] >= MAX_OTP_ATTEMPTS:
             raise HTTPException(429, "OTP verification is locked. Request a new code.")
         if not hmac.compare_digest(challenge["code_hash"], _hash(code.strip())):
+            attempt_count = challenge["attempt_count"] + 1
+            locked_until = now + OTP_LOCK_SECONDS if attempt_count >= MAX_OTP_ATTEMPTS else None
             connection.execute(
-                "UPDATE otp_challenges SET attempt_count = attempt_count + 1 WHERE id = ?",
-                (challenge_id,),
+                f"UPDATE {_table('otp_challenges')} SET attempt_count = ?, locked_until = ? WHERE id = ?",
+                (attempt_count, locked_until, challenge_id),
             )
+            connection.commit()
+            if locked_until:
+                raise HTTPException(429, "OTP verification is locked. Request a new code.")
             raise HTTPException(401, "OTP is invalid or expired.")
 
         user = connection.execute(
-            "SELECT * FROM users WHERE email = ? AND is_active = 1", (challenge["email"],)
+            f"SELECT * FROM {_table('users')} WHERE email = ? AND is_active = TRUE",
+            (challenge["email"],),
         ).fetchone()
         if not user:
             raise HTTPException(401, "Account is unavailable.")
-        connection.execute("UPDATE users SET is_email_verified = 1 WHERE id = ?", (user["id"],))
+        consumed = connection.execute(
+            f"UPDATE {_table('otp_challenges')} SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL",
+            (now, challenge_id),
+        )
+        if consumed.rowcount != 1:
+            raise HTTPException(401, "OTP is invalid or expired.")
+        connection.execute(
+            f"UPDATE {_table('users')} SET is_email_verified = TRUE WHERE id = ?",
+            (user["id"],),
+        )
         token = secrets.token_urlsafe(32)
         connection.execute(
-            "INSERT INTO sessions VALUES (?,?,?,?)",
+            f"INSERT INTO {_table('sessions')} VALUES (?,?,?,?)",
             (_hash(token), user["id"], now + SESSION_TTL_SECONDS, now),
         )
         connection.execute(
-            "INSERT INTO audit_events (user_id,action,success,metadata,created_at) VALUES (?,?,?,?,?)",
-            (user["id"], "otp_verified", 1, challenge["role"], _now()),
+            f"INSERT INTO {_table('audit_events')} (user_id,action,success,metadata,created_at) VALUES (?,?,?,?,?)",
+            (user["id"], "otp_verified", True, challenge["role"], _now()),
         )
         return {"access_token": token, "token_type": "bearer", "role": user["role"], "email": user["email"]}
 
@@ -197,27 +310,34 @@ def init_and_get_user(token_value: str | None) -> dict:
     now = int(time.time())
     with _connect() as connection:
         row = connection.execute(
-            """            SELECT u.*, s.expires_at, s.last_activity_at AS session_last_activity
-            FROM sessions s JOIN users u ON u.id = s.user_id
-            WHERE s.token_hash = ? AND u.is_active = 1""",
+            f"""            SELECT u.*, s.expires_at, s.last_activity_at AS session_last_activity
+            FROM {_table('sessions')} s JOIN {_table('users')} u ON u.id = s.user_id
+            WHERE s.token_hash = ? AND u.is_active = TRUE""",
             (_hash(token_value),),
         ).fetchone()
         if not row or row["expires_at"] < now or row["session_last_activity"] + SESSION_TTL_SECONDS < now:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired session.")
         connection.execute(
-            "UPDATE sessions SET last_activity_at = ? WHERE token_hash = ?",
+            f"UPDATE {_table('sessions')} SET last_activity_at = ? WHERE token_hash = ?",
             (now, _hash(token_value)),
         )
         return dict(row)
 
 
-def current_user(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> dict:
-    token_value = None
-    if credentials and credentials.scheme.lower() == "bearer":
-        token_value = credentials.credentials
-    elif request.cookies.get("wt_session"):
-        token_value = request.cookies.get("wt_session")
-    return init_and_get_user(token_value)
+def revoke_session(token_value: str | None) -> None:
+    if not token_value:
+        return
+    with _connect() as connection:
+        connection.execute(
+            f"DELETE FROM {_table('sessions')} WHERE token_hash = ?",
+            (_hash(token_value),),
+        )
+
+
+def current_user(request: Request) -> dict:
+    if request.headers.get("authorization"):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Use the secure session cookie to authenticate.")
+    return init_and_get_user(request.cookies.get("wt_session"))
 
 
 def require_roles(*roles: str):
@@ -228,4 +348,5 @@ def require_roles(*roles: str):
     return dependency
 
 
-init_auth_db()
+if AUTH_STORAGE_BACKEND == "sqlite":
+    init_auth_db()

@@ -2,9 +2,9 @@ services:
   - type: web
     name: backend
     runtime: python
-    buildCommand: pip install -r requirements.txt && alembic upgrade head
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /ready
+    healthCheckPath: /healthz
     autoDeploy: true
     disk:
       name: winged-api-data
@@ -15,6 +15,8 @@ services:
         value: "production"
       - key: WT_AUTH_ENV
         value: "production"
+      - key: WT_AUTH_STORAGE_BACKEND
+        value: "postgres"
       - key: WT_AUTH_SECRET
         sync: false
       - key: SALES_EMAIL_USERNAME
@@ -148,8 +150,9 @@ services:
       - key: FRONTEND_ORIGIN
         value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com,https://rfq.wingedtycoons.com"
 
-  - type: static
+  - type: web
     name: frontend
+    runtime: static
     buildCommand: npm --prefix frontend install && npm --prefix frontend run build
     staticPublishPath: frontend/dist
     headers:
@@ -352,4 +355,3 @@ services:
         sync: false
       - key: GRAPH_MAILBOX_USER_SALES
         value: "sales@wingedtycoons.com"
-

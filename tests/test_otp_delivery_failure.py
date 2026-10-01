@@ -10,8 +10,10 @@ from api.main import app
 class TestOtpDeliveryFailure(unittest.TestCase):
     def test_production_mail_failure_returns_recoverable_503(self):
         with patch.dict(os.environ, {"WT_AUTH_ENV": "production"}, clear=False), patch(
-            "api.main.request_otp", return_value=("challenge-test", "123456")
-        ), patch("api.main.send_otp_email", side_effect=RuntimeError("Graph sendMail denied")):
+            "api.main.check_shared_rate_limit", return_value=(True, 0)
+        ), patch("api.main.request_otp", return_value=("challenge-test", "123456")), patch(
+            "api.main.send_otp_email", side_effect=RuntimeError("Graph sendMail denied")
+        ):
             response = TestClient(app).post(
                 "/api/auth/otp/request",
                 json={"email": "buyer@example.com", "role": "ROLE_CUSTOMER"},

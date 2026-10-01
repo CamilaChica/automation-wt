@@ -8,6 +8,7 @@ import asyncio
 import uuid
 from contextlib import nullcontext
 from datetime import datetime, timezone
+from email.utils import parseaddr
 from typing import Any
 
 from dotenv import load_dotenv
@@ -23,19 +24,49 @@ validate_development_database_target(
 )
 
 from services.mailbox_service import fetch_inbox_messages
-from services.inbound_email_archive import archive_inbound_message
+from services.inbound_email_archive import _received_at, archive_inbound_message
 from services.inbound_message_classifier import classify_inbound_customer_message
 from services.communication_service import communication_service
+from services.customer_chase_schedule import chase_task_keys
 from services.supplier_database import supplier_db
 from services.db_service import db_service
 from services.orchestration_service import orchestration_service
 from services.document_parser import build_email_context
 from scripts.backup_sqlite import main as backup_sqlite
 from services.operations_store import operations_store
-from services.async_database import preflight_database
+from services.async_database import create_engine_from_environment, preflight_database, session_scope
+from repositories.runtime import create_operational_repositories
+from repositories.review_telemetry_repository import inbound_dedupe_key
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("winged-tycoons-email-worker")
+
+
+async def queue_due_communication_tasks(engine=None) -> dict[str, int]:
+    owns_engine = engine is None
+    if engine is None:
+        engine = create_engine_from_environment()
+    queued = 0
+    failed = 0
+    try:
+        async with session_scope(engine) as session:
+            repositories = create_operational_repositories(session)
+            tasks = await repositories.records.list_due_communication_tasks()
+            for task in tasks:
+                try:
+                    async with session.begin_nested():
+                        result = await communication_service.process_due_task_async(repositories, task)
+                    queued += result["transmission_status"] == "PENDING"
+                except Exception as exc:
+                    await repositories.records.retry_communication_task(
+                        task["id"], f"{type(exc).__name__}: {exc}"
+                    )
+                    failed += 1
+                    logger.exception("Async scheduled communication queue failed for task %s", task["id"])
+    finally:
+        if owns_engine:
+            await engine.dispose()
+    return {"queued": queued, "failed": failed}
 
 
 def _review_inbound_customer_message(message: dict[str, Any], reason: str, rfq_id: str | None = None) -> None:
@@ -190,6 +221,285 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
     return True
 
 
+async def _ingest_existing_sales_message_async(message: dict[str, Any], repositories) -> bool | None:
+    from models.db_models import Quote, QuoteItem
+
+    sender_header = str(message.get("from") or "").strip()
+    sender = (parseaddr(sender_header)[1] or sender_header).lower()
+    message_id = str(message.get("message_id") or message.get("internet_message_id") or "")
+    body = str(message.get("body") or "").strip()
+    rfqs = await db_service.list_rfqs_async(repositories)
+    existing = next((
+        candidate for candidate in reversed(rfqs)
+        if candidate.customer_email.lower() == sender
+        and candidate.status in {"Quote_Sent", "Pending_PO_Review", "Purchase_Order_Received"}
+    ), None)
+    quote = None
+    quote_items = []
+    if existing is not None:
+        quote_payloads = await repositories.quote.list_operational_records("quotes")
+        quote = next((
+            Quote.model_validate(payload)
+            for payload in quote_payloads.values()
+            if payload.get("rfq_id") == existing.id
+        ), None)
+        if quote is not None:
+            item_payloads = await repositories.quote.list_operational_records("quote_items")
+            quote_items = [
+                QuoteItem.model_validate(payload)
+                for payload in item_payloads.values()
+                if payload.get("quote_id") == quote.id
+            ]
+
+    classification = classify_inbound_customer_message(message, has_related_quote=bool(quote))
+    category = classification.get("category")
+    if category == "purchase_order":
+        message_key = str(message.get("internet_message_id") or message_id or sender)
+        if existing is None or quote is None:
+            reason = "email_po_could_not_be_linked_to_an_active_quote"
+        elif existing.status in {"Pending_PO_Review", "Purchase_Order_Received"}:
+            reason = "additional_or_duplicate_po_requires_review"
+        else:
+            for task_key in chase_task_keys(quote.id):
+                await repositories.records.cancel_communication_task(task_key)
+
+            po_number = classification.get("po_number") or (
+                f"PO-EMAIL-{uuid.uuid5(uuid.NAMESPACE_URL, message_key).hex[:12].upper()}"
+            )
+            attachment_metadata = [
+                {
+                    "filename": str(attachment.get("filename") or "attachment"),
+                    "content_type": str(attachment.get("content_type") or ""),
+                    "size": len(attachment.get("content") or b""),
+                }
+                for attachment in message.get("attachments") or []
+            ]
+            received = await repositories.rfq.receive_purchase_order(
+                po_id=f"PO-{uuid.uuid4().hex[:20].upper()}",
+                po_number=str(po_number),
+                received_message_id=message_key,
+                quote_id=quote.id,
+                rfq_id=existing.id,
+                customer_email=existing.customer_email,
+                total_amount=float(quote.total_amount or 0),
+                attachment_metadata=attachment_metadata,
+            )
+            if received:
+                internal_items = []
+                for item in quote_items:
+                    offers = await repositories.supplier.offers_for_part(
+                        item.part_number, item.quantity
+                    )
+                    selected = next(
+                        (
+                            offer for offer in offers
+                            if abs(float(offer.get("unit_cost") or 0) - float(item.unit_cost or 0)) < 0.01
+                        ),
+                        offers[0] if offers else None,
+                    )
+                    internal_items.append({
+                        "part_number": item.part_number,
+                        "quantity": item.quantity,
+                        "unit_price": item.unit_price,
+                        "supplier_name": selected.get("supplier_name") if selected else "Internal inventory",
+                        "supplier_email": selected.get("supplier_email") if selected else "",
+                        "supplier_unit_cost": (
+                            float(selected.get("unit_cost") or item.unit_cost or 0)
+                            if selected else float(item.unit_cost or 0)
+                        ),
+                    })
+                await communication_service.notify_purchase_order_async(
+                    repositories,
+                    recipient=os.getenv(
+                        "CAMILA_NOTIFICATION_EMAIL",
+                        os.getenv("PURCHASE_ORDER_NOTIFICATION_EMAIL", "camila@wingedtycoons.com"),
+                    ),
+                    po_number=str(po_number),
+                    customer_name=existing.customer_name,
+                    customer_email=existing.customer_email,
+                    quote_id=quote.id,
+                    items=internal_items,
+                    review_url=os.getenv("SALES_DASHBOARD_URL") or os.getenv("PUBLIC_APP_URL", "http://localhost:3000"),
+                )
+                return True
+            reason = "email_po_conflicts_with_existing_purchase_order"
+
+        await repositories.records.enqueue_operator_review(
+            idempotency_key=f"customer-email-review:{message_key}",
+            task="customer_email_classification",
+            source_text=f"Subject: {message.get('subject', '')}\\n\\n{body}",
+            extraction={"category": "manual_review", "rfq_id": existing.id if existing else None},
+            reason=reason,
+            prompt_version="customer-email-routing-v1",
+            hold_flags=[reason],
+            entity_id=existing.id if existing else message_key,
+        )
+        return True
+    if category == "client_question":
+        if existing is None or quote is None:
+            reason = "customer_question_has_no_related_quote"
+        else:
+            try:
+                for task_key in chase_task_keys(quote.id):
+                    await repositories.records.cancel_communication_task(task_key)
+                response = await communication_service.send_customer_information_response_async(
+                    repositories,
+                    recipient=sender,
+                    customer_name=existing.customer_name,
+                    quote_id=quote.id,
+                    request_text=body,
+                    quote=quote,
+                    items=quote_items,
+                    reply_to=message_id or existing.thread_id,
+                )
+                await repositories.rfq.add_audit_log(
+                    rfq_id=existing.id,
+                    agent_name="CustomerCommunicationAgent",
+                    action_type="customer_detail_response",
+                    message="Queued a customer response using only facts from the approved quote.",
+                    status="PENDING",
+                    payload_json=json.dumps({"communication_id": response.get("communication_id")}),
+                )
+                return True
+            except Exception as exc:
+                reason = f"customer_question_needs_review:{type(exc).__name__}"
+        await repositories.records.enqueue_operator_review(
+            idempotency_key=f"customer-email-review:{message_id or sender}",
+            task="customer_email_classification",
+            source_text=f"Subject: {message.get('subject', '')}\n\n{body}",
+            extraction={"category": "manual_review", "rfq_id": existing.id if existing else None},
+            reason=reason,
+            prompt_version="customer-email-routing-v1",
+            hold_flags=[reason],
+            entity_id=existing.id if existing else message_id or sender,
+        )
+        return True
+    if category == "other":
+        reason = "inbound_message_not_identified_as_an_rfq"
+        await repositories.records.enqueue_operator_review(
+            idempotency_key=f"customer-email-review:{message_id or sender}",
+            task="customer_email_classification",
+            source_text=f"Subject: {message.get('subject', '')}\n\n{body}",
+            extraction={"category": "manual_review", "rfq_id": existing.id if existing else None},
+            reason=reason,
+            prompt_version="customer-email-routing-v1",
+            hold_flags=[reason],
+            entity_id=existing.id if existing else message_id or sender,
+        )
+        return True
+    return None
+
+
+async def _ingest_new_sales_message_async(message: dict[str, Any], repositories) -> Any:
+    sender_header = str(message.get("from") or "").strip()
+    sender = (parseaddr(sender_header)[1] or sender_header).lower()
+    if "@" not in sender:
+        raise ValueError("Sales mailbox message has no valid sender.")
+    raw_text = build_email_context(
+        f"From: {sender}\nSubject: {message.get('subject', '')}\n\n{str(message.get('body') or '').strip()}",
+        message.get("attachments") or [],
+    )
+    rfq = await db_service.create_rfq_async(
+        repositories,
+        customer_name=sender.split("@", 1)[0].replace(".", " ").title(),
+        customer_email=sender,
+        raw_text=raw_text,
+        thread_id=message.get("message_id") or None,
+    )
+    return rfq
+
+
+async def _process_sales_message_async(
+    message: dict[str, Any], mailbox: str = "sales", engine=None
+) -> bool:
+    owns_engine = engine is None
+    engine = engine or create_engine_from_environment()
+    message_id = str(message.get("message_id") or "").strip()
+    try:
+        async with session_scope(engine) as session:
+            repositories = create_operational_repositories(session)
+            internet_message_id = str(message.get("internet_message_id") or "").strip() or None
+            if message_id and not await repositories.records.claim_inbound_message(
+                message_id, mailbox, internet_message_id
+            ):
+                return True
+            sender_header = str(message.get("from") or "")
+            provider_message_id = message_id or str(message.get("internet_message_id") or uuid.uuid4().hex)
+            attachments = [
+                {
+                    "filename": str(attachment.get("filename") or "attachment"),
+                    "content_type": str(attachment.get("content_type") or ""),
+                    "size": len(attachment.get("content") or b""),
+                }
+                for attachment in message.get("attachments") or []
+            ]
+            await repositories.records.archive_raw_email(
+                mailbox=mailbox,
+                provider_message_id=provider_message_id,
+                internet_message_id=message.get("internet_message_id"),
+                conversation_id=message.get("conversation_id"),
+                sender=parseaddr(sender_header)[1] or sender_header or None,
+                subject=str(message.get("subject") or "") or None,
+                received_at=_received_at(message.get("date")),
+                body=str(message.get("body") or ""),
+                raw_mime=message.get("raw_mime"),
+                headers=message.get("headers") or [],
+                attachments=attachments,
+                processing_status="processing",
+            )
+            processed = await _ingest_existing_sales_message_async(message, repositories)
+            if processed is not None:
+                if message_id:
+                    if processed:
+                        await repositories.records.mark_inbound_message_processed(
+                            message_id, internet_message_id
+                        )
+                    else:
+                        await repositories.records.release_inbound_message(
+                            message_id, internet_message_id
+                        )
+                if processed:
+                    await repositories.records.set_raw_email_processing_status(
+                        mailbox, provider_message_id, "processed"
+                    )
+                return processed
+            rfq = await _ingest_new_sales_message_async(message, repositories)
+            stable_message_key = inbound_dedupe_key(internet_message_id) or message_id or rfq.id
+            await repositories.records.record_automation_event(
+                event_type="process_new_rfq",
+                entity_type="rfq",
+                entity_id=rfq.id,
+                status="QUEUED",
+                result=json.dumps({"source_message_id": stable_message_key}),
+                idempotency_key=f"rfq-intake:{stable_message_key}",
+                max_attempts=3,
+            )
+            if message_id:
+                await repositories.records.mark_inbound_message_processed(
+                    message_id, internet_message_id
+                )
+            await repositories.records.set_raw_email_processing_status(
+                mailbox, provider_message_id, "processed"
+            )
+            logger.info(
+                "Sales mailbox message %s persisted as RFQ %s with durable intake event",
+                message_id or "unknown",
+                rfq.id,
+            )
+            return True
+    except Exception:
+        if message_id:
+            async with session_scope(engine) as session:
+                repositories = create_operational_repositories(session)
+                await repositories.records.release_inbound_message(
+                    message_id, str(message.get("internet_message_id") or "").strip() or None
+                )
+        raise
+    finally:
+        if owns_engine:
+            await engine.dispose()
+
+
 def run() -> None:
     if operations_store.storage_engine == "postgresql":
         asyncio.run(preflight_database())
@@ -207,30 +517,42 @@ def run() -> None:
             except Exception:
                 logger.exception("SQLite backup failed")
 
-        due_tasks = (
-            operations_store.list_due_communication_tasks()
-            if operations_store.storage_engine == "postgresql"
-            else supplier_db.list_due_communication_tasks()
-        )
-        for task in due_tasks:
+        async_repositories_enabled = os.getenv("USE_ASYNC_REPOS", "false").strip().lower() in {"1", "true", "yes", "on"}
+        if operations_store.storage_engine == "postgresql" and async_repositories_enabled:
             try:
-                result = communication_service.process_due_task(task)
-                if result["transmission_status"] == "SENT":
-                    if operations_store.storage_engine == "postgresql":
-                        operations_store.update_communication_task(task["id"], status="sent")
-                    else:
-                        supplier_db.mark_communication_task_sent(task["id"])
-                    logger.info("Sent scheduled %s communication to %s", task["task_type"], task["recipient"])
-                elif result["transmission_status"] == "PENDING" and operations_store.storage_engine == "postgresql":
-                    logger.info("Queued scheduled %s communication to %s in transactional outbox", task["task_type"], task["recipient"])
-                else:
-                    logger.info("Dry-run scheduled %s communication retained for delivery", task["task_type"])
+                queue_result = asyncio.run(queue_due_communication_tasks())
+                if queue_result["queued"]:
+                    logger.info(
+                        "Queued %d scheduled communications through the async transactional outbox",
+                        queue_result["queued"],
+                    )
             except Exception:
-                if operations_store.storage_engine == "postgresql":
-                    operations_store.retry_communication_task(task["id"], "scheduled communication dispatch failed")
-                else:
-                    supplier_db.mark_communication_task_retry(task["id"], "scheduled communication dispatch failed")
-                logger.exception("Scheduled communication failed for task %s", task["id"])
+                logger.exception("Async scheduled communication poll failed")
+        else:
+            due_tasks = (
+                operations_store.list_due_communication_tasks()
+                if operations_store.storage_engine == "postgresql"
+                else supplier_db.list_due_communication_tasks()
+            )
+            for task in due_tasks:
+                try:
+                    result = communication_service.process_due_task(task)
+                    if result["transmission_status"] == "SENT":
+                        if operations_store.storage_engine == "postgresql":
+                            operations_store.update_communication_task(task["id"], status="sent")
+                        else:
+                            supplier_db.mark_communication_task_sent(task["id"])
+                        logger.info("Sent scheduled %s communication to %s", task["task_type"], task["recipient"])
+                    elif result["transmission_status"] == "PENDING" and operations_store.storage_engine == "postgresql":
+                        logger.info("Queued scheduled %s communication to %s in transactional outbox", task["task_type"], task["recipient"])
+                    else:
+                        logger.info("Dry-run scheduled %s communication retained for delivery", task["task_type"])
+                except Exception:
+                    if operations_store.storage_engine == "postgresql":
+                        operations_store.retry_communication_task(task["id"], "scheduled communication dispatch failed")
+                    else:
+                        supplier_db.mark_communication_task_retry(task["id"], "scheduled communication dispatch failed")
+                    logger.exception("Scheduled communication failed for task %s", task["id"])
 
         for mailbox in _mailboxes_to_poll():
             try:
@@ -253,7 +575,9 @@ def run() -> None:
                             message.get("subject", ""),
                         )
                         continue
-                    if postgres_mode and message_id:
+                    if postgres_mode and async_repositories_enabled:
+                        processed = asyncio.run(_process_sales_message_async(message, mailbox))
+                    elif postgres_mode and message_id:
                         with operations_store.transaction():
                             if not operations_store.claim_inbound_message(message_id, mailbox, internet_message_id):
                                 logger.info("Mailbox %s skipped PostgreSQL-claimed message %s", mailbox, message_id)

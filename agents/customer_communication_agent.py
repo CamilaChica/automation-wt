@@ -136,6 +136,39 @@ class CustomerCommunicationAgent(BaseAgent):
         input_tokens = int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
         output_tokens = int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0)
         input_rate, output_rate = CUSTOMER_COMMUNICATION_MODEL_COST_PER_MILLION.get(model_id, (0.0, 0.0))
+        if context and context.get("draft_only"):
+            return AgentResponse(success=True, data={
+                "formatted_body": draft.body_text,
+                "subject": draft.subject,
+                "body_html": draft.body_html,
+                "redacted_fields_applied": draft.redacted_fields_applied,
+                "confidence_score": draft.confidence_score,
+                "llm_fallback_used": fallback_used,
+                "telemetry": {
+                    "task": "customer_communication",
+                    "prompt_version": CUSTOMER_COMMUNICATION_PROMPT_VERSION,
+                    "model_id": model_id,
+                    "model_calls": [model_id] if response else [],
+                    "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "estimated_cost_usd": (input_tokens * input_rate + output_tokens * output_rate) / 1_000_000,
+                    "validation_result": "VALIDATED" if response else "TEMPLATE_FALLBACK",
+                },
+                "automation_event": {
+                    "event_type": "llm_email_draft",
+                    "entity_type": "quote",
+                    "entity_id": quote_id,
+                    "status": "FALLBACK" if fallback_used else "SUCCESS",
+                    "result": json.dumps({
+                        "provider": response.provider if response else None,
+                        "model": response.model if response else None,
+                        "fallback_used": fallback_used,
+                        "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+                        "usage": usage,
+                    }),
+                },
+            })
         operations_store.record_llm_telemetry(
             task="customer_communication",
             prompt_version=CUSTOMER_COMMUNICATION_PROMPT_VERSION,
