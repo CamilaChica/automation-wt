@@ -12,7 +12,10 @@ import { SalesCommandView } from './components/views/SalesCommandView';
 import { CustomerPortal } from './components/views/CustomerPortal';
 import { LandingPage } from './components/views/LandingPage';
 import { InternalTeamPortal } from './components/views/InternalTeamPortal';
-import { VoiceServiceView } from './components/views/VoiceServiceView';
+import { OwnerAnalyticsView } from './components/views/OwnerAnalyticsView';
+import { MySalesView } from './components/views/MySalesView';
+import { SalesRaceView } from './components/views/SalesRaceView';
+import { ShipmentsMapView } from './components/views/ShipmentsMapView';
 import { AuthScreen } from './components/common/AuthScreen';
 import { EmployeeProfilePanel } from './components/common/EmployeeProfilePanel';
 import { apiService } from './services/api';
@@ -124,8 +127,14 @@ const InternalApp: React.FC = () => {
         return <FulfillmentHubView />;
       case 'sales':
         return <SalesCommandView />;
-      case 'voice-service':
-        return <VoiceServiceView />;
+      case 'owner-analytics':
+        return apiService.hasAnyRole(['ROLE_ADMIN']) ? <OwnerAnalyticsView /> : <MySalesView />;
+      case 'my-sales':
+        return <MySalesView />;
+      case 'sales-race':
+        return <SalesRaceView />;
+      case 'shipments-map':
+        return <ShipmentsMapView />;
       default:
         return <OperationsHomeView onSelectView={setCurrentView} />;
     }

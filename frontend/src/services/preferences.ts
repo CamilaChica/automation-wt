@@ -23,8 +23,11 @@ export function setThemePreference(theme: ThemeMode): void {
 
 export function getViewPreference(): ViewMode {
   const value = getCookie('wt_internal_view');
-  const views: ViewMode[] = ['customer', 'sourcing', 'aero-procurement', 'trace-vault', 'fulfillment', 'sales', 'voice-service'];
-  return views.includes(value as ViewMode) ? value as ViewMode : 'customer';
+  const views: ViewMode[] = ['customer', 'sourcing', 'aero-procurement', 'trace-vault', 'fulfillment', 'sales', 'owner-analytics', 'my-sales', 'sales-race', 'shipments-map'];
+  const isOwner = typeof localStorage !== 'undefined' && localStorage.getItem('wt_role') === 'ROLE_ADMIN';
+  if (value === 'owner-analytics' && !isOwner) return 'customer';
+  if (views.includes(value as ViewMode)) return value as ViewMode;
+  return isOwner ? 'owner-analytics' : 'customer';
 }
 
 export function setViewPreference(view: ViewMode): void {

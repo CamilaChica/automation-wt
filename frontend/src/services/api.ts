@@ -33,6 +33,9 @@ import type {
   VoiceLanguageCode,
   VoiceSessionResponse,
   VoiceToolRequest,
+  OwnerAnalytics,
+  MySales,
+  SalesRep,
 } from '../types/api';
 
 const isCompanyDomainHost = window.location.hostname.endsWith('.wingedtycoons.com');
@@ -196,6 +199,21 @@ export const apiService = {
 
   async getHrWorkHoursReport(month: string): Promise<EmployeeWorkHoursReport> {
     const res = await axios.get(`${API_BASE}/internal/hr/work-hours`, { params: { month } });
+    return res.data;
+  },
+
+  async getOwnerAnalytics(): Promise<OwnerAnalytics> {
+    const res = await axios.get(`${API_BASE}/internal/analytics/owner`);
+    return res.data;
+  },
+
+  async getMySales(): Promise<MySales> {
+    const res = await axios.get(`${API_BASE}/internal/sales/me`);
+    return res.data;
+  },
+
+  async getSalesLeaderboard(): Promise<{ month: string; board: SalesRep[] }> {
+    const res = await axios.get(`${API_BASE}/internal/sales/leaderboard`);
     return res.data;
   },
 

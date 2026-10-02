@@ -606,6 +606,32 @@ async def hr_work_hours_report(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+
+_INTERNAL_ROLES = ("ROLE_INTERNAL", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")
+
+
+@app.get("/api/internal/analytics/owner")
+async def owner_analytics(_user: dict = Depends(require_roles("ROLE_ADMIN"))):
+    from services.sales_analytics_service import owner_overview
+    async with employee_session() as session:
+        return await owner_overview(session)
+
+
+@app.get("/api/internal/sales/me")
+async def my_sales_summary(user: dict = Depends(require_roles(*_INTERNAL_ROLES))):
+    from services.sales_analytics_service import my_sales
+    async with employee_session() as session:
+        await get_profile(session, user)
+        return await my_sales(session, user)
+
+
+@app.get("/api/internal/sales/leaderboard")
+async def sales_race(user: dict = Depends(require_roles(*_INTERNAL_ROLES))):
+    from services.sales_analytics_service import current_month, sales_leaderboard
+    async with employee_session() as session:
+        await get_profile(session, user)
+        return {"month": current_month(), "board": await sales_leaderboard(session)}
+
 @app.get("/")
 async def root():
     return {

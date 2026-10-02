@@ -234,6 +234,10 @@ def _extract_condition(text: str) -> tuple:
         return None, False
     if len(found_codes) == 1:
         return found_codes[0], False
+    # "NE/OH" style lists mean the buyer accepts any of the listed conditions.
+    aliases_pattern = "|".join(re.escape(a) for a in sorted_aliases)
+    if re.search(rf"\b(?:{aliases_pattern})\s*/\s*(?:{aliases_pattern})\b", upper):
+        return "/".join(found_codes), False
     # Multiple distinct codes → ambiguous
     return "/".join(found_codes), True
 

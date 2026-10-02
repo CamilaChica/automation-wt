@@ -5,7 +5,10 @@ export type ViewMode =
   | 'trace-vault' 
   | 'fulfillment' 
   | 'sales'
-  | 'voice-service';
+  | 'owner-analytics'
+  | 'my-sales'
+  | 'sales-race'
+  | 'shipments-map';
 
 export type ThemeMode = 'dark' | 'light';
 export type ISODateTime = string;

@@ -292,3 +292,40 @@ export interface ApiRouteContracts {
 
 export type QuoteDetail = { quote: Quote; items: QuoteItem[] };
 export type RFQDetail = RFQDetailResponse & { rfq: RFQ; items: RFQItem[]; logs: AgentAuditLog[] };
+
+export interface SalesRep {
+  name: string;
+  email: string;
+  revenue: number;
+  orders: number;
+  hours: number;
+  is_online: boolean;
+}
+
+export interface OwnerAnalytics {
+  month: string;
+  kpis: {
+    total_rfqs: number;
+    rfqs_last_30_days: number;
+    quotes_sent: number;
+    quoted_value: number;
+    purchase_orders: number;
+    revenue: number;
+    quote_rate: number;
+    win_rate: number;
+  };
+  rfq_status: { status: string; count: number }[];
+  daily_rfqs: { day: string; count: number }[];
+  top_customers: { customer: string; rfqs: number }[];
+  top_parts: { part_number: string; rfqs: number }[];
+  team: SalesRep[];
+}
+
+export interface MySales {
+  month: string;
+  revenue: number;
+  orders: number;
+  hours: number;
+  daily_seconds: Record<string, number>;
+  handled_rfqs: { rfq_id: string; part_number: string | null; customer_email: string | null; status: string; created_at: string | null }[];
+}

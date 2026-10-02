@@ -9,8 +9,11 @@ import {
   Package, 
   TrendingUp, 
   LogOut,
-  Headphones,
   Clock3,
+  BarChart3,
+  Trophy,
+  Wallet,
+  Map as MapIcon,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -22,14 +25,18 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView, isMobileOpen = false, onCloseMobile, onOpenProfile }) => {
+  const isOwner = apiService.hasAnyRole(['ROLE_ADMIN']);
   const navItems = [
+    ...(isOwner ? [{ id: 'owner-analytics' as ViewMode, label: 'Business Overview', icon: BarChart3, badge: null }] : []),
     { id: 'customer' as ViewMode, label: 'Today', icon: LayoutDashboard, badge: null },
+    ...(isOwner ? [] : [{ id: 'my-sales' as ViewMode, label: 'My Sales & Hours', icon: Wallet, badge: null }]),
+    { id: 'sales-race' as ViewMode, label: 'Sales Race', icon: Trophy, badge: null },
+    { id: 'shipments-map' as ViewMode, label: 'Shipments Map', icon: MapIcon, badge: null },
     { id: 'sales' as ViewMode, label: 'RFQs & Quotes', icon: TrendingUp, badge: null },
     { id: 'sourcing' as ViewMode, label: 'Supplier Offers', icon: Search, badge: null },
     { id: 'aero-procurement' as ViewMode, label: 'Inventory & Email', icon: FileText, badge: null },
     { id: 'fulfillment' as ViewMode, label: 'Shipments', icon: Package, badge: null },
     { id: 'trace-vault' as ViewMode, label: 'Reviews & AI Health', icon: ShieldCheck, badge: null },
-    { id: 'voice-service' as ViewMode, label: 'Customer Calls', icon: Headphones, badge: null },
   ];
   return (
     <>
