@@ -165,20 +165,7 @@ class MockDatabaseService:
         if records:
             rfqs = [RFQ.model_validate(payload) for payload in records.values()]
             item_records = await repositories.rfq.list_operational_records("rfq_items")
-            parts_by_rfq: dict[str, list[str]] = {}
-            for item in item_records.values():
-                part = str(
-                    item.get("resolved_part_number")
-                    or item.get("requested_part_number")
-                    or item.get("part_number")
-                    or ""
-                ).strip()
-                if part and part not in parts_by_rfq.setdefault(str(item.get("rfq_id")), []):
-                    parts_by_rfq[str(item.get("rfq_id"))].append(part)
-            for rfq in rfqs:
-                if not rfq.part_number and parts_by_rfq.get(rfq.id):
-                    rfq.part_number = ", ".join(parts_by_rfq[rfq.id])
-            return rfqs
+            return self._attach_part_numbers(rfqs, item_records.values())
         return [
             RFQ(
                 id=record.id,
@@ -529,10 +516,32 @@ class MockDatabaseService:
         self._persist_state()
         return rfq
 
+    @staticmethod
+    def _attach_part_numbers(rfqs: List[RFQ], items) -> List[RFQ]:
+        parts_by_rfq: dict[str, list[str]] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                item = item.model_dump() if hasattr(item, "model_dump") else vars(item)
+            part = str(
+                item.get("resolved_part_number")
+                or item.get("requested_part_number")
+                or item.get("part_number")
+                or ""
+            ).strip()
+            parts = parts_by_rfq.setdefault(str(item.get("rfq_id")), [])
+            if part and part not in parts:
+                parts.append(part)
+        for rfq in rfqs:
+            if not rfq.part_number and parts_by_rfq.get(rfq.id):
+                rfq.part_number = ", ".join(parts_by_rfq[rfq.id])
+        return rfqs
+
     def list_rfqs(self) -> List[RFQ]:
         if self._production:
-            return self._pg_list("rfqs", RFQ)
-        return list(self.rfqs.values())
+            rfqs = self._pg_list("rfqs", RFQ)
+            items = operations_store.list_operational_records("rfq_items").values()
+            return self._attach_part_numbers(rfqs, items)
+        return self._attach_part_numbers(list(self.rfqs.values()), getattr(self, "rfq_items", {}).values())
 
     def update_rfq_customer(self, rfq_id: str, customer_name: Optional[str], customer_email: Optional[str]) -> Optional[RFQ]:
         if self._production:
