@@ -1078,6 +1078,31 @@ class PostgresReviewTelemetryRepository:
             ), {"query": f"%{normalized}%", "condition": str(condition or "").upper()}).mappings().all()
             return [dict(row) for row in rows]
 
+    def list_inventory_catalog(self, limit: int = 500) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        with self._read() as connection:
+            for sql in (
+                "SELECT p.id, p.part_number, p.description, p.quantity_available, p.condition_code, "
+                "p.availability_location AS location, p.unit_cost, p.certificate_type, p.trace_documents, "
+                "s.company_name AS supplier_name FROM supplier_parts p LEFT JOIN suppliers s ON s.id = p.supplier_id "
+                "ORDER BY p.updated_at DESC NULLS LAST LIMIT :limit",
+                "SELECT id, part_number, description, 1 AS quantity_available, condition_code, "
+                "'Winged Tycoons' AS location, unit_price AS unit_cost, NULL AS certificate_type, "
+                "NULL AS trace_documents, NULL AS supplier_name FROM aviation_parts "
+                "ORDER BY updated_at DESC NULLS LAST LIMIT :limit",
+                "SELECT id, part_number, description, quantity_available, condition_code, "
+                "COALESCE(availability_location, 'Supplier list') AS location, unit_price AS unit_cost, "
+                "certificate_type, NULL AS trace_documents, NULL AS supplier_name FROM supplier_inventory_rows "
+                "WHERE part_number IS NOT NULL AND part_number <> '' LIMIT :limit",
+            ):
+                try:
+                    with connection.begin_nested():
+                        rows = connection.execute(text(sql), {"limit": limit}).mappings().all()
+                    results.extend(dict(row) for row in rows)
+                except Exception:
+                    continue
+        return results[:limit]
+
     def schedule_communication_task(self, *, task_key: str, task_type: str, mailbox: str, recipient: str, subject: str, body: str, due_at: datetime, reply_to: str | None = None) -> dict[str, Any]:
         task_id = f"COM-{uuid.uuid5(uuid.NAMESPACE_URL, task_key).hex[:16].upper()}"
         with self._begin() as connection:

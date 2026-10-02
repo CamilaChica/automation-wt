@@ -417,16 +417,9 @@ class InventoryIngestionWorker:
                 except Exception:
                     savepoint.rollback()
                     raise
-                if (
-                    result.get("success")
-                    or result.get("status") == "Pending_Human_Review"
-                    or "No part number detected" in str(result.get("error", ""))
-                ):
-                    savepoint.commit()
-                    operations_store.mark_inbound_message_processed(message_id, internet_message_id)
-                else:
-                    savepoint.rollback()
-                    operations_store.release_inbound_message(message_id, internet_message_id)
+                # Non-quote mail is archived and marked handled so the backfill keeps advancing.
+                savepoint.commit()
+                operations_store.mark_inbound_message_processed(message_id, internet_message_id)
         else:
             if message_id and not operations_store.claim_inbound_message(message_id, self.mailbox, internet_message_id):
                 return {"success": True, "skipped": True, "message_id": message_id}
@@ -440,10 +433,7 @@ class InventoryIngestionWorker:
                     attachments=message.get("attachments") or [],
                 )
             if message_id:
-                if result.get("success") or result.get("status") == "Pending_Human_Review" or "No part number detected" in str(result.get("error", "")):
-                    operations_store.mark_inbound_message_processed(message_id, internet_message_id)
-                else:
-                    operations_store.release_inbound_message(message_id, internet_message_id)
+                operations_store.mark_inbound_message_processed(message_id, internet_message_id)
         if not result.get("success") and "No part number detected" in str(result.get("error")):
             pdf_attachments = [
                 attachment for attachment in message.get("attachments") or []
@@ -521,24 +511,31 @@ class InventoryIngestionWorker:
             results.extend(self.backfill_once())
         return results
 
-    def backfill_once(self) -> list[dict[str, Any]]:
-        try:
-            messages = self.fetch_messages(
-                self.mailbox,
-                limit=self.backfill_page_size,
-                skip=self.backfill_offset,
-                max_age_days=self.backfill_days,
-            )
-        except Exception:
-            logger.exception("Inventory backfill fetch failed at offset %s", self.backfill_offset)
-            return []
-        if not messages:
-            logger.info("Inventory backfill reached end of mailbox at offset %s; restarting", self.backfill_offset)
-            self.backfill_offset = 0
-            return []
-        logger.info("Inventory backfill offset=%s messages=%s", self.backfill_offset, len(messages))
-        self.backfill_offset += len(messages)
-        return self._process_batch(messages)
+    def backfill_once(self, max_pages: int = 20) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for _ in range(max_pages):
+            try:
+                messages = self.fetch_messages(
+                    self.mailbox,
+                    limit=self.backfill_page_size,
+                    skip=self.backfill_offset,
+                    max_age_days=self.backfill_days,
+                )
+            except Exception:
+                logger.exception("Inventory backfill fetch failed at offset %s", self.backfill_offset)
+                return results
+            if not messages:
+                logger.info("Inventory backfill reached end of mailbox at offset %s; restarting", self.backfill_offset)
+                self.backfill_offset = 0
+                return results
+            logger.info("Inventory backfill offset=%s messages=%s", self.backfill_offset, len(messages))
+            self.backfill_offset += len(messages)
+            page = self._process_batch(messages)
+            results.extend(page)
+            # Keep paging only while the page held nothing new (already ingested after a restart).
+            if not all(item.get("skipped") or (item.get("result") or {}).get("skipped") for item in page):
+                return results
+        return results
 
     def _process_batch(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         results = []

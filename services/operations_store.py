@@ -638,6 +638,11 @@ class OperationsStore:
             raise RuntimeError("Shared supplier offers require PostgreSQL mode.")
         return self._postgres.search_supplier_offers(query, condition)
 
+    def list_inventory_catalog(self, limit: int = 500) -> list[dict[str, Any]]:
+        if not self._postgres:
+            return []
+        return self._postgres.list_inventory_catalog(limit)
+
     def schedule_communication_task(self, **task: Any) -> dict[str, Any]:
         if not self._postgres:
             raise RuntimeError("Shared communication tasks require PostgreSQL mode.")

@@ -770,6 +770,13 @@ async def create_realtime_session(
     return {"client_secret": ephemeral_key, "model": session_payload["model"]}
 
 
+async def _voice_inventory_records(session) -> list[InventoryItem]:
+    if session is None:
+        return list(db_service.inventory.values())
+    records = await create_operational_repositories(session).records.list("inventory")
+    return [InventoryItem.model_validate(payload) for payload in records.values()]
+
+
 @app.get("/api/voice/dashboard")
 async def voice_dashboard(
     _user: dict = Depends(require_roles("ROLE_INTERNAL", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
@@ -780,7 +787,8 @@ async def voice_dashboard(
         if session is None
         else await db_service.list_rfqs_async(create_operational_repositories(session))
     )
-    return get_voice_dashboard(rfqs)
+    inventory = await _voice_inventory_records(session)
+    return get_voice_dashboard(rfqs, inventory)
 
 
 @app.post("/api/voice/tools/{tool_name}")
@@ -791,7 +799,8 @@ async def execute_voice_tool(
     session=Depends(get_async_db),
 ):
     if tool_name == "check_inventory_availability":
-        return check_inventory_availability(request.part_number or "")
+        inventory = await _voice_inventory_records(session)
+        return check_inventory_availability(request.part_number or "", inventory)
     if tool_name == "get_order_status":
         rfqs = (
             db_service.list_rfqs()
@@ -1973,6 +1982,26 @@ async def get_inventory(
     Fetch internal stock inventory.
     """
     if session is None:
+        try:
+            catalog = operations_store.list_inventory_catalog(500)
+        except Exception:
+            logger.exception("Inventory catalog query failed")
+            catalog = []
+        if catalog:
+            return [
+                InventoryItem(
+                    id=str(row.get("id")),
+                    part_number=str(row.get("part_number") or ""),
+                    serial_number=str(row.get("description") or "")[:120],
+                    quantity_available=int(row.get("quantity_available") or 0),
+                    condition_code=str(row.get("condition_code") or "AR"),
+                    warehouse_location=str(row.get("location") or row.get("supplier_name") or "Supplier"),
+                    unit_cost=float(row.get("unit_cost") or 0),
+                    certificate_type=str(row.get("certificate_type") or "Available upon supplier confirmation"),
+                    has_full_trace=bool(row.get("trace_documents") or row.get("certificate_type")),
+                )
+                for row in catalog
+            ]
         return list(db_service.inventory.values())
     records = await create_operational_repositories(session).records.list("inventory")
     return [InventoryItem.model_validate(payload) for payload in records.values()]
