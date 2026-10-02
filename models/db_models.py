@@ -46,6 +46,7 @@ class RFQ(BaseModel):
     raw_text: str = Field(description="Raw unstructured text from email or document")
     thread_id: Optional[str] = Field(None, description="Originating email message ID used for same-thread replies")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    part_number: Optional[str] = Field(None, description="Extracted part number(s) summary for list views")
 
 class InventoryItem(BaseModel):
     id: str = Field(description="Unique inventory item record ID")

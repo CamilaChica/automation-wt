@@ -163,7 +163,17 @@ class MockDatabaseService:
     async def list_rfqs_async(self, repositories) -> List[RFQ]:
         records = await repositories.rfq.list_operational_records("rfqs")
         if records:
-            return [RFQ.model_validate(payload) for payload in records.values()]
+            rfqs = [RFQ.model_validate(payload) for payload in records.values()]
+            item_records = await repositories.rfq.list_operational_records("rfq_items")
+            parts_by_rfq: dict[str, list[str]] = {}
+            for item in item_records.values():
+                part = str(item.get("part_number") or "").strip()
+                if part and part not in parts_by_rfq.setdefault(str(item.get("rfq_id")), []):
+                    parts_by_rfq[str(item.get("rfq_id"))].append(part)
+            for rfq in rfqs:
+                if not rfq.part_number and parts_by_rfq.get(rfq.id):
+                    rfq.part_number = ", ".join(parts_by_rfq[rfq.id])
+            return rfqs
         return [
             RFQ(
                 id=record.id,
