@@ -23,7 +23,7 @@ export function setThemePreference(theme: ThemeMode): void {
 
 export function getViewPreference(): ViewMode {
   const value = getCookie('wt_internal_view');
-  const views: ViewMode[] = ['customer', 'sourcing', 'aero-procurement', 'trace-vault', 'fulfillment', 'sales', 'swarm-simulation', 'voice-service'];
+  const views: ViewMode[] = ['customer', 'sourcing', 'aero-procurement', 'trace-vault', 'fulfillment', 'sales', 'voice-service'];
   return views.includes(value as ViewMode) ? value as ViewMode : 'customer';
 }
 

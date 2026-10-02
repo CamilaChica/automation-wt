@@ -36,12 +36,10 @@ export function setPreferredVoiceLanguage(language: VoiceLanguage): void {
 
 export interface VoiceInventoryItem {
   part_number: string;
-  description: string;
   quantity: number;
   condition_code: string;
-  condition_description: string;
-  unit_price: number;
-  lead_time: string;
+  certificate_type: string;
+  has_full_trace: boolean;
 }
 
 export interface VoiceRequest {

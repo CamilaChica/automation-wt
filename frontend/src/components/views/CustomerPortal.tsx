@@ -234,7 +234,7 @@ export const CustomerPortal: React.FC = () => {
             <form onSubmit={handleSearch} className="flex gap-3">
               <label htmlFor="catalog-search" className="sr-only">{t('searchAircraftParts')}</label>
               <input id="catalog-search" name="catalog-search" autoComplete="off" aria-label={t('searchAircraftParts')} value={query} onChange={event => setQuery(event.target.value)} placeholder="e.g., 060-1234-00" className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
-              <button disabled={isSearching} aria-busy={isSearching} className="rounded-xl bg-cyan-700 px-4 py-3 font-bold text-white hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60" aria-label={t('searchParts')}>{isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}</button>
+              <button disabled={isSearching || !query.trim()} aria-busy={isSearching} className="rounded-xl bg-cyan-700 px-4 py-3 font-bold text-white hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60" aria-label={t('searchParts')}>{isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}</button>
             </form>
             {usingFallbackCatalog && <div role="status" className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900"><Badge variant="outline">SAMPLE / DEMO DATA</Badge><span>Catalog results are local samples and are not confirmed availability.</span></div>}
             <div className="mt-5 space-y-3">
@@ -334,7 +334,7 @@ export const CustomerPortal: React.FC = () => {
             <div className="mt-5 flex gap-3">
               <label htmlFor="tracking-token" className="sr-only">{t('trackingToken')}</label>
               <input id="tracking-token" name="tracking-token" autoComplete="off" aria-label={t('trackingToken')} required value={trackingToken} onChange={event => setTrackingToken(event.target.value)} placeholder={t('trackingTokenPlaceholder')} className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
-              <button disabled={isTracking} className="rounded-xl bg-cyan-700 px-4 py-3 font-bold text-white disabled:opacity-60" aria-label={t('trackShipment')}>{isTracking ? '...' : t('track')}</button>
+              <button disabled={isTracking || !trackingToken.trim()} className="rounded-xl bg-cyan-700 px-4 py-3 font-bold text-white disabled:opacity-60" aria-label={t('trackShipment')}>{isTracking ? '...' : t('track')}</button>
             </div>
             {shipmentTraceQuery.error && <div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{getApiErrorMessage(shipmentTraceQuery.error, t('trackingFailed'))}<button type="button" onClick={() => void shipmentTraceQuery.refetch()} className="ml-2 font-bold underline">Retry</button></div>}
             {shipment && (

@@ -23,10 +23,6 @@ const statusStyles: Record<CallStatus, string> = {
   Escalated: 'bg-amber-100 text-amber-900 dark:bg-amber-950/70 dark:text-amber-300',
 };
 
-function formatUsd(value: number): string {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(value);
-}
-
 function statusTone(status: string): string {
   if (status.toLowerCase().includes('escalat')) return 'text-amber-700 dark:text-amber-300';
   if (status.toLowerCase().includes('reserved')) return 'text-emerald-700 dark:text-emerald-300';
@@ -35,6 +31,8 @@ function statusTone(status: string): string {
 
 export const VoiceServiceView: React.FC = () => {
   const [dashboard, setDashboard] = useState<VoiceDashboard>({ inventory: [], requests: [], human_queue: [] });
+  const [isDashboardLoading, setIsDashboardLoading] = useState(true);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [callStatus, setCallStatus] = useState<CallStatus>('Idle');
   const [isConnecting, setIsConnecting] = useState(false);
   const [micLevel, setMicLevel] = useState(0);
@@ -55,7 +53,9 @@ export const VoiceServiceView: React.FC = () => {
     void voiceService.getDashboard().then(data => {
       if (active) setDashboard(data);
     }).catch(() => {
-      if (active) setErrorMessage('Operations data is unavailable. Check your connection and refresh.');
+      if (active) setDashboardError('Live operations data is unavailable. Check your connection and refresh.');
+    }).finally(() => {
+      if (active) setIsDashboardLoading(false);
     });
     return () => { active = false; };
   }, []);
@@ -253,9 +253,9 @@ export const VoiceServiceView: React.FC = () => {
   const refreshDashboard = async () => {
     try {
       setDashboard(await voiceService.getDashboard());
-      setErrorMessage('');
+      setDashboardError(null);
     } catch {
-      setErrorMessage('Operations data could not be refreshed.');
+      setDashboardError('Live operations data could not be refreshed.');
     }
   };
 
@@ -279,6 +279,7 @@ export const VoiceServiceView: React.FC = () => {
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> <span>{errorMessage}</span>
         </div>
       )}
+      {dashboardError && <div role="alert" className="mb-4 border-l-4 border-red-600 bg-red-50 px-3 py-2.5 text-sm text-red-800 dark:bg-red-950/40 dark:text-red-200">{dashboardError}</div>}
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,0.88fr)_minmax(0,1.12fr)]">
         <section aria-label="Live call center" className="flex min-h-[650px] flex-col border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
@@ -346,24 +347,26 @@ export const VoiceServiceView: React.FC = () => {
                 <PackageCheck className="h-4 w-4 text-cyan-700 dark:text-cyan-400" />
                 <h2 className="text-sm font-bold text-slate-900 dark:text-white">Live inventory</h2>
               </div>
-              <span className="text-[11px] text-slate-500">{dashboard.inventory.length} demo records</span>
+              <span className="text-[11px] text-slate-500">{dashboard.inventory.length} inventory records</span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[620px] text-left text-xs">
                 <thead className="bg-slate-50 text-[10px] uppercase text-slate-500 dark:bg-slate-950/50 dark:text-slate-400">
-                  <tr><th className="px-4 py-2.5 font-semibold">Part number / description</th><th className="px-3 py-2.5 font-semibold">On hand</th><th className="px-3 py-2.5 font-semibold">Condition</th><th className="px-3 py-2.5 text-right font-semibold">Unit price</th><th className="px-4 py-2.5 text-right font-semibold">Lead</th></tr>
+                  <tr><th className="px-4 py-2.5 font-semibold">Part number</th><th className="px-3 py-2.5 font-semibold">On hand</th><th className="px-3 py-2.5 font-semibold">Condition</th><th className="px-3 py-2.5 font-semibold">Certificate</th><th className="px-4 py-2.5 text-right font-semibold">Trace</th></tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {dashboard.inventory.map(item => (
+                  {!isDashboardLoading && !dashboardError && dashboard.inventory.map(item => (
                     <tr key={item.part_number} className="text-slate-700 dark:text-slate-300">
-                      <td className="px-4 py-3"><div className="font-mono font-semibold text-slate-900 dark:text-slate-100">{item.part_number}</div><div className="mt-1 text-[11px] text-slate-500">{item.description}</div></td>
+                      <td className="px-4 py-3 font-mono font-semibold text-slate-900 dark:text-slate-100">{item.part_number}</td>
                       <td className="px-3 py-3 font-mono">{item.quantity}</td>
-                      <td className="px-3 py-3"><span className="font-semibold">{item.condition_code}</span><span className="ml-1 text-[10px] text-slate-500">{item.condition_description}</span></td>
-                      <td className="px-3 py-3 text-right font-mono">{formatUsd(item.unit_price)}</td>
-                      <td className="px-4 py-3 text-right text-slate-500">{item.lead_time}</td>
+                      <td className="px-3 py-3 font-semibold">{item.condition_code || '—'}</td>
+                      <td className="px-3 py-3">{item.certificate_type || '—'}</td>
+                      <td className="px-4 py-3 text-right">{item.has_full_trace ? 'Full' : 'Review'}</td>
                     </tr>
                   ))}
-                  {!dashboard.inventory.length && <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-500">Loading inventory...</td></tr>}
+                  {isDashboardLoading && <tr><td colSpan={5} role="status" className="px-4 py-8 text-center text-slate-500">Loading live inventory…</td></tr>}
+                  {!isDashboardLoading && !dashboardError && !dashboard.inventory.length && <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-500">No inventory records are available.</td></tr>}
+                  {dashboardError && <tr><td colSpan={5} className="px-4 py-8 text-center text-red-700">Inventory could not be loaded.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -380,8 +383,10 @@ export const VoiceServiceView: React.FC = () => {
                   <tr><th className="px-4 py-2.5 font-semibold">RFQ ID</th><th className="px-3 py-2.5 font-semibold">Customer</th><th className="px-3 py-2.5 font-semibold">Part number</th><th className="px-4 py-2.5 font-semibold">Status</th></tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {dashboard.requests.map((request: VoiceRequest) => <RequestRow key={request.id} request={request} />)}
-                  {!dashboard.requests.length && <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-500">No active requests</td></tr>}
+                  {!isDashboardLoading && !dashboardError && dashboard.requests.map((request: VoiceRequest) => <RequestRow key={request.id} request={request} />)}
+                  {isDashboardLoading && <tr><td colSpan={4} role="status" className="px-4 py-8 text-center text-slate-500">Loading live requests…</td></tr>}
+                  {!isDashboardLoading && !dashboardError && !dashboard.requests.length && <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-500">No active requests.</td></tr>}
+                  {dashboardError && <tr><td colSpan={4} className="px-4 py-8 text-center text-red-700">Requests could not be loaded.</td></tr>}
                 </tbody>
               </table>
             </div>

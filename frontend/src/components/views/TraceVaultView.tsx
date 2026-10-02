@@ -241,7 +241,6 @@ export const TraceVaultView: React.FC = () => {
                 <span className="w-2 h-2 rounded-full bg-aero-blue animate-ping" />
                 <span>DOCUMENTATION STATUS PIPELINE</span>
               </h2>
-              <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
             </div>
 
             <div className="overflow-x-auto font-mono text-[10px]">
@@ -250,13 +249,12 @@ export const TraceVaultView: React.FC = () => {
                   <tr className="text-slate-400 border-b border-slate-100 dark:border-slate-800">
                     <th className="pb-2">Order ID</th>
                     <th className="pb-2">Part Number</th>
-                    <th className="pb-2">Complexity</th>
                     <th className="pb-2 text-right">Clearance Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
-                  {loading && <tr><td colSpan={4} className="py-8 text-center text-slate-400">Loading trace records...</td></tr>}
-                  {!loading && rfqs.length === 0 && <tr><td colSpan={4} className="py-8 text-center text-slate-400">No RFQ documentation records available.</td></tr>}
+                  {loading && <tr><td colSpan={3} className="py-8 text-center text-slate-400">Loading trace records...</td></tr>}
+                  {!loading && rfqs.length === 0 && <tr><td colSpan={3} className="py-8 text-center text-slate-400">No RFQ documentation records available.</td></tr>}
                   {rfqs.map(rfq => (
                     <tr key={rfq.id} onClick={() => setActiveTab(rfq.id)} onKeyDown={(event) => {
                       if (event.key === 'Enter' || event.key === ' ') {
@@ -266,7 +264,6 @@ export const TraceVaultView: React.FC = () => {
                     }} tabIndex={0} role="button" className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40 text-slate-700 dark:text-slate-200">
                       <td className="py-2.5 text-aero-blue font-bold">{rfq.id}</td>
                       <td className="py-2.5">{rfq.part_number || (isFailedRfq(rfq) ? 'Extraction failed' : 'Pending extraction')}</td>
-                      <td className="py-2.5 text-slate-500">Awaiting document data</td>
                       <td className="py-2.5 text-right"><span className={`px-2 py-0.5 rounded-full border font-bold ${isFailedRfq(rfq) ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-500/10 dark:text-red-300 dark:border-red-500/40' : 'bg-slate-100 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700'}`}>{rfqStatusLabel(rfq)}</span></td>
                     </tr>
                   ))}
@@ -276,223 +273,19 @@ export const TraceVaultView: React.FC = () => {
           </div>
 
           {/* Active Document Vault Checklist */}
-          <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-3 font-mono text-[11px]">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
-              <h3 className="font-display font-bold text-xs text-slate-900 dark:text-slate-100 uppercase">
-                ACTIVE DOCUMENT VAULT
-              </h3>
-              <div className="flex items-center gap-2"><span className="text-[10px] text-slate-500 font-semibold">Required ({activeTab || '—'})</span><Badge variant="outline">SAMPLE / DEMO DATA</Badge></div>
-            </div>
-
-            <div className="space-y-2 text-slate-700 dark:text-slate-300">
-              <div className="flex items-center justify-between p-2 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800">
-                <div className="flex items-center space-x-2">
-                  <span className="w-2 h-2 rounded-full bg-aog-red animate-pulse" />
-                  <span>Certificate of Conformity (CoC)</span>
-                </div>
-                <span className="px-2 py-0.5 rounded-full bg-red-50 dark:bg-aog-red/20 text-aog-red text-[9px] font-bold border border-red-200 dark:border-aog-red/40">
-                  Missing
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between p-2 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800">
-                <div className="flex items-center space-x-2">
-                  <span className="w-2 h-2 rounded-full bg-amber-500" />
-                  <span>FAA Form 8130-3</span>
-                </div>
-                <span className="px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 text-[9px] font-bold border border-amber-200 dark:border-amber-500/40">
-                  Pending Review
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between p-2 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800">
-                <div className="flex items-center space-x-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                  <span>EASA Form 1</span>
-                </div>
-                <span className="px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold">
-                  Verified
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between p-2 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800">
-                <div className="flex items-center space-x-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                  <span>Authorized Release Cert</span>
-                </div>
-                <span className="px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold">
-                  Verified
-                </span>
-              </div>
-            </div>
-          </div>
+          <p role="status" className="border border-slate-200 bg-white p-5 text-sm text-slate-600 dark:border-slate-800 dark:bg-card-dark dark:text-slate-300">Per-RFQ certificate status is unavailable because the API does not expose a document checklist.</p>
         </div>
 
-        {/* Right Top (8 cols): DOCUMENT REVIEW & VERIFICATION TERMINAL */}
-        <div className="lg:col-span-8 bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between">
-          <div>
-            {isFailedRfq(selectedRfq) && <div role="alert" className="mb-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">{selectedRfq?.status.trim().toUpperCase() === 'NEEDS_HUMAN_REVIEW' ? 'Operator review required. Complete the review before processing.' : 'Intake failed. A safe retry requires an intake reset that is not available in this view.'} Trace decisions are disabled.</div>}
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase flex items-center space-x-2">
-                <FileSearch className="w-4 h-4 text-aero-blue" />
-                <span>DOCUMENT REVIEW & VERIFICATION TERMINAL</span>
-              </h2>
-              <div className="flex items-center space-x-3">
-                <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
-              </div>
-            </div>
-
-            {/* Interactive Document Viewer Canvas (FAA Form 8130-3 OCR annotation) */}
-            <div className="mt-3 relative bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-4 overflow-hidden h-[340px] flex flex-col justify-between font-mono text-slate-800 dark:text-slate-200">
-              {/* Document Header Representation */}
-              <div className="border-2 border-slate-300 dark:border-slate-700 p-3 bg-white text-slate-900 rounded-xl space-y-2 text-[10px] relative shadow-sm">
-                <div className="flex items-center justify-between border-b border-slate-300 pb-1 font-bold">
-                  <div>FAA Form 8130-3</div>
-                  <div className="text-center">
-                    AIRWORTHINESS APPROVAL TAG<br />FAA REPAIR STATION
-                  </div>
-                  <div className="text-emerald-700 font-bold">CRS #WT-942-CRS</div>
-                </div>
-
-                {/* Form Fields with Bounding Box Highlights */}
-                <div className="grid grid-cols-4 gap-2 pt-1 text-[9px]">
-                  <div className="border border-slate-200 p-1.5 rounded bg-slate-50">
-                    <div className="text-[7px] text-slate-600 uppercase">1. Serial Number</div>
-                    <div className="font-bold text-slate-900">MLG-9840</div>
-                  </div>
-                  <div className="border border-emerald-500 bg-emerald-50 p-1.5 rounded relative">
-                    <div className="text-[7px] text-emerald-700 font-bold uppercase">2. Part Number</div>
-                    <div className="font-bold text-emerald-900">32-11-45-01</div>
-                    <span className="absolute -top-2 -right-1 bg-emerald-700 text-white text-[7px] px-1 rounded font-bold">MATCH</span>
-                  </div>
-                  <div className="border border-amber-500 bg-amber-50 p-1.5 rounded relative col-span-2">
-                    <div className="text-[7px] text-amber-800 font-bold uppercase">3. Release Status</div>
-                    <div className="font-bold text-amber-900 flex items-center justify-between">
-                      <span>Serviceable — Return to Service</span>
-                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="border border-slate-200 p-2 rounded bg-slate-50 text-[8px] space-y-1 text-slate-600">
-                  <div className="font-bold text-slate-800">14 CFR 43.9 RETURN TO SERVICE COMPLIANCE</div>
-                  <div>Inspected in accordance with current maintenance regulations under 14 CFR Part 43.</div>
-                </div>
-
-                {/* Footer Signature */}
-                <div className="flex items-center justify-between pt-1.5 border-t border-slate-200 text-[8px] text-slate-600">
-                  <div>Date: 2026-08-28</div>
-                  <div className="font-bold italic text-slate-900">Marcus Vance (Q.A. Director)</div>
-                </div>
-              </div>
-
-              {/* OCR Scan Status Banner */}
-              <div className={`mt-2 bg-white dark:bg-slate-900/90 p-2.5 rounded-xl flex items-center justify-between text-[11px] shadow-sm ${
-                hardFreezeEnabled
-                  ? 'border border-red-300 dark:border-red-500/50'
-                  : 'border border-emerald-200 dark:border-emerald-500/40'
-              }`}>
-                <div className="flex items-center space-x-2 text-emerald-600 dark:text-emerald-400 font-bold">
-                  <ShieldCheck className="w-4 h-4" />
-                  <span>
-                    {hardFreezeEnabled
-                      ? 'Order hard freeze active: suspicious transaction blocked.'
-                      : 'OCR Scan: 100% Verified (0 Trace Gaps)'}
-                  </span>
-                </div>
-                <div className="text-[10px] text-slate-500 font-mono">Confidence: 99.8%</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Action Buttons */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 font-display pt-2">
-              <button
-              type="button"
-              disabled={actionsBlocked}
-              aria-busy={pendingDecision === 'certify'}
-              onClick={() => void recordDecision('certify')}
-              className="bg-emerald-700 hover:bg-emerald-600 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 text-xs"
-            >
-              {pendingDecision === 'certify' ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <CheckCircle2 className="w-4 h-4" />}
-              <span>{pendingDecision === 'certify' ? 'CERTIFYING...' : 'ACCEPT & CERTIFY'}</span>
-            </button>
-            <button
-              type="button"
-              disabled={actionsBlocked}
-              aria-busy={pendingDecision === 'reject'}
-              onClick={() => void recordDecision('reject')}
-              className="bg-red-700 hover:bg-red-600 text-white font-bold py-2.5 px-4 rounded-xl shadow-md shadow-red-500/20 flex items-center justify-center space-x-2 text-xs"
-            >
-              {pendingDecision === 'reject' ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <XCircle className="w-4 h-4" />}
-              <span>{pendingDecision === 'reject' ? 'REJECTING...' : 'REJECT DOC'}</span>
-            </button>
-            <button type="button" disabled={actionsBlocked} aria-busy={pendingDecision === 'rescan'} onClick={() => void recordDecision('rescan')} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 text-xs disabled:cursor-not-allowed disabled:opacity-50">
-              {pendingDecision === 'rescan' ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <FileSearch className="w-4 h-4" />}
-              <span>{pendingDecision === 'rescan' ? 'REQUESTING...' : 'REQUEST RE-SCAN'}</span>
-            </button>
-            <button
-              type="button"
-              disabled={actionsBlocked}
-              aria-busy={pendingDecision === 'freeze'}
-              onClick={() => void recordDecision('freeze')}
-              className="bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 px-4 rounded-xl border border-red-500/60 flex items-center justify-center space-x-2 text-xs"
-            >
-              {pendingDecision === 'freeze' ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <AlertOctagon className="w-4 h-4 text-red-300" />}
-              <span>{pendingDecision === 'freeze' ? 'FREEZING...' : 'HARD FREEZE ORDER'}</span>
-            </button>
-          </div>
-          <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-            Verification state: {verificationPassed ? 'CERTIFIED' : 'REVIEW_REQUIRED'}
-          </p>
-        </div>
+        <section role="status" className="lg:col-span-8 flex min-h-48 items-center border border-slate-200 bg-white p-5 text-sm text-slate-600 dark:border-slate-800 dark:bg-card-dark dark:text-slate-300">
+          Document OCR evidence is unavailable from the live API. Certification and freeze actions are not available in this panel.
+        </section>
       </div>
 
-      {/* Bottom Grid: Traceability History & Metrics Overview */}
+      {/* Bottom Grid: live compliance metrics */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Bottom (7 cols): TRACEABILITY & COMPLIANCE HISTORY */}
-        <div className="lg:col-span-7 bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-          <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase">
-            TRACEABILITY & COMPLIANCE HISTORY
-          </h2>
-          <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
-
-          {/* Milestone Stepper Timeline */}
-          <div className="grid grid-cols-2 gap-x-2 gap-y-4 pt-2 text-center font-mono text-[10px] sm:grid-cols-4">
-            <div className="flex min-w-0 flex-col items-center">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 font-bold text-emerald-700 dark:border-emerald-500 dark:bg-emerald-500/20 dark:text-emerald-300">
-                ✓
-              </div>
-              <span className="mt-2 w-full break-words text-center font-bold leading-tight text-slate-900 dark:text-slate-200">Receipt</span>
-              <span className="mt-1 w-full break-all text-center text-[9px] leading-tight text-slate-500">32-11-45-01</span>
-            </div>
-
-            <div className="flex min-w-0 flex-col items-center">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 font-bold text-emerald-700 dark:border-emerald-500 dark:bg-emerald-500/20 dark:text-emerald-300">
-                ✓
-              </div>
-              <span className="mt-2 w-full break-words text-center font-bold leading-tight text-slate-900 dark:text-slate-200">8130-3 Verified</span>
-              <span className="mt-1 w-full break-words text-center text-[9px] leading-tight text-slate-500">CRS Pass</span>
-            </div>
-
-            <div className="flex min-w-0 flex-col items-center">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 font-bold text-emerald-700 dark:border-emerald-500 dark:bg-emerald-500/20 dark:text-emerald-300">
-                ✓
-              </div>
-              <span className="mt-2 w-full break-words text-center font-bold leading-tight text-slate-900 dark:text-slate-200">QA Bench</span>
-              <span className="mt-1 w-full break-words text-center text-[9px] leading-tight text-slate-500">Dimensional</span>
-            </div>
-
-            <div className="flex min-w-0 flex-col items-center">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-blue-200 bg-blue-50 font-bold text-blue-700 dark:border-slate-700 dark:bg-slate-800 dark:text-blue-300">
-                4
-              </div>
-              <span className="mt-2 w-full break-words text-center font-semibold leading-tight text-slate-700 dark:text-slate-300">Final Release</span>
-              <span className="mt-1 w-full break-words text-center text-[9px] leading-tight text-slate-500">Dispatch</span>
-            </div>
-          </div>
+        <div role="status" className="lg:col-span-7 flex min-h-32 items-center border border-slate-200 bg-white p-5 text-sm text-slate-600 dark:border-slate-800 dark:bg-card-dark dark:text-slate-300">
+          Persisted traceability milestones are unavailable because no milestone-history endpoint is connected.
         </div>
-
         {/* Right Bottom (5 cols): COMPLIANCE DASHBOARD OVERVIEW METRICS */}
         <div className="lg:col-span-5 bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
           <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase">

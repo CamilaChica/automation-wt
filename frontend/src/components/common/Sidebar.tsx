@@ -10,7 +10,6 @@ import {
   Truck, 
   TrendingUp, 
   LogOut,
-  FlaskConical,
   Headphones,
   Clock3,
 } from 'lucide-react';
@@ -35,19 +34,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView, isM
       id: 'sourcing' as ViewMode,
       label: 'Sourcing Matrix',
       icon: Search,
-      badge: '18'
+      badge: null
     },
     {
       id: 'aero-procurement' as ViewMode,
       label: 'Proc Command',
       icon: FileText,
-      badge: '14'
+      badge: null
     },
     {
       id: 'trace-vault' as ViewMode,
       label: 'Trace Vault',
       icon: ShieldCheck,
-      badge: '42'
+      badge: null
     },
     {
       id: 'fulfillment' as ViewMode,
@@ -59,12 +58,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView, isM
       id: 'sales' as ViewMode,
       label: 'Sales Command',
       icon: TrendingUp,
-      badge: '9'
-    },
-    {
-      id: 'swarm-simulation' as ViewMode,
-      label: 'Swarm Runner',
-      icon: FlaskConical,
       badge: null
     },
     {

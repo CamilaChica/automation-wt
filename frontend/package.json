@@ -10,6 +10,8 @@
     "preview": "vite preview",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
+    "test:e2e:audit": "playwright test --config=playwright.audit.config.ts",
+    "typecheck:e2e:audit": "tsc --project tsconfig.audit.json --noEmit",
     "test:e2e:list": "playwright test --list"
   },
   "dependencies": {

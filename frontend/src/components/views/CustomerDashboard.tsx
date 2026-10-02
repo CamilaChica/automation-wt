@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { WorldMapTelemetry } from '../common/WorldMapTelemetry';
 import { WorkflowStepper } from '../common/WorkflowStepper';
-import { getApiErrorMessage } from '../../services/api';
+import { apiService, getApiErrorMessage } from '../../services/api';
 import { Badge } from '../common/Badge';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { RFQ } from '../../types';
@@ -45,22 +45,23 @@ export const CustomerDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ClientTab>('quotations');
 
   // Form State for RFQ
-  const [partNumber, setPartNumber] = useState('32-11-45-01');
-  const [partName, setPartName] = useState('Main Landing Gear Actuator');
-  const [ataChapter, setAtaChapter] = useState('32');
-  const [aircraftType, setAircraftType] = useState('Boeing 737-800 / MAX');
+  const [customerName, setCustomerName] = useState('');
+  const [customerEmail, setCustomerEmail] = useState('');
+  const [partNumber, setPartNumber] = useState('');
+  const [partName, setPartName] = useState('');
+  const [ataChapter, setAtaChapter] = useState('');
+  const [aircraftType, setAircraftType] = useState('');
   const [quantity, setQuantity] = useState(1);
-  const [urgency, setUrgency] = useState<'AOG' | 'Critical' | 'Routine'>('AOG');
-  const [deliveryIcao, setDeliveryIcao] = useState('MIA');
-  const [dockLocation, setDockLocation] = useState('Dock A-12 (Line Maint)');
-  const [requiredDate, setRequiredDate] = useState('2026-09-08');
-  const [conditions, setConditions] = useState<Record<ConditionKey, boolean>>({ SV: true, OH: true, NEW: false, AR: false });
-  const [documents, setDocuments] = useState({ faa8130: true, easaForm1: false, trace121: true, nonIncident: true });
+  const [urgency, setUrgency] = useState<'AOG' | 'Critical' | 'Routine'>('Routine');
+  const [deliveryIcao, setDeliveryIcao] = useState('');
+  const [dockLocation, setDockLocation] = useState('');
+  const [requiredDate, setRequiredDate] = useState('');
+  const [conditions, setConditions] = useState<Record<ConditionKey, boolean>>({ SV: false, OH: false, NEW: false, AR: false });
+  const [documents, setDocuments] = useState({ faa8130: false, easaForm1: false, trace121: false, nonIncident: false });
   
   // Active RFQs & Quotations
   const [selectedRfqId, setSelectedRfqId] = useState('');
   const [notification, setNotification] = useState<{ type: 'success' | 'info' | 'error'; message: string } | null>(null);
-  const [selectedOption, setSelectedOption] = useState<'A' | 'B' | 'C'>('A');
 
   // Modals
   const [isApproveModalOpen, setIsApproveModalOpen] = useState(false);
@@ -110,49 +111,29 @@ export const CustomerDashboard: React.FC = () => {
     if (!selectedRfqId && activeRfqs.length > 0) setSelectedRfqId(activeRfqs[0].id);
   }, [activeRfqs, selectedRfqId]);
 
-  // Quick Preset Handlers
-  const applyPreset = (preset: 'aog-actuator' | 'routine-overhaul' | 'hydraulic-pump' | 'avionics') => {
-    if (preset === 'aog-actuator') {
-      setPartNumber('32-11-45-01');
-      setPartName('Main Landing Gear Actuator');
-      setAtaChapter('32');
-      setAircraftType('Boeing 737-800');
-      setQuantity(1);
-      setUrgency('AOG');
-      setConditions({ SV: true, OH: false, NEW: false, AR: false });
-    } else if (preset === 'routine-overhaul') {
-      setPartNumber('32-11-45-01');
-      setPartName('Main Landing Gear Actuator (Overhaul)');
-      setAtaChapter('32');
-      setAircraftType('Boeing 737-MAX');
-      setQuantity(2);
-      setUrgency('Routine');
-      setConditions({ SV: false, OH: true, NEW: false, AR: false });
-    } else if (preset === 'hydraulic-pump') {
-      setPartNumber('747-1011-00');
-      setPartName('Engine-Driven Hydraulic Pump');
-      setAtaChapter('29');
-      setAircraftType('Boeing 777-300ER');
-      setQuantity(1);
-      setUrgency('Critical');
-      setConditions({ SV: true, OH: true, NEW: false, AR: false });
-    } else if (preset === 'avionics') {
-      setPartNumber('NAV-4402-A');
-      setPartName('Flight Management Guidance Computer');
-      setAtaChapter('34');
-      setAircraftType('Airbus A320neo');
-      setQuantity(1);
-      setUrgency('Routine');
-      setConditions({ SV: true, OH: false, NEW: true, AR: false });
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (submitting) return;
-    const rawText = `RFQ P/N ${partNumber} (${partName}) Qty ${quantity} Condition: ${Object.keys(conditions).filter(key => conditions[key as ConditionKey]).join(', ')} Urgency: ${urgency} Delivery: ${deliveryIcao} ${dockLocation}`;
+    const acceptedConditions = Object.keys(conditions).filter(key => conditions[key as ConditionKey]);
+    if (!customerName.trim() || !customerEmail.trim() || !partNumber.trim() || acceptedConditions.length === 0) {
+      setNotification({ type: 'error', message: 'Enter the customer name, customer email, part number, and at least one acceptable condition.' });
+      return;
+    }
+    const rawText = [
+      `RFQ P/N ${partNumber.trim()}`,
+      partName.trim() && `Description: ${partName.trim()}`,
+      `Quantity: ${quantity}`,
+      ataChapter.trim() && `ATA chapter: ${ataChapter.trim()}`,
+      aircraftType.trim() && `Aircraft: ${aircraftType.trim()}`,
+      `Condition: ${acceptedConditions.join(', ')}`,
+      `Urgency: ${urgency}`,
+      deliveryIcao.trim() && `Delivery airport: ${deliveryIcao.trim()}`,
+      dockLocation.trim() && `Dock: ${dockLocation.trim()}`,
+      requiredDate && `Required date: ${requiredDate}`,
+      `Required documents: ${Object.entries(documents).filter(([, required]) => required).map(([document]) => document).join(', ') || 'not specified'}`,
+    ].filter(Boolean).join('. ');
     try {
-      const res = await createRfqMutation.mutateAsync({ raw_text: rawText, customer_name: 'GLOBAL AIRLINES', customer_email: 'mro.ops@globalairlines.com' });
+      const res = await createRfqMutation.mutateAsync({ raw_text: rawText, customer_name: customerName.trim(), customer_email: customerEmail.trim() });
       if (!res) return;
       setSelectedRfqId(res.rfq_id);
       setActiveTab('quotations');
@@ -187,33 +168,22 @@ export const CustomerDashboard: React.FC = () => {
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans">
-      <div role="note" className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[10px] text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
-        <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
-        <span>Pricing options, document previews, and response-time estimates are illustrative. RFQ and shipment counts load from the API.</span>
-      </div>
       {usingFallbackData && <FallbackDataBanner message="RFQ API unavailable; local sample RFQs are shown and mutation actions are disabled." />}
       {/* 1. Client Header & Profile Card */}
       <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm transition-all">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex min-w-0 items-center space-x-3.5">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-blue-600 to-sky-400 text-lg font-display font-bold text-white shadow-md shadow-blue-500/20">
-              GA
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-slate-800 text-sm font-display font-bold text-white dark:bg-slate-700">
+              RFQ
             </div>
             <div>
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <h1 className="text-xl font-display font-bold text-slate-900 dark:text-white">
-                  GLOBAL AIRLINES
+                  RFQ Operations
                 </h1>
-                <span className="inline-flex shrink-0 items-center whitespace-nowrap leading-4 bg-blue-50 dark:bg-blue-950/40 text-aero-blue border border-blue-200 dark:border-blue-800 text-[11px] font-mono font-bold px-2 py-0.5 rounded-full">
-                  MRO FLEET OPS
-                </span>
-                <span className="inline-flex shrink-0 items-center space-x-1 whitespace-nowrap leading-4 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 text-[11px] font-mono font-bold px-2 py-0.5 rounded-full">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <span>VIP GOLD TIER</span>
-                </span>
               </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Account ID: <span className="font-mono font-semibold text-slate-700 dark:text-slate-300">GL-8820</span> • Primary Hub: <span className="font-semibold text-slate-700 dark:text-slate-300">MIA Intl Airport (Miami, FL)</span>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Signed in as <span className="font-mono font-semibold text-slate-700 dark:text-slate-300">{apiService.getUserEmail() || 'account unavailable'}</span>
               </p>
             </div>
           </div>
@@ -231,7 +201,7 @@ export const CustomerDashboard: React.FC = () => {
         </div>
 
         {/* Quick KPI Stat Tiles */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5 pt-4 border-t border-slate-100 dark:border-slate-800/80">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-5 pt-4 border-t border-slate-100 dark:border-slate-800/80">
           <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-xl border border-slate-100 dark:border-slate-800">
             <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">ACTIVE RFQS</div>
             <div className="text-xl font-display font-bold text-slate-900 dark:text-white mt-0.5 flex items-center justify-between">
@@ -257,14 +227,6 @@ export const CustomerDashboard: React.FC = () => {
             {shipmentLoadError && <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-red-700" role="alert"><span>{shipmentLoadError}</span><button type="button" onClick={() => void refreshShipments()} className="shrink-0 font-bold underline">Retry</button></div>}
           </div>
 
-          <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-xl border border-slate-100 dark:border-slate-800">
-            <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">AVG RESPONSE SLA</div>
-            <div className="text-xl font-display font-bold text-aero-blue mt-0.5 flex items-center justify-between">
-              <span>14.2 min</span>
-              <ShieldCheck className="w-4 h-4 text-aero-blue" />
-            </div>
-            <Badge variant="outline" className="mt-2">SAMPLE / DEMO DATA</Badge>
-          </div>
         </div>
       </div>
 
@@ -289,11 +251,8 @@ export const CustomerDashboard: React.FC = () => {
         <nav aria-label="Customer dashboard" className="w-full min-w-0 overflow-x-auto">
           <div className="flex w-max min-w-max flex-nowrap items-center gap-2 sm:gap-4">
           {[
-            { id: 'quotations', label: 'Quotations & Approvals', icon: FileText, badge: '2 Ready' },
+            { id: 'quotations', label: 'Quotes and RFQs', icon: FileText, badge: activeRfqs.length ? `${activeRfqs.length}` : null },
             { id: 'new-rfq', label: 'Submit New RFQ', icon: Send, badge: null },
-            { id: 'tracking', label: 'Shipment Route Demo', icon: Plane, badge: 'Sample' },
-            { id: 'trace-vault', label: 'Airworthiness Trace Vault', icon: ShieldCheck, badge: '4 Certs' },
-            { id: 'analytics', label: 'Spend & Fleet Analytics', icon: TrendingUp, badge: null }
           ].map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -330,9 +289,6 @@ export const CustomerDashboard: React.FC = () => {
       {/* TAB 1: QUOTATIONS & APPROVALS */}
       {activeTab === 'quotations' && (
         <div className="space-y-6">
-          {/* Progress Tracker Stepper */}
-          <WorkflowStepper currentStepIndex={6} />
-
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             {/* Left Column (5 Cols): Quotation Inbox List */}
             <div className="lg:col-span-5 bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm flex flex-col justify-between">
@@ -383,7 +339,7 @@ export const CustomerDashboard: React.FC = () => {
                               </span>
                             </div>
                             <div className="font-mono text-xs font-semibold text-slate-800 dark:text-slate-200">
-                              P/N: {rfq.part_number || '32-11-45-01'} (Qty: {rfq.quantity || 1})
+                              P/N: {rfq.part_number || '—'} (Qty: {rfq.quantity ?? '—'})
                             </div>
                             <div className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1">
                               {rfq.raw_text}
@@ -392,10 +348,10 @@ export const CustomerDashboard: React.FC = () => {
 
                           <div className="text-right shrink-0">
                             <div className="font-mono font-bold text-sm text-slate-900 dark:text-white">
-                              ${rfq.best_price?.toLocaleString()}
+                              {rfq.best_price == null ? 'Quote not available' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(rfq.best_price)}
                             </div>
                             <div className="text-[10px] font-mono text-slate-500 dark:text-slate-400">
-                              {rfq.lead_time}
+                              {rfq.lead_time || 'Lead time not available'}
                             </div>
                           </div>
                         </div>
@@ -419,21 +375,14 @@ export const CustomerDashboard: React.FC = () => {
                     <span className="text-xs text-slate-500 dark:text-slate-400">PROPOSAL REVIEW</span>
                     <h2 className="flex min-w-0 flex-wrap items-baseline gap-x-2 font-display text-sm font-bold leading-tight text-slate-900 dark:text-white sm:text-base">
                       <span>RFQ {selectedRfq.id}</span>
-                      <span className="whitespace-nowrap">P/N {selectedRfq.part_number || '32-11-45-01'}</span>
+                      <span className="whitespace-nowrap">P/N {selectedRfq.part_number || '—'}</span>
                     </h2>
                   </div>
                   <p className="mt-1 break-words text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-                    Main Landing Gear Actuator • Aircraft Type: Boeing 737-800
+                    {selectedRfq.raw_text || 'No RFQ description is available.'}
                   </p>
                 </div>
 
-                <button 
-                  onClick={() => openDocViewer('8130-3-2026-99', selectedRfq.part_number || '32-11-45-01', 'MLG-9840', 'FAA 8130-3 Airworthiness Release', '2026-08-28')}
-                  className="inline-flex min-h-11 shrink-0 items-center justify-center space-x-1.5 rounded-lg border border-slate-200 bg-slate-100 px-3 text-[11px] text-slate-700 transition-colors hover:bg-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                >
-                  <Eye className="w-3.5 h-3.5 text-aero-blue" />
-                  <span>Preview FAA 8130-3</span>
-                </button>
               </div>
 
               {rfqDetailError && <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300"><span>{rfqDetailError}</span><button type="button" onClick={() => void rfqDetailQuery.refetch()} className="shrink-0 font-bold underline">Retry</button></div>}
@@ -442,142 +391,23 @@ export const CustomerDashboard: React.FC = () => {
               {selectedRfqFailed && <div role="alert" className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300">{activeRfqs.find(rfq => rfq.id === selectedRfqId)?.status.trim().toUpperCase() === 'NEEDS_HUMAN_REVIEW' ? 'Operator review required. Complete the review before processing.' : 'Intake failed. An admin or manager must reset it in Procurement before a separate process action.'} Approval and sourcing actions are disabled.</div>}
 
               {/* Sourcing Option Comparison Cards */}
-              <div className="space-y-3">
-                <div className="text-xs font-display font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider flex items-center justify-between">
-                  <span>Available Inventory & Sourcing Options</span>
-                  <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
+                  <div className="space-y-3">
+                    <div className="text-xs font-display font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                  <span>Persisted quote details</span>
                 </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  {/* Option A (Recommended / Internal Stock) */}
-                  <div 
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setSelectedOption('A')}
-                    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedOption('A'); } }}
-                    className={`p-3.5 rounded-xl border cursor-pointer relative transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${
-                      selectedOption === 'A'
-                        ? 'border-aero-blue bg-blue-50/50 dark:bg-blue-950/20 shadow-sm ring-1 ring-aero-blue'
-                        : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-slate-50/50 dark:bg-slate-900/30'
-                    }`}
-                  >
-                    <div className="absolute top-2.5 right-2.5">
-                      <span className="bg-aero-blue text-white text-[9px] font-bold font-mono px-1.5 py-0.5 rounded">
-                        RECOMMENDED
-                      </span>
-                    </div>
-
-                    <div className="font-mono text-xs font-bold text-slate-900 dark:text-white">
-                      OPTION A
-                    </div>
-                    <div className="text-[10px] text-slate-500 font-mono">Miami Internal Warehouse</div>
-
-                    <div className="my-2.5">
-                      <div className="text-lg font-display font-bold text-emerald-600 dark:text-emerald-400">
-                        $14,200
-                      </div>
-                      <div className="text-[10px] font-mono text-slate-500">1 Day • Hot-Shot Dispatch</div>
-                    </div>
-
-                    <div className="space-y-1 text-[10px] font-mono text-slate-600 dark:text-slate-400 border-t border-slate-200 dark:border-slate-800 pt-2">
-                      <div>Condition: <span className="font-bold text-slate-800 dark:text-slate-200">SV (Serviceable)</span></div>
-                      <div>Release: <span className="text-emerald-600 dark:text-emerald-400 font-semibold">FAA 8130-3</span></div>
-                      <div>Trace: <span className="text-emerald-600 dark:text-emerald-400 font-semibold">121 Operator</span></div>
-                    </div>
+                {liveQuote ? (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/60">
+                    <dl className="grid gap-3 sm:grid-cols-2">
+                      <div><dt className="text-xs text-slate-500">Quote status</dt><dd className="mt-1 font-semibold">{liveQuote.status}</dd></div>
+                      <div><dt className="text-xs text-slate-500">Total</dt><dd className="mt-1 font-mono font-bold">{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(liveQuote.total_amount)}</dd></div>
+                      <div><dt className="text-xs text-slate-500">Subtotal</dt><dd className="mt-1 font-mono">{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(liveQuote.subtotal)}</dd></div>
+                      <div><dt className="text-xs text-slate-500">Shipping</dt><dd className="mt-1 font-mono">{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(liveQuote.shipping_cost)}</dd></div>
+                    </dl>
+                    {selectedRfqDetail?.quote_details?.items.length ? <div className="mt-4 border-t border-slate-200 pt-3 dark:border-slate-700"><h3 className="text-xs font-semibold">Quoted items</h3><ul className="mt-2 space-y-1 text-xs">{selectedRfqDetail.quote_details.items.map((item, index) => <li key={`${item.part_number}-${index}`} className="flex justify-between gap-3"><span>{item.part_number}</span><span>Qty {item.quantity}</span></li>)}</ul></div> : null}
                   </div>
-
-                  {/* Option B (Overhauled / Frankfurt) */}
-                  <div 
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setSelectedOption('B')}
-                    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedOption('B'); } }}
-                    className={`p-3.5 rounded-xl border cursor-pointer relative transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${
-                      selectedOption === 'B'
-                        ? 'border-aero-blue bg-blue-50/50 dark:bg-blue-950/20 shadow-sm ring-1 ring-aero-blue'
-                        : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-slate-50/50 dark:bg-slate-900/30'
-                    }`}
-                  >
-                    <div className="font-mono text-xs font-bold text-slate-900 dark:text-white">
-                      OPTION B
-                    </div>
-                    <div className="text-[10px] text-slate-500 font-mono">Frankfurt Logistics Hub</div>
-
-                    <div className="my-2.5">
-                      <div className="text-lg font-display font-bold text-slate-900 dark:text-white">
-                        $11,800
-                      </div>
-                      <div className="text-[10px] font-mono text-slate-500">2 Days • Air Express</div>
-                    </div>
-
-                    <div className="space-y-1 text-[10px] font-mono text-slate-600 dark:text-slate-400 border-t border-slate-200 dark:border-slate-800 pt-2">
-                      <div>Condition: <span className="font-bold text-slate-800 dark:text-slate-200">OH (Overhauled)</span></div>
-                      <div>Release: <span className="text-aero-blue font-semibold">EASA Form 1</span></div>
-                      <div>Trace: <span className="text-emerald-600 dark:text-emerald-400 font-semibold">OEM Lufthansa</span></div>
-                    </div>
-                  </div>
-
-                  {/* Option C (DFW Stock) */}
-                  <div 
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setSelectedOption('C')}
-                    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedOption('C'); } }}
-                    className={`p-3.5 rounded-xl border cursor-pointer relative transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue ${
-                      selectedOption === 'C'
-                        ? 'border-aero-blue bg-blue-50/50 dark:bg-blue-950/20 shadow-sm ring-1 ring-aero-blue'
-                        : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-slate-50/50 dark:bg-slate-900/30'
-                    }`}
-                  >
-                    <div className="font-mono text-xs font-bold text-slate-900 dark:text-white">
-                      OPTION C
-                    </div>
-                    <div className="text-[10px] text-slate-500 font-mono">Texas Aviation DFW</div>
-
-                    <div className="my-2.5">
-                      <div className="text-lg font-display font-bold text-slate-900 dark:text-white">
-                        $12,500
-                      </div>
-                      <div className="text-[10px] font-mono text-slate-500">2 Days • Ground Priority</div>
-                    </div>
-
-                    <div className="space-y-1 text-[10px] font-mono text-slate-600 dark:text-slate-400 border-t border-slate-200 dark:border-slate-800 pt-2">
-                      <div>Condition: <span className="font-bold text-slate-800 dark:text-slate-200">SV (Serviceable)</span></div>
-                      <div>Release: <span className="text-emerald-600 dark:text-emerald-400 font-semibold">FAA 8130-3</span></div>
-                      <div>Trace: <span className="text-slate-500">FAA 145 Station</span></div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Price Breakdown Summary & 1-Click Action */}
-              <div className="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
-                <div className="mb-2 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 text-xs">
-                  <span className="min-w-0 break-words text-slate-500">Selected Option:</span>
-                  <span className="whitespace-nowrap text-right font-bold text-slate-900 dark:text-white">
-                    Option {selectedOption} ({selectedOption === 'A' ? 'Internal Miami Stock' : selectedOption === 'B' ? 'Frankfurt Hub' : 'Texas Aviation'})
-                  </span>
-                </div>
-                <div className="mb-2 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 text-xs">
-                  <span className="min-w-0 break-words text-slate-500">Unit Base Price:</span>
-                  <span className="whitespace-nowrap text-right font-semibold text-slate-900 dark:text-white">
-                    ${selectedOption === 'A' ? '14,200.00' : selectedOption === 'B' ? '11,800.00' : '12,500.00'}
-                  </span>
-                </div>
-                <div className="mb-2 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 text-xs">
-                  <span className="min-w-0 break-words text-slate-500">AOG Hot-Shot Logistics:</span>
-                  <span className="whitespace-nowrap text-right font-semibold text-slate-900 dark:text-white">$250.00</span>
-                </div>
-                <div className="mb-2 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 text-xs">
-                  <span className="min-w-0 break-words text-slate-500">FAA 8130-3 Digital Cert Packet:</span>
-                  <span className="whitespace-nowrap text-right font-semibold text-emerald-600 dark:text-emerald-400">Included (FREE)</span>
-                </div>
-                <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 border-t border-slate-200 pt-2 text-sm font-bold dark:border-slate-700">
-                  <span className="min-w-0 break-words text-slate-900 dark:text-white">TOTAL DELIVERED COST:</span>
-                  <span className="whitespace-nowrap text-right text-base text-emerald-600 dark:text-emerald-400">
-                    ${selectedOption === 'A' ? '14,450.00' : selectedOption === 'B' ? '12,050.00' : '12,750.00'}
-                  </span>
-                </div>
+                ) : (
+                  <p role="status" className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">No persisted quote is available for this RFQ.</p>
+                )}
 
                 <div className="mt-4 flex flex-col sm:flex-row items-center gap-3">
                   <button
@@ -587,14 +417,6 @@ export const CustomerDashboard: React.FC = () => {
                   >
                     <CheckCircle2 className="w-4 h-4" />
                     <span>APPROVE & DISPATCH QUOTE</span>
-                  </button>
-
-                  <button
-                    onClick={() => openDocViewer('8130-3-2026-99', selectedRfq.part_number || '32-11-45-01', 'MLG-9840', 'FAA 8130-3 Airworthiness Release', '2026-08-28')}
-                    className="w-full sm:w-auto bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 text-slate-700 dark:text-slate-200 font-display font-semibold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center space-x-1.5 transition-colors"
-                  >
-                    <FileText className="w-4 h-4 text-aero-blue" />
-                    <span>View Pro-Forma Quote PDF</span>
                   </button>
                 </div>
               </div>
@@ -615,61 +437,23 @@ export const CustomerDashboard: React.FC = () => {
                   <span>REQUEST FOR QUOTATION (RFQ) INTAKE</span>
                 </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  AI-powered instant multi-agent part identification, compliance checking, and live pricing.
+                  Enter the customer and part details. Quote information appears only after it is persisted by the API.
                 </p>
-              </div>
-
-              <span className="text-[11px] font-mono text-aero-blue bg-blue-50 dark:bg-blue-950/40 px-2.5 py-1 rounded-full font-semibold">
-                SLA Target: &lt; 15 mins
-              </span>
-            </div>
-
-            {/* Fast Presets */}
-            <div>
-              <div className="text-[11px] font-mono font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                ⚡ Quick Fleet Presets (Click to autofill):
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                <button
-                  type="button"
-                  onClick={() => applyPreset('aog-actuator')}
-                  className="p-2.5 rounded-xl border border-red-200 dark:border-red-900/60 bg-red-50/50 dark:bg-red-950/20 hover:bg-red-100/60 text-left transition-all"
-                >
-                  <div className="font-bold text-aog-red font-mono text-[11px]">AOG Actuator</div>
-                  <div className="text-[10px] text-slate-500 font-mono">P/N 32-11-45-01 (B737)</div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyPreset('routine-overhaul')}
-                  className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 hover:bg-slate-100 text-left transition-all"
-                >
-                  <div className="font-bold text-slate-800 dark:text-slate-200 font-mono text-[11px]">Routine OH</div>
-                  <div className="text-[10px] text-slate-500 font-mono">P/N 32-11-45-01 (Qty 2)</div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyPreset('hydraulic-pump')}
-                  className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 hover:bg-slate-100 text-left transition-all"
-                >
-                  <div className="font-bold text-slate-800 dark:text-slate-200 font-mono text-[11px]">Hydraulic Pump</div>
-                  <div className="text-[10px] text-slate-500 font-mono">P/N 747-1011-00 (B777)</div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => applyPreset('avionics')}
-                  className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 hover:bg-slate-100 text-left transition-all"
-                >
-                  <div className="font-bold text-slate-800 dark:text-slate-200 font-mono text-[11px]">Avionics FMGC</div>
-                  <div className="text-[10px] text-slate-500 font-mono">P/N NAV-4402-A (A320)</div>
-                </button>
               </div>
             </div>
 
             {/* Intake Form */}
             <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <label className="space-y-1.5 font-mono font-semibold text-slate-700 dark:text-slate-300">
+                  <span>Customer name</span>
+                  <input type="text" autoComplete="organization" required maxLength={200} value={customerName} onChange={event => setCustomerName(event.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm font-normal text-slate-800 focus:border-aero-blue focus:outline-none focus:ring-2 focus:ring-aero-blue/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200" />
+                </label>
+                <label className="space-y-1.5 font-mono font-semibold text-slate-700 dark:text-slate-300">
+                  <span>Customer email</span>
+                  <input type="email" autoComplete="email" required maxLength={320} value={customerEmail} onChange={event => setCustomerEmail(event.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm font-normal text-slate-800 focus:border-aero-blue focus:outline-none focus:ring-2 focus:ring-aero-blue/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200" />
+                </label>
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {/* Part Number */}
                 <div className="space-y-1.5">
@@ -866,7 +650,7 @@ export const CustomerDashboard: React.FC = () => {
               {/* Submit Button */}
               <button
                 type="submit"
-                disabled={submitting}
+                disabled={submitting || !customerName.trim() || !customerEmail.trim() || !partNumber.trim() || !Object.values(conditions).some(Boolean)}
                   aria-busy={submitting}
                 className="w-full bg-aero-blue hover:bg-blue-600 text-white font-display font-bold py-3 px-6 rounded-xl shadow-lg shadow-aero-blue/20 flex items-center justify-center space-x-2 text-sm transition-all transform active:scale-98"
               >

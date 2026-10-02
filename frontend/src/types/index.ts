@@ -5,7 +5,6 @@ export type ViewMode =
   | 'trace-vault' 
   | 'fulfillment' 
   | 'sales'
-  | 'swarm-simulation'
   | 'voice-service';
 
 export type ThemeMode = 'dark' | 'light';

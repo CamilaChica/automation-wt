@@ -6,7 +6,6 @@ import { type InternalCommand } from '../../types';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
 import { useExecuteInternalCommand, useRFQs, useSupplierOffers } from '../../hooks/useApiResources';
-import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip } from 'recharts';
 import { 
   CheckCircle, 
   PlusCircle, 
@@ -19,7 +18,7 @@ import {
 } from 'lucide-react';
 
 export const SupplierSourcingView: React.FC = () => {
-  const [selectedPn, setSelectedPn] = useState('32-11-45-01');
+  const [selectedPn, setSelectedPn] = useState('');
   const [selectedRfqId, setSelectedRfqId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [noticeType, setNoticeType] = useState<'success' | 'error' | 'info'>('info');
@@ -67,15 +66,6 @@ export const SupplierSourcingView: React.FC = () => {
       setCommandPending(null);
     }
   };
-
-  const otdData = [
-    { month: 'JAN', otd: 88, quality: 94 },
-    { month: 'FEB', otd: 92, quality: 96 },
-    { month: 'MAR', otd: 85, quality: 91 },
-    { month: 'APR', otd: 95, quality: 98 },
-    { month: 'MAY', otd: 91, quality: 95 },
-    { month: 'JUN', otd: 96, quality: 97 }
-  ];
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
@@ -197,23 +187,8 @@ export const SupplierSourcingView: React.FC = () => {
 
         {/* Right Column (3 cols): SUPPLIER PERFORMANCE & RATINGS & INVENTORY CHECK */}
         <div className="lg:col-span-3 space-y-4">
-          {/* Supplier Performance Chart */}
-          <div className="bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-3">
-            <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase">
-              SUPPLIER PERFORMANCE & RATINGS
-            </h2>
-            <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
-            <div className="h-28 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={otdData}>
-                  <XAxis dataKey="month" stroke="#94a3b8" fontSize={9} />
-                  <YAxis stroke="#94a3b8" fontSize={9} domain={[70, 100]} />
-                  <Tooltip contentStyle={{ backgroundColor: '#ffffff', borderColor: '#e2e8f0', fontSize: '10px', borderRadius: '8px' }} />
-                  <Line type="monotone" dataKey="otd" stroke="#006BFF" strokeWidth={2} dot={false} name="On-Time Delivery %" />
-                  <Line type="monotone" dataKey="quality" stroke="#10B981" strokeWidth={2} dot={false} name="Quality Acceptance %" />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+          <div role="status" className="border border-slate-200 bg-white p-5 text-sm text-slate-600 dark:border-slate-800 dark:bg-card-dark dark:text-slate-300">
+            Supplier performance history is unavailable because no live performance endpoint is connected.
           </div>
 
           {/* Inventory Check Checklist */}
@@ -258,22 +233,22 @@ export const SupplierSourcingView: React.FC = () => {
           </div>
 
           <div className="space-y-2.5">
-            {[
-              { supplier: 'Aero Parts Direct LLC', name: 'Main Landing Gear Actuator (Internal)', pn: '32-11-45-01', price: '$14,200.00', cond: 'SV' },
-              { supplier: 'Frankfurt Aero Logistics', name: 'External Supplier APIs / OEM Stock', pn: '32-11-45-01', price: '$11,800.00', cond: 'OH' },
-              { supplier: 'Texas Aviation Components', name: 'Main Landing Gear, DFW Depot Stock', pn: '32-11-45-01', price: '$12,500.00', cond: 'SV' }
-            ].map((item, i) => (
-              <div key={i} className="bg-slate-50 dark:bg-slate-900/80 p-3 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center justify-between font-mono text-[11px]">
+            {!selectedPn.trim() && <p role="status" className="rounded-md border border-slate-200 p-3 text-xs text-slate-500 dark:border-slate-800">Enter a part number to search live supplier offers.</p>}
+            {selectedPn.trim() && offersQuery.isLoading && <p role="status" className="p-3 text-xs text-slate-500">Loading live supplier offers…</p>}
+            {selectedPn.trim() && offersQuery.error && <p role="alert" className="p-3 text-xs text-red-700">{offersQuery.error.message}</p>}
+            {selectedPn.trim() && !offersQuery.isLoading && !offersQuery.error && liveOffers.length === 0 && <p role="status" className="rounded-md border border-slate-200 p-3 text-xs text-slate-500 dark:border-slate-800">No live supplier offers are available for this part.</p>}
+            {liveOffers.map(offer => (
+              <div key={offer.id} className="bg-slate-50 dark:bg-slate-900/80 p-3 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center justify-between font-mono text-[11px]">
                 <div>
-                  <div className="font-bold text-slate-900 dark:text-slate-100">{item.supplier}</div>
-                  <div className="text-[10px] text-slate-500 dark:text-slate-400">{item.name}</div>
+                  <div className="font-bold text-slate-900 dark:text-slate-100">{offer.supplier_name}</div>
+                  <div className="text-[10px] text-slate-500 dark:text-slate-400">P/N {offer.part_number} · {offer.quantity_available} available</div>
                 </div>
                 <div className="text-right flex items-center space-x-3">
                   <span className="px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold border border-emerald-200 dark:border-emerald-800">
-                    {item.cond}
+                    {offer.condition || '—'}
                   </span>
-                  <span className="font-bold text-slate-900 dark:text-slate-100">{item.price}</span>
-                      <button type="button" disabled={actionsBlocked || commandMutation.isPending} aria-busy={commandPending === 'add_to_quote'} onClick={() => void addToQuote(item.pn)} className="bg-aero-blue hover:bg-blue-600 text-white px-3 py-1 rounded-xl text-[10px] font-bold shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50">
+                  <span className="font-bold text-slate-900 dark:text-slate-100">{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(offer.unit_cost)}</span>
+                  <button type="button" disabled={actionsBlocked || commandMutation.isPending} aria-busy={commandPending === 'add_to_quote'} onClick={() => void addToQuote(offer.part_number)} className="bg-aero-blue hover:bg-blue-600 text-white px-3 py-1 rounded-xl text-[10px] font-bold shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50">
                     {commandPending === 'add_to_quote' ? 'Adding...' : 'Quick-Add'}
                   </button>
                 </div>

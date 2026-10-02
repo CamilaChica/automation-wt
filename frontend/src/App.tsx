@@ -10,7 +10,8 @@ import { TraceVaultView } from './components/views/TraceVaultView';
 import { FulfillmentHubView } from './components/views/FulfillmentHubView';
 import { SalesCommandView } from './components/views/SalesCommandView';
 import { CustomerPortal } from './components/views/CustomerPortal';
-import { SwarmSimulationView } from './components/views/SwarmSimulationView';
+import { LandingPage } from './components/views/LandingPage';
+import { InternalTeamPortal } from './components/views/InternalTeamPortal';
 import { VoiceServiceView } from './components/views/VoiceServiceView';
 import { AuthScreen } from './components/common/AuthScreen';
 import { EmployeeProfilePanel } from './components/common/EmployeeProfilePanel';
@@ -34,57 +35,6 @@ const InternalApp: React.FC = () => {
     return () => window.removeEventListener('wt-auth-changed', handleAuthChange);
   }, []);
 
-  const sampleLogs: AgentAuditLog[] = [
-    {
-      rfq_id: 'WT-29471',
-      agent_name: 'RFQIntakeAgent',
-      action_type: 'parse_unstructured_text',
-      message: 'Extracted Customer: GLOBAL AIRLINES, P/N: 32-11-45-01, Qty: 1, Urgency: AOG (SLA 4h target).',
-      status: 'SUCCESS',
-      timestamp: new Date(Date.now() - 3600000).toISOString()
-    },
-    {
-      rfq_id: 'WT-29471',
-      agent_name: 'PartsIntelligenceAgent',
-      action_type: 'catalog_search',
-      message: 'Verified P/N 32-11-45-01 (Main Landing Gear Actuator, ATA Chapter 32). Confidence: 1.0 (Exact Match).',
-      status: 'SUCCESS',
-      timestamp: new Date(Date.now() - 3300000).toISOString()
-    },
-    {
-      rfq_id: 'WT-29471',
-      agent_name: 'InventoryAgent',
-      action_type: 'warehouse_atp_check',
-      message: 'Stock check: Found 3 units in MIA-BIN-A12. Available-to-Promise (ATP) satisfied.',
-      status: 'SUCCESS',
-      timestamp: new Date(Date.now() - 3000000).toISOString()
-    },
-    {
-      rfq_id: 'WT-29471',
-      agent_name: 'ComplianceAgent',
-      action_type: 'trace_audit',
-      message: 'FAA 8130-3 release tag verified. Caution: Tag Date verification flag present on SN-MLG-9840.',
-      status: 'WARNING',
-      timestamp: new Date(Date.now() - 2700000).toISOString()
-    },
-    {
-      rfq_id: 'WT-29471',
-      agent_name: 'PricingAgent',
-      action_type: 'margin_calculator',
-      message: 'Applied 20% target margin + Hot-Shot AOG shipping premium ($250). Final unit price: $14,200.00.',
-      status: 'SUCCESS',
-      timestamp: new Date(Date.now() - 2400000).toISOString()
-    },
-    {
-      rfq_id: 'WT-29471',
-      agent_name: 'CustomerCommunicationAgent',
-      action_type: 'outbound_dispatch',
-      message: 'Generated draft commercial quotation proposal QTE-29471. Awaiting human operator approval.',
-      status: 'SUCCESS',
-      timestamp: new Date(Date.now() - 2100000).toISOString()
-    }
-  ];
-
   useEffect(() => {
     let active = true;
     const loadAuditFeed = async () => {
@@ -92,21 +42,16 @@ const InternalApp: React.FC = () => {
       if (!active) return;
       if (rfqs.length === 0) {
         setIsLiveAuditUnavailable(true);
-        setAuditLogs(sampleLogs);
-        setAuditRfqId('Cached sample data');
+        setAuditLogs([]);
+        setAuditRfqId('No RFQs');
         return;
       }
       let events: AutomationEvent[] = [];
+      let eventsUnavailable = false;
       try {
         events = await apiService.getAutomationEvents();
-        if (active) setIsLiveAuditUnavailable(events.length === 0);
       } catch {
-        if (active) {
-          setIsLiveAuditUnavailable(true);
-          setAuditLogs(sampleLogs);
-          setAuditRfqId('WT-29471');
-        }
-        return;
+        eventsUnavailable = true;
       }
       const detail = await apiService.getRFQDetail(rfqs[0].id);
       if (active) {
@@ -119,15 +64,17 @@ const InternalApp: React.FC = () => {
           status: event.status === 'FAILED' ? 'FAILURE' : event.status === 'SUCCEEDED' ? 'SUCCESS' : 'WARNING',
           timestamp: event.execution_time || event.created_at,
         }));
-        setAuditLogs([...eventLogs, ...(detail.logs || [])]);
+        const liveLogs = [...eventLogs, ...(detail.logs || [])];
+        setAuditLogs(liveLogs);
+        setIsLiveAuditUnavailable(eventsUnavailable || liveLogs.length === 0);
       }
     };
 
     void loadAuditFeed().catch(() => {
       if (active) {
         setIsLiveAuditUnavailable(true);
-        setAuditLogs(sampleLogs);
-        setAuditRfqId('WT-29471');
+        setAuditLogs([]);
+        setAuditRfqId('Live activity unavailable');
       }
     });
     const refresh = window.setInterval(() => {
@@ -177,8 +124,6 @@ const InternalApp: React.FC = () => {
         return <FulfillmentHubView />;
       case 'sales':
         return <SalesCommandView />;
-      case 'swarm-simulation':
-        return <SwarmSimulationView />;
       case 'voice-service':
         return <VoiceServiceView />;
       default:
@@ -231,7 +176,7 @@ const InternalApp: React.FC = () => {
       <AuditLogDrawer
         isOpen={isAuditLogOpen}
         onClose={() => setIsAuditLogOpen(false)}
-        logs={auditLogs.length ? auditLogs : sampleLogs}
+        logs={auditLogs}
         rfqId={auditRfqId || 'Live operations'}
         isLiveAuditUnavailable={isLiveAuditUnavailable}
       />
@@ -251,14 +196,20 @@ const CustomerPortalRoute: React.FC = () => {
 };
 
 export const App: React.FC = () => {
+  const isLandingPath = window.location.pathname === '/';
+  const isTeamPortalPath = window.location.pathname === '/team-portal';
   const isCustomerPath =
     window.location.pathname.startsWith('/customer-portal') ||
     window.location.pathname.startsWith('/portal');
   const isInternalPath = window.location.pathname.startsWith('/internal');
   const isCustomerSession = apiService.getRole() === 'customer';
   const isInternalSession = apiService.getRole() === 'internal';
-  if (isInternalPath || isInternalSession) return <InternalApp />;
-  if (isCustomerPath || isCustomerSession || window.location.pathname === '/') return <CustomerPortalRoute />;
+  if (isTeamPortalPath) return <InternalTeamPortal />;
+  if (isInternalPath) return <InternalApp />;
+  if (isCustomerPath) return <CustomerPortalRoute />;
+  if (isLandingPath) return <LandingPage />;
+  if (isInternalSession) return <InternalApp />;
+  if (isCustomerSession) return <CustomerPortalRoute />;
   return <CustomerPortalRoute />;
 };
 

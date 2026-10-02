@@ -391,23 +391,8 @@ export const AeroProcurementView: React.FC = () => {
                 <FileCheck className="w-4 h-4 text-emerald-500" />
                 <span>TRACEABILITY COMPLIANCE VAULT</span>
               </span>
-              <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
             </div>
-
-            <div className="flex items-center space-x-4 text-[10px]">
-              <div className="flex items-center space-x-1 text-emerald-600 dark:text-emerald-400 font-semibold">
-                <CheckCircle className="w-3 h-3" />
-                <span>Non-Incident Statement</span>
-              </div>
-              <div className="flex items-center space-x-1 text-emerald-600 dark:text-emerald-400 font-semibold">
-                <CheckCircle className="w-3 h-3" />
-                <span>Trace to 121 Operator</span>
-              </div>
-              <div className="flex items-center space-x-1 text-amber-600 dark:text-amber-400 font-semibold">
-                <AlertTriangle className="w-3 h-3" />
-                <span>Tag Date Verification</span>
-              </div>
-            </div>
+            <p role="status" className="text-xs text-slate-600 dark:text-slate-300">Live certificate verification records are not available from the current API.</p>
           </div>
 
           {/* Action Buttons */}
@@ -535,71 +520,11 @@ export const AeroProcurementView: React.FC = () => {
         </div>
       </section>}
 
-      {/* Bottom Section: AOG Triage Matrix & Lead Time Chart & Telemetry */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* AOG Triage Heatmap Matrix (4 cols) */}
-        <div className="lg:col-span-4 bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
-          <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase">
-            AOG TRIAGE MATRIX (WORKLOAD VS RESPONSE)
-          </h2>
-          <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
-
-          {/* 3x3 Heatmap grid */}
-          <div className="grid grid-cols-3 gap-2 text-center font-mono text-[10px] font-bold">
-            <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/30">
-              Low Workload
-            </div>
-            <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-500/30 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-500/40">
-              High Workload
-            </div>
-            <div className="p-3 rounded-xl bg-red-50 dark:bg-aog-red/30 text-aog-red border border-red-200 dark:border-aog-red/50 aog-pulse-badge">
-              Critical AOG
-            </div>
-
-            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 text-slate-400">
-              -
-            </div>
-            <div className="p-3 rounded-xl bg-blue-50 dark:bg-aero-blue/30 text-aero-blue border border-blue-200 dark:border-aero-blue/40 font-extrabold text-xs">
-              ✓ Active
-            </div>
-            <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-500/30 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-500/40">
-              Short Turn
-            </div>
-
-            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 text-slate-400">
-              -
-            </div>
-            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 text-slate-400">
-              -
-            </div>
-            <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400">
-              Routine
-            </div>
-          </div>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div role="status" className="flex min-h-32 items-center border border-slate-200 bg-white p-5 text-sm text-slate-600 dark:border-slate-800 dark:bg-card-dark dark:text-slate-300">
+          Live AOG workload and lead-time analytics are unavailable because no reporting API is connected.
         </div>
-
-        {/* Lead Time Analytics (3 cols) */}
-        <div className="lg:col-span-3 bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-3">
-          <h2 className="font-display font-bold text-xs tracking-wider text-slate-900 dark:text-slate-100 uppercase">
-            LEAD TIME & QUOTES VOLUME
-          </h2>
-          <Badge variant="outline">SAMPLE / DEMO DATA</Badge>
-          <div className="h-36 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={leadTimeData}>
-                <XAxis dataKey="month" stroke="#94a3b8" fontSize={9} />
-                <YAxis stroke="#94a3b8" fontSize={9} />
-                <Tooltip contentStyle={{ backgroundColor: '#ffffff', borderColor: '#e2e8f0', fontSize: '10px', borderRadius: '8px' }} />
-                <Bar dataKey="volume" fill="#006BFF" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Aero-Logistics Telemetry Map (5 cols) */}
-        <div className="lg:col-span-5">
-          <WorldMapTelemetry title="AERO-LOGISTICS ROUTE DEMO" subtitle="Example air and ground routes. Carrier locations are not live." />
-        </div>
+        <WorldMapTelemetry />
       </div>
     </div>
   );
