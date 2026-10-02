@@ -7,6 +7,8 @@ services:
     preDeployCommand: ALLOW_REMOTE_ALEMBIC_MIGRATIONS=true ALLOW_PRODUCTION_ALEMBIC_MIGRATIONS=true alembic upgrade head
     healthCheckPath: /healthz
     autoDeploy: true
+    domains:
+      - api.wingedtycoons.com
     disk:
       name: winged-api-data
       mountPath: /var/data
@@ -158,6 +160,9 @@ services:
     runtime: static
     buildCommand: npm --prefix frontend install && npm --prefix frontend run build
     staticPublishPath: frontend/dist
+    domains:
+      - portal.wingedtycoons.com
+      - team.wingedtycoons.com
     headers:
       - path: /index.html
         name: Cache-Control
