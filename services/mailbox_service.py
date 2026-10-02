@@ -8,6 +8,7 @@ authentication is disabled by Microsoft 365.
 
 import email
 import base64
+import html
 import imaplib
 import logging
 import os
@@ -29,21 +30,46 @@ except ImportError:  # pragma: no cover - optional dependency for local developm
     ClientSecretCredential = None
 
 
+_HTML_HINT = re.compile(r"<\s*(html|head|body|div|p|table|style|span|br|meta)\b", re.IGNORECASE)
+
+
+def html_to_text(content: str) -> str:
+    """Convert an HTML email body to readable plain text (drops CSS/scripts)."""
+    text = str(content or "")
+    if not _HTML_HINT.search(text):
+        return text.strip()
+    text = re.sub(r"<!--.*?-->", " ", text, flags=re.DOTALL)
+    text = re.sub(r"<(style|script|head|title)\b.*?</\1\s*>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</(p|div|tr|li|h[1-6]|table)\s*>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</t[dh]\s*>", " \t ", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text, flags=re.DOTALL)
+    text = html.unescape(text).replace("\xa0", " ").replace("\ufeff", " ")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\s*\n\s*", "\n", text)
+    return text.strip()
+
+
 def _extract_body_from_message(message: email.message.Message) -> str:
     if message.is_multipart():
         parts = []
+        html_parts = []
         for part in message.walk():
-            if part.get_content_type() == "text/plain":
+            content_type = part.get_content_type()
+            if content_type in ("text/plain", "text/html") and not part.get_filename():
                 payload = part.get_payload(decode=True)
                 if payload:
-                    parts.append(payload.decode(errors="ignore"))
+                    decoded = payload.decode(part.get_content_charset() or "utf-8", errors="ignore")
+                    (parts if content_type == "text/plain" else html_parts).append(decoded)
         if parts:
-            return "\n".join(parts)
+            return html_to_text("\n".join(parts))
+        if html_parts:
+            return html_to_text("\n".join(html_parts))
 
     payload = message.get_payload(decode=True)
     if payload:
-        return payload.decode(errors="ignore")
-    return message.get_payload() or ""
+        return html_to_text(payload.decode(errors="ignore"))
+    return html_to_text(message.get_payload() or "")
 
 
 def _extract_attachments_from_message(message: email.message.Message) -> list[dict[str, object]]:
@@ -96,10 +122,7 @@ def _credentials(mailbox: str) -> tuple[str, str]:
 def _graph_message_body(message: dict) -> str:
     body = message.get("body") or {}
     content = body.get("content", "")
-    if body.get("contentType") == "HTML":
-        content = re.sub(r"<[^>]+>", " ", content)
-        content = re.sub(r"\s+", " ", content)
-    return content.strip()
+    return html_to_text(content)
 
 
 def _graph_access_token() -> str:

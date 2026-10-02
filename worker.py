@@ -23,7 +23,7 @@ validate_development_database_target(
     os.getenv("DATABASE_URL", ""), os.getenv("WT_ENV", os.getenv("WT_AUTH_ENV", "development"))
 )
 
-from services.mailbox_service import fetch_inbox_messages
+from services.mailbox_service import fetch_inbox_messages, html_to_text
 from services.inbound_email_archive import _received_at, archive_inbound_message
 from services.inbound_message_classifier import classify_inbound_customer_message
 from services.communication_service import communication_service
@@ -155,7 +155,7 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
     if sender.lower() == "sales@wingedtycoons.com":
         logger.warning("Ignoring self-sent sales mailbox message %s subject=%s", message.get("message_id", "unknown"), message.get("subject", ""))
         return True
-    body = (message.get("body") or "").strip()
+    body = html_to_text(message.get("body") or "")
     attachments = message.get("attachments") or []
     if not body and not attachments:
         return True
@@ -227,7 +227,7 @@ async def _ingest_existing_sales_message_async(message: dict[str, Any], reposito
     sender_header = str(message.get("from") or "").strip()
     sender = (parseaddr(sender_header)[1] or sender_header).lower()
     message_id = str(message.get("message_id") or message.get("internet_message_id") or "")
-    body = str(message.get("body") or "").strip()
+    body = html_to_text(str(message.get("body") or ""))
     rfqs = await db_service.list_rfqs_async(repositories)
     existing = next((
         candidate for candidate in reversed(rfqs)
@@ -562,7 +562,7 @@ def run() -> None:
                     message_id = str(message.get("message_id") or "").strip()
                     internet_message_id = str(message.get("internet_message_id") or "").strip() or None
                     postgres_mode = operations_store.storage_engine == "postgresql"
-                    body = (message.get("body") or "").strip()
+                    body = html_to_text(message.get("body") or "")
                     if not body and not message.get("attachments"):
                         continue
                     if message_id and not postgres_mode and not operations_store.claim_inbound_message(message_id, mailbox, internet_message_id):
