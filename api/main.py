@@ -285,6 +285,7 @@ class CustomerQuoteItem(BaseModel):
     unit_price: float
     certificate_type: str
     compliance_status: str
+    condition: Optional[str] = None
 
 class CustomerQuote(BaseModel):
     id: str
@@ -293,6 +294,8 @@ class CustomerQuote(BaseModel):
     shipping_cost: float
     total_amount: float
     status: str
+    lead_time_days: Optional[int] = None
+    valid_until: Optional[str] = None
 
 class CustomerQuoteDetails(BaseModel):
     quote: CustomerQuote
@@ -817,18 +820,11 @@ async def download_attachment(attachment_id: str, user: dict = Depends(current_u
     """Download an accepted attachment without exposing arbitrary filesystem paths."""
     if user["role"] not in {"ROLE_CUSTOMER", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"}:
         raise HTTPException(status_code=403, detail="Insufficient permissions.")
+    if user["role"] == ROLE_CUSTOMER:
+        raise HTTPException(status_code=403, detail="Customer attachment downloads are not available.")
 
-    normalized_id = attachment_id.strip().upper()
-    if not normalized_id.startswith("ATT-") or len(normalized_id) != 20:
-        raise HTTPException(status_code=404, detail="Attachment not found.")
-
-    matches = list(attachment_service.storage_dir.glob(f"{normalized_id}.*"))
-    if not matches:
-        raise HTTPException(status_code=404, detail="Attachment not found.")
-
-    attachment_path = matches[0].resolve()
-    storage_root = attachment_service.storage_dir.resolve()
-    if storage_root not in attachment_path.parents:
+    attachment_path = attachment_service.get_stored_path(attachment_id)
+    if attachment_path is None:
         raise HTTPException(status_code=404, detail="Attachment not found.")
     return FileResponse(attachment_path, filename=attachment_path.name)
 
@@ -847,7 +843,13 @@ async def upload_attachment(file: UploadFile = File(...), user: dict = Depends(c
     )
     if record.status != "ACCEPTED":
         raise HTTPException(status_code=400, detail=record.warning or "Attachment rejected.")
-    return record.model_dump()
+    return {
+        "attachment_id": record.attachment_id,
+        "filename": record.filename,
+        "content_type": record.content_type,
+        "size_bytes": record.size_bytes,
+        "status": record.status,
+    }
 
 @app.post("/api/rfqs/intake", response_model=IntakeResponse)
 async def submit_rfq(
@@ -1270,7 +1272,7 @@ async def get_rfq_detail(
 
     if user["role"] == "ROLE_CUSTOMER":
         quote_details = None
-        if quote:
+        if quote and quote.status == "Sent":
             quote_details = CustomerQuoteDetails(
                 quote=CustomerQuote(
                     id=quote.id,
@@ -1279,6 +1281,8 @@ async def get_rfq_detail(
                     shipping_cost=quote.shipping_cost,
                     total_amount=quote.total_amount,
                     status=quote.status,
+                    lead_time_days=quote.lead_time_days,
+                    valid_until=quote.valid_until,
                 ),
                 rfq_status=rfq.status,
                 items=[
@@ -1288,6 +1292,7 @@ async def get_rfq_detail(
                         unit_price=item.unit_price,
                         certificate_type=item.certificate_type,
                         compliance_status=item.compliance_status,
+                        condition=item.condition,
                     )
                     for item in quote_items
                 ],
@@ -1333,9 +1338,21 @@ async def get_customer_quote(
         quote_items = db_service.get_quote_items(quote_id) if quote else []
     else:
         quote_payload = await repositories.quote.get_operational_record("quotes", quote_id)
-        if quote_payload is None:
+        quote_record = quote_payload or await repositories.quote.get(quote_id)
+        if quote_record is None:
             raise HTTPException(status_code=404, detail="Quote not found.")
-        quote = Quote.model_validate(quote_payload)
+        quote = (
+            Quote.model_validate(quote_payload)
+            if quote_payload is not None
+            else Quote(
+                id=quote_record.id,
+                rfq_id=quote_record.rfq_id,
+                subtotal=quote_record.subtotal,
+                shipping_cost=quote_record.shipping_cost,
+                total_amount=quote_record.total_amount,
+                status=quote_record.status,
+            )
+        )
         rfq = await db_service.get_rfq_async(repositories, quote.rfq_id)
         item_records = await repositories.records.list_by_payload_value(
             "quote_items", "quote_id", quote_id
@@ -1346,6 +1363,8 @@ async def get_customer_quote(
         raise HTTPException(status_code=404, detail="Quote not found.")
     if rfq.customer_email.lower() != user["email"].lower():
         raise HTTPException(status_code=403, detail="You can only access your own quotes.")
+    if quote.status != "Sent":
+        raise HTTPException(status_code=404, detail="Quote not found.")
 
     return CustomerQuoteDetails(
         quote=CustomerQuote(
@@ -1355,6 +1374,8 @@ async def get_customer_quote(
             shipping_cost=quote.shipping_cost,
             total_amount=quote.total_amount,
             status=quote.status,
+            lead_time_days=quote.lead_time_days,
+            valid_until=quote.valid_until,
         ),
         rfq_status=rfq.status,
         items=[
@@ -1364,6 +1385,7 @@ async def get_customer_quote(
                 unit_price=item.unit_price,
                 certificate_type=item.certificate_type,
                 compliance_status=item.compliance_status,
+                condition=item.condition,
             )
             for item in quote_items
         ],
@@ -1489,15 +1511,30 @@ async def submit_purchase_order(
     )
     if not rfq:
         raise HTTPException(status_code=404, detail="RFQ not found.")
+    if user["role"] == ROLE_CUSTOMER and rfq.customer_email.lower() != user["email"].lower():
+        raise HTTPException(status_code=403, detail="You can only submit a purchase order for your own quote.")
+    quote_status = quote.status if hasattr(quote, "status") else quote.get("status")
+    if quote_status != "Sent":
+        raise HTTPException(status_code=409, detail="This quote is not available for acceptance.")
     if rfq.status in {"Purchase_Order_Received", "Pending_PO_Review"}:
         raise HTTPException(status_code=409, detail="Purchase order already received for this RFQ.")
 
-    customer_email = request.customer_email or rfq.customer_email
+    customer_email = (
+        rfq.customer_email
+        if user["role"] == ROLE_CUSTOMER
+        else request.customer_email or rfq.customer_email
+    )
     if len(request.attachment_ids) != 3 or any(not attachment_id.strip() for attachment_id in request.attachment_ids):
         raise HTTPException(status_code=400, detail="Three signed documents are required: export certification, KYC form, and purchase order.")
-    if user["role"] == "ROLE_CUSTOMER" and customer_email.lower() != user["email"].lower():
-        raise HTTPException(status_code=403, detail="You can only submit a purchase order for your own quote.")
-
+    if len({attachment_id.strip().upper() for attachment_id in request.attachment_ids}) != 3:
+        raise HTTPException(status_code=400, detail="Upload three separate signed document PDFs.")
+    for attachment_id in request.attachment_ids:
+        document_path = attachment_service.get_stored_path(attachment_id)
+        if document_path is None or document_path.suffix.lower() != ".pdf":
+            raise HTTPException(status_code=400, detail="Upload three accepted PDF documents before submitting the purchase order.")
+        with document_path.open("rb") as document:
+            if document.read(5) != b"%PDF-":
+                raise HTTPException(status_code=400, detail="Each purchase-order document must be a valid PDF.")
     previous_po_number = None
     previous_quote_id = None
     if rfq.status and rfq.status != "Intake":

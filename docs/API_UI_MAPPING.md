@@ -2,6 +2,8 @@
 
 This inventory reflects the FastAPI routes in `api/main.py`; the backend currently uses `/api`, not `/api/v1`. The UI calls these endpoints through `frontend/src/services/api.ts` and the shared resource hooks in `frontend/src/hooks/useApiResources.ts`. The webhook route is server-to-server only and must not be called by browser code.
 
+The external Next.js customer portal calls only its same-origin `/api/customer/*` route handlers. Those handlers allowlist the required customer operations, keep the backend session token in an HttpOnly cookie, verify request origins on writes, and omit internal attachment metadata and notification details from responses.
+
 ## Health and identity
 
 | Method and path | Access | Request | Response / UI mapping |
@@ -10,25 +12,27 @@ This inventory reflects the FastAPI routes in `api/main.py`; the backend current
 | `GET /healthz` | Public | None | `{status}` liveness response. |
 | `GET /ready` | Public | None | Readiness, database health, mirroring and persistence status. TopBar `useSystemHealth`; production can return 503 until PostgreSQL cutover gates pass. |
 | `POST /api/auth/otp/request` | Public | `OtpRequest` | Challenge ID and development OTP when configured. Auth screen. |
-| `POST /api/auth/otp/verify` | Public | `OtpVerifyRequest` | `LoginResponse` with role and bearer token. Auth screen. |
-| `POST /api/auth/logout` | Public/session cookie | None | 204 and cookie removal. Sidebar/customer sign-out. |
+| `POST /api/auth/otp/verify` | Public | `OtpVerifyRequest` | HttpOnly session cookie; role and email only in response. Auth screen. |
+| `GET /api/auth/session` | Authenticated session cookie | None | Current session email and role; used by the customer portal gate. |
+| `POST /api/auth/logout` | Session cookie | None | Revokes the server-side session and removes the cookie. |
 | `POST /api/session` | Customer or internal roles | `VoiceSessionRequest` | Ephemeral voice client secret and model. Voice service. |
 
 ## Customer, RFQ, and quote workflows
 
 | Method and path | Access | Request | Response / UI mapping |
 | --- | --- | --- | --- |
-| `POST /api/rfqs/intake` | Authenticated customer/internal | `IntakeRequest` | `IntakeResponse` (`rfq_id`, status, message). Customer RFQ creation; `useCreateRFQ` invalidates RFQ lists. |
+| `POST /api/rfqs/intake` | Authenticated customer/internal | `IntakeRequest` | `IntakeResponse` (`rfq_id`, status, message). The external customer portal sends a structured request through its server-side proxy. |
 | `GET /api/rfqs` | Customer sees own records; internal roles see queue | None | `RFQ[]`. Customer dashboard, Sales, Procurement, Sourcing, Trace. `useRFQs`. |
-| `GET /api/rfqs/{rfq_id}` | Authenticated; customer ownership checked | Path `rfq_id` | RFQ, items and optional quote detail; internal response also includes audit logs. `useRFQDetail` / `useQuotes(rfqId)`. There is no quote collection endpoint. |
+| `GET /api/rfqs/{rfq_id}` | Authenticated; customer ownership checked | Path `rfq_id` | RFQ, items and optional quote detail; customers only see sent quotes, and internal response also includes audit logs. |
+| `GET /api/quotes/{quote_id}` | Customer; sent quote ownership checked | Path `quote_id` | Customer-safe sent quote totals, items, quote status, and RFQ status for the external portal. Internal costs and audit details are never returned. |
 | `POST /api/rfqs/{rfq_id}/process` | Admin/manager/sales/purchasing | Path `rfq_id` | Procurement explicitly starts pipeline processing for an RFQ in `Intake`; this endpoint does not itself reset failed intake. |
 | `POST /api/internal/rfqs/{rfq_id}/reset-intake` | Admin/manager | `reason` (required, 1-1000 characters) | Procurement resets only `Intake_Failed` to `Intake`, records the operator/reason in the audit log, and requires a separate explicit process action. `NEEDS_HUMAN_REVIEW` is rejected. |
 | `POST /api/quotes/{quote_id}/approve` | Admin/manager/sales | `ApproveRequest` | Approval/dispatch result. A queued PostgreSQL outbox message returns `Quote_Dispatch_Pending`/`PENDING` without advancing persisted RFQ or quote status; statuses advance to `Quote_Sent`/`Sent` only after delivery is confirmed `SENT`. Ambiguous delivery moves the records to operator review. Customer Dashboard uses `useDispatchQuote`; Sales issues a quote. |
 | `POST /api/quotes/{quote_id}/reject` | Admin/manager/sales | `RejectRequest` | Rejection result. Sales Command rejects the selected quote with an audited reason. There is no quote-collection view. |
-| `POST /api/purchase-orders` | Authenticated; customer quote ownership checked | `PurchaseOrderRequest` with exactly three attachment IDs | `Pending_PO_Review`, PO and quote IDs. Customer Portal uses `useCreatePurchaseOrder`; this is not quote approval. |
+| `POST /api/purchase-orders` | Authenticated; customer quote ownership checked; sent quote required | `PurchaseOrderRequest` with three unique, already-uploaded valid PDF attachment IDs | `Pending_PO_Review`, PO and quote IDs. The external portal uploads signed export-certification, KYC, and purchase-order documents before submitting; this is not quote approval. |
 | `POST /api/purchase-orders/{quote_id}/approve` | Admin/manager/purchasing | `PurchaseOrderApprovalRequest` | Backend approval mutation updates the RFQ. There is no registered pending-PO list endpoint, so the internal UI cannot discover and review queued POs end to end. |
 | `GET /api/attachments/{attachment_id}` | Authenticated and authorized | Path `attachment_id` | Binary attachment download. Sales/document preview. |
-| `POST /api/attachments` | Authenticated and authorized | Multipart `file` | Accepted attachment ID/name/status. Customer RFQ and PO uploads. |
+| `POST /api/attachments` | Authenticated and authorized | Multipart `file` | Accepted attachment ID/name/status only; storage paths and content hashes remain server-side. Customer RFQ and PO uploads. |
 
 ## Catalog and sourcing
 

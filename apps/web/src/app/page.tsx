@@ -1,5 +1,6 @@
 import CustomerRFQForm from "./customer/CustomerRFQForm";
+import CustomerPortalGate from "./customer/CustomerPortalGate";
 
 export default function Home() {
-  return <CustomerRFQForm />;
+  return <CustomerPortalGate><CustomerRFQForm /></CustomerPortalGate>;
 }

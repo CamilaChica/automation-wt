@@ -26,6 +26,8 @@ class TestCustomerAttachmentUpload(unittest.TestCase):
             payload = response.json()
             self.assertTrue(payload["attachment_id"].startswith("ATT-"))
             self.assertEqual(payload["status"], "ACCEPTED")
+            self.assertNotIn("stored_path", payload)
+            self.assertNotIn("sha256", payload)
         finally:
             app.dependency_overrides.clear()
 

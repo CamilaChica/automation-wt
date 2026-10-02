@@ -1,34 +1,39 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Customer RFQ portal
 
-## Getting Started
+The portal uses the existing customer email one-time-code flow. It submits RFQs,
+loads only sent quotes owned by the signed-in customer, and collects the three
+PDFs required for purchase-order review.
 
-First, run the development server:
+## Run locally
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+1. Start the API using its normal development configuration.
+2. Set `API_BASE_URL` for the Next.js server to the API origin (for example,
+   `http://127.0.0.1:8000`). This is server-only; do not expose it with a
+   `NEXT_PUBLIC_` prefix.
+3. Set `CUSTOMER_PORTAL_ORIGIN` to the portal's origin (for example,
+   `http://127.0.0.1:3000` locally and the public HTTPS origin in production).
+4. Run `npm run dev` from `apps/web`.
+
+Production sends the OTP to the customer's email. For local development, the
+API's development-only OTP is intentionally stripped by the portal proxy; get
+the code from the local API response in a terminal and enter it in the portal:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/auth/otp/request `
+  -ContentType "application/json" `
+  -Body '{"email":"buyer@example.com","role":"CUSTOMER"}'
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The portal never returns an OTP or session token to browser code.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Checks
 
-## Learn More
+From the repository root:
 
-To learn more about Next.js, take a look at the following resources:
+```powershell
+npm --prefix apps/web run build
+npm --prefix apps/web run test:e2e -- --project=chromium
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The browser tests mock the API responses and do not replace a staging or
+PostgreSQL integration test.

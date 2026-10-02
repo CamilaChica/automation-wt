@@ -23,6 +23,7 @@ class TestCustomerDataIsolation(unittest.TestCase):
         )
         customer_item = db_service.add_rfq_item(self.customer_rfq.id, "060-1234-00", 1)
         quote = db_service.create_quote(self.customer_rfq.id, 1250.0, 25.0, 1275.0)
+        quote.status = "Sent"
         self.customer_quote = quote
         db_service.add_quote_item(
             quote.id, customer_item.id, "060-1234-00", 1, "Inventory", 1000.0,
@@ -31,6 +32,7 @@ class TestCustomerDataIsolation(unittest.TestCase):
         db_service.add_audit_log(self.customer_rfq.id, "PricingAgent", "price", "Internal pricing detail")
         self.other_rfq = db_service.create_rfq("Other Customer", "other@example.com", "Need another part")
         self.other_quote = db_service.create_quote(self.other_rfq.id, 500.0, 0.0, 500.0)
+        self.other_quote.status = "Sent"
         app.dependency_overrides[current_user] = lambda: self.customer
         self.client = TestClient(app)
 
@@ -61,12 +63,38 @@ class TestCustomerDataIsolation(unittest.TestCase):
             self.client.get(f"/api/quotes/{self.other_quote.id}").status_code, 403
         )
 
+    def test_customer_cannot_view_or_accept_unsent_quotes(self):
+        quote = db_service.create_quote(self.customer_rfq.id, 300.0, 0.0, 300.0)
+        self.assertEqual(self.client.get(f"/api/quotes/{quote.id}").status_code, 404)
+        response = self.client.post(
+            "/api/purchase-orders",
+            json={
+                "quote_id": quote.id,
+                "po_number": "PO-UNSENT",
+                "attachment_ids": ["ATT-1", "ATT-2", "ATT-3"],
+            },
+        )
+        self.assertEqual(response.status_code, 409)
+
+    def test_customer_cannot_submit_po_for_another_customer_quote(self):
+        response = self.client.post(
+            "/api/purchase-orders",
+            json={
+                "quote_id": self.other_quote.id,
+                "po_number": "PO-OTHER",
+                "customer_email": self.customer["email"],
+                "attachment_ids": ["ATT-1", "ATT-2", "ATT-3"],
+            },
+        )
+        self.assertEqual(response.status_code, 403)
+
     def test_customer_is_denied_internal_endpoints(self):
         checks = [
             ("get", "/api/inventory"),
             ("get", "/api/suppliers"),
             ("get", "/api/internal/mailboxes/sales/inbox"),
             ("post", f"/api/rfqs/{self.customer_rfq.id}/process"),
+            ("get", "/api/attachments/ATT-0000000000000001"),
         ]
         for method, path in checks:
             self.assertEqual(getattr(self.client, method)(path).status_code, 403, path)
