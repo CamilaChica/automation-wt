@@ -35,11 +35,14 @@ import type {
   VoiceToolRequest,
 } from '../types/api';
 
-const hostedApiBase = window.location.hostname === 'winged-tycoons-frontend.onrender.com'
-  ? 'https://winged-tycoons-api.onrender.com/api'
-  : '/api';
+const isCompanyDomainHost = window.location.hostname.endsWith('.wingedtycoons.com');
+const hostedApiBase = isCompanyDomainHost
+  ? 'https://api.wingedtycoons.com/api'
+  : window.location.hostname === 'winged-tycoons-frontend.onrender.com'
+    ? 'https://winged-tycoons-api.onrender.com/api'
+    : '/api';
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL?.trim();
-const isDeployedStaticHost = window.location.hostname === 'winged-tycoons-frontend.onrender.com';
+const isDeployedStaticHost = isCompanyDomainHost || window.location.hostname === 'winged-tycoons-frontend.onrender.com';
 export const API_BASE = isDeployedStaticHost && (!configuredApiBase || configuredApiBase.startsWith('/'))
   ? hostedApiBase
   : (configuredApiBase || hostedApiBase);

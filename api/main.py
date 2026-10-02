@@ -226,6 +226,9 @@ production_origins = {
     "https://winged-tycoons-frontend.onrender.com",
     "https://wingedtycoons.com",
     "https://rfq.wingedtycoons.com",
+    "https://www.wingedtycoons.com",
+    "https://portal.wingedtycoons.com",
+    "https://team.wingedtycoons.com",
 }
 allowed_origins = sorted(configured_origins | development_origins | (production_origins if runtime_env == "production" else set()))
 app.add_middleware(

@@ -196,8 +196,9 @@ const CustomerPortalRoute: React.FC = () => {
 };
 
 export const App: React.FC = () => {
-  const isLandingPath = window.location.pathname === '/';
-  const isTeamPortalPath = window.location.pathname === '/team-portal';
+  const isTeamHost = window.location.hostname.startsWith('team.');
+  const isLandingPath = window.location.pathname === '/' && !isTeamHost;
+  const isTeamPortalPath = window.location.pathname === '/team-portal' || (isTeamHost && window.location.pathname === '/');
   const isCustomerPath =
     window.location.pathname.startsWith('/customer-portal') ||
     window.location.pathname.startsWith('/portal');
