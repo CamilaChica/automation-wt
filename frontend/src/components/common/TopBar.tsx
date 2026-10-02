@@ -78,7 +78,7 @@ export const TopBar: React.FC<TopBarProps> = ({
     <>
     <header className="min-h-14 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-card-dark px-2 md:px-4 py-2 flex items-center justify-between gap-2 text-xs font-sans select-none transition-colors">
       {/* Brand & Page Title */}
-      <div className="flex min-w-0 flex-1 items-center space-x-2 md:space-x-3">
+      <div className="flex-none items-center space-x-2 md:space-x-3">
         <button type="button" aria-label="Open navigation menu" onClick={onOpenSidebar} className="min-h-11 min-w-11 rounded-xl border border-slate-200 bg-slate-100 p-2 dark:border-slate-700 dark:bg-slate-800 lg:hidden">
           <Menu className="mx-auto h-5 w-5" aria-hidden="true" />
         </button>
@@ -104,7 +104,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
 
         {/* Global Omnibar */}
-        <div className="relative w-72">
+        <div className="relative w-52 2xl:w-72">
           <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
           <input
             type="text"
@@ -136,7 +136,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             {mailboxHealth.error && <button type="button" aria-label="Retry mailbox health" onClick={() => void mailboxHealth.refetch()} className="ml-1 underline">Retry</button>}
           </span>}
         </div>
-        <div className="hidden 2xl:flex items-center space-x-3 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+        <div className="hidden min-[1700px]:flex items-center space-x-3 text-[11px] font-mono text-slate-600 dark:text-slate-400">
           <span className="flex items-center space-x-1 text-emerald-600 dark:text-emerald-400 font-semibold">
             <ShieldCheck className="w-3.5 h-3.5" />
             <span>SPEED. TRACEABILITY. RELIABILITY.</span>

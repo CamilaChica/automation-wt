@@ -573,6 +573,25 @@ async function attachDiagnostics(testInfo: TestInfo, targetPath: string, diagnos
   });
 }
 
+test('header keeps brand clear of AOG alerts after delayed status updates', async ({ page }) => {
+  await installErrorCapture(page);
+  await page.addInitScript(() => localStorage.setItem('wt_email', 'camila@wingedtycoons.com'));
+  await installApiRoutes(page);
+  await page.goto('/internal', { waitUntil: 'networkidle' });
+  await page.waitForTimeout(5500);
+
+  for (const width of [1280, 1536]) {
+    await page.setViewportSize({ width, height: 900 });
+    const brand = await page.locator('header a[aria-label="Winged Tycoons Executive Dashboard"]').boundingBox();
+    const alert = await page.locator('header .aog-pulse-badge').first().boundingBox();
+
+    expect(brand, `Brand should be visible at ${width}px`).not.toBeNull();
+    expect(alert, `AOG alert should be visible at ${width}px`).not.toBeNull();
+    if (!brand || !alert) throw new Error(`Header elements are missing at ${width}px`);
+    expect(brand.x + brand.width, `Brand overlaps AOG alert at ${width}px`).toBeLessThanOrEqual(alert.x);
+  }
+});
+
 for (const viewport of viewports) {
   test.describe(`${viewport.name} responsiveness`, () => {
     test.use({ viewport: { width: viewport.width, height: viewport.height } });
