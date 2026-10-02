@@ -167,7 +167,12 @@ class MockDatabaseService:
             item_records = await repositories.rfq.list_operational_records("rfq_items")
             parts_by_rfq: dict[str, list[str]] = {}
             for item in item_records.values():
-                part = str(item.get("part_number") or "").strip()
+                part = str(
+                    item.get("resolved_part_number")
+                    or item.get("requested_part_number")
+                    or item.get("part_number")
+                    or ""
+                ).strip()
                 if part and part not in parts_by_rfq.setdefault(str(item.get("rfq_id")), []):
                     parts_by_rfq[str(item.get("rfq_id"))].append(part)
             for rfq in rfqs:
