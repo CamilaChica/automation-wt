@@ -120,7 +120,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated, o
         {challengeId && <div className="mt-4 flex items-center justify-between gap-3 text-xs text-slate-500"><button type="button" onClick={() => { setChallengeId(null); setOtp(''); setError(null); setDeliveryFailed(false); }} className="font-semibold underline focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">Change email</button><button type="button" disabled={loading} onClick={() => { setChallengeId(null); setOtp(''); void requestCode(); }} className="font-semibold text-aero-blue underline disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">Resend code</button></div>}
         {deliveryFailed && !challengeId && <p className="mt-3 text-xs text-slate-500">Check the verification mailbox configuration or contact support if the problem continues.</p>}
         {onSwitchRole && !challengeId && <button type="button" onClick={onSwitchRole} className="mt-5 min-h-[44px] w-full rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:border-aero-blue hover:text-aero-blue focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">{isCustomer ? 'Team sign in' : 'Customer portal sign in'}</button>}
-        <p className="mt-6 flex gap-2 text-xs text-slate-500"><ShieldCheck className="h-4 w-4 shrink-0" /> Sessions expire after 8 hours. Production deployments should replace demo users with an identity provider.</p>
+        <p className="mt-6 flex gap-2 text-xs text-slate-500"><ShieldCheck className="h-4 w-4 shrink-0" /> Secure sign-in. For your protection, sessions expire after 8 hours.</p>
       </form>
     </div>
   );

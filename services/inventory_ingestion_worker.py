@@ -53,6 +53,15 @@ class InventoryIngestionWorker:
         self.negotiation_service = SupplierNegotiationService()
         self.mailbox = os.getenv("INVENTORY_INGESTION_MAILBOX", "purchasing")
         self.poll_interval_seconds = int(os.getenv("INVENTORY_INGESTION_POLL_INTERVAL_SECONDS", "60"))
+        # Historical backfill walks the whole purchasing inbox page by page so older supplier quotes
+        # and inventory lists are loaded too; the default fetcher is the only one that supports paging.
+        self.backfill_enabled = (
+            fetch_messages is fetch_inbox_messages
+            and os.getenv("INVENTORY_INGESTION_BACKFILL_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+        )
+        self.backfill_days = int(os.getenv("INVENTORY_INGESTION_BACKFILL_DAYS", "3650"))
+        self.backfill_page_size = int(os.getenv("INVENTORY_INGESTION_BACKFILL_PAGE_SIZE", "25"))
+        self.backfill_offset = 0
         explicit_postgres = os.getenv("INVENTORY_INGESTION_POSTGRES_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
         self.postgres_enabled = bool(os.getenv("DATABASE_URL", "").strip()) and explicit_postgres
 
@@ -507,6 +516,31 @@ class InventoryIngestionWorker:
 
     def poll_once(self, limit: int = 25) -> list[dict[str, Any]]:
         messages = self.fetch_messages(self.mailbox, limit=limit)
+        results = self._process_batch(messages)
+        if self.backfill_enabled:
+            results.extend(self.backfill_once())
+        return results
+
+    def backfill_once(self) -> list[dict[str, Any]]:
+        try:
+            messages = self.fetch_messages(
+                self.mailbox,
+                limit=self.backfill_page_size,
+                skip=self.backfill_offset,
+                max_age_days=self.backfill_days,
+            )
+        except Exception:
+            logger.exception("Inventory backfill fetch failed at offset %s", self.backfill_offset)
+            return []
+        if not messages:
+            logger.info("Inventory backfill reached end of mailbox at offset %s; restarting", self.backfill_offset)
+            self.backfill_offset = 0
+            return []
+        logger.info("Inventory backfill offset=%s messages=%s", self.backfill_offset, len(messages))
+        self.backfill_offset += len(messages)
+        return self._process_batch(messages)
+
+    def _process_batch(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         results = []
         for message in messages:
             try:

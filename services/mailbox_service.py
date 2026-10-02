@@ -126,18 +126,22 @@ def _mailbox_user_for_graph(mailbox: str) -> str:
     return mailbox_address
 
 
-def _fetch_graph_inbox_messages(mailbox: str, limit: int = 25) -> list[dict[str, Any]]:
+def _fetch_graph_inbox_messages(
+    mailbox: str, limit: int = 25, skip: int = 0, max_age_days: int | None = None
+) -> list[dict[str, Any]]:
     mailbox_user = _mailbox_user_for_graph(mailbox)
     token = _graph_access_token()
     headers = {
         "Authorization": f"Bearer {token}",
         "Prefer": "outlook.body-content=true",
     }
-    max_age_days = int(os.getenv("MAILBOX_MAX_AGE_DAYS", "7"))
+    if max_age_days is None:
+        max_age_days = int(os.getenv("MAILBOX_MAX_AGE_DAYS", "7"))
     cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat().replace("+00:00", "Z")
+    skip_param = f"&$skip={int(skip)}" if skip else ""
     url = (
         f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/mailFolders/inbox/messages"
-        f"?$top={limit}&$select=id,internetMessageId,conversationId,internetMessageHeaders,from,subject,body,receivedDateTime,hasAttachments&$filter=receivedDateTime ge {cutoff}&$orderby=receivedDateTime desc"
+        f"?$top={limit}{skip_param}&$select=id,internetMessageId,conversationId,internetMessageHeaders,from,subject,body,receivedDateTime,hasAttachments&$filter=receivedDateTime ge {cutoff}&$orderby=receivedDateTime desc"
     )
     response = requests.get(url, headers=headers, timeout=30)
     response.raise_for_status()
@@ -197,10 +201,12 @@ def _fetch_graph_attachments(mailbox_user: str, message_id: str, token: str) -> 
     return attachments
 
 
-def fetch_inbox_messages(mailbox: str, limit: int = 25) -> list[dict[str, Any]]:
+def fetch_inbox_messages(
+    mailbox: str, limit: int = 25, skip: int = 0, max_age_days: int | None = None
+) -> list[dict[str, Any]]:
     if all(os.getenv(name) for name in ("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET")):
         try:
-            return _fetch_graph_inbox_messages(mailbox, limit=limit)
+            return _fetch_graph_inbox_messages(mailbox, limit=limit, skip=skip, max_age_days=max_age_days)
         except Exception as exc:
             # Keep the app resilient if Azure Graph is temporarily unavailable.
             logger.warning("Graph mailbox read failed; falling back to IMAP mailbox=%s error=%s", mailbox, type(exc).__name__)
@@ -212,12 +218,15 @@ def fetch_inbox_messages(mailbox: str, limit: int = 25) -> list[dict[str, Any]]:
         status, _ = client.select("INBOX", readonly=True)
         if status != "OK":
             raise RuntimeError("Unable to open mailbox INBOX.")
-        max_age_days = int(os.getenv("MAILBOX_MAX_AGE_DAYS", "7"))
+        if max_age_days is None:
+            max_age_days = int(os.getenv("MAILBOX_MAX_AGE_DAYS", "7"))
         since_date = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).strftime("%d-%b-%Y")
         status, data = client.search(None, "SINCE", since_date)
         if status != "OK":
             raise RuntimeError("Unable to search mailbox.")
-        message_ids = data[0].split()[-limit:]
+        all_ids = data[0].split()
+        end = len(all_ids) - int(skip)
+        message_ids = all_ids[max(0, end - limit):max(0, end)]
         results = []
         for message_id in reversed(message_ids):
             status, message_data = client.fetch(message_id, "(RFC822)")
