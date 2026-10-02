@@ -137,7 +137,7 @@ class AnthropicProvider(LLMProvider):
         self.base_url = (base_url or os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1")).rstrip("/")
 
     def complete(self, request: LLMRequest) -> LLMResponse:
-        model = request.model or os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest")
+        model = _vendor_model(request.model, "claude", os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest"))
         payload = {
             "model": model,
             "max_tokens": request.max_tokens,
@@ -149,6 +149,8 @@ class AnthropicProvider(LLMProvider):
             "x-api-key": _require_key(self.api_key, "ANTHROPIC_API_KEY"),
             "anthropic-version": "2023-06-01",
         }
+        if os.getenv("ANTHROPIC_WORKSPACE_ID"):
+            headers["anthropic-workspace-id"] = os.environ["ANTHROPIC_WORKSPACE_ID"]
         data = _post_json(f"{self.base_url}/messages", headers, payload, request.timeout_seconds)
         return LLMResponse(self.name, model, data["content"][0]["text"], data)
 
@@ -161,7 +163,7 @@ class GeminiProvider(LLMProvider):
         self.base_url = (base_url or os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta")).rstrip("/")
 
     def complete(self, request: LLMRequest) -> LLMResponse:
-        model = request.model or os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        model = _vendor_model(request.model, "gemini", os.getenv("GEMINI_MODEL", "gemini-3.8-flash"))
         payload = {
             "system_instruction": {"parts": [{"text": request.system_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": request.user_prompt}]}],
@@ -178,7 +180,8 @@ class GeminiProvider(LLMProvider):
             payload,
             request.timeout_seconds,
         )
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        parts = data["candidates"][0]["content"]["parts"]
+        text = "".join(part.get("text", "") for part in parts if not part.get("thought"))
         return LLMResponse(self.name, model, text, data)
 
 
@@ -195,9 +198,10 @@ class LLMRouter:
         self.fallback_providers = self._load_fallback_providers()
 
     def complete(self, request: LLMRequest, *, provider_override: str | None = None) -> LLMResponse:
-        provider_names = [provider_override] if provider_override else [
-            self.task_providers.get(request.task, os.getenv("LLM_DEFAULT_PROVIDER", "openai")),
-            *self.fallback_providers.get(request.task, []),
+        fallbacks = self.fallback_providers.get(request.task, self.fallback_providers.get("default", []))
+        provider_names = [
+            provider_override or self.task_providers.get(request.task, os.getenv("LLM_DEFAULT_PROVIDER", "openai")),
+            *fallbacks,
         ]
         errors = []
         retryable_failure = False
@@ -292,6 +296,11 @@ class LLMRouter:
         if not isinstance(mapping, dict):
             raise ValueError("LLM_FALLBACK_PROVIDERS must be a JSON object.")
         return {str(task): [str(provider) for provider in providers] for task, providers in mapping.items()}
+
+
+def _vendor_model(requested: str | None, prefix: str, default: str) -> str:
+    """Use the requested model only when it belongs to this vendor (fallbacks receive other vendors' names)."""
+    return requested if requested and requested.lower().startswith(prefix) else default
 
 
 def _require_key(value: str | None, environment_name: str) -> str:
