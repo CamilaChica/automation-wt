@@ -28,6 +28,15 @@ def _default_title(role: str) -> str:
 
 
 async def get_profile(session: AsyncSession, user: dict) -> dict:
+    # Re-key profiles created under a previous user id for the same email (e.g. seeded staff).
+    await session.execute(
+        text("""
+            UPDATE employee_profiles SET user_id = :user_id
+            WHERE lower(email) = lower(:email) AND user_id <> :user_id
+              AND NOT EXISTS (SELECT 1 FROM employee_profiles WHERE user_id = :user_id)
+        """),
+        {"user_id": user["id"], "email": user["email"]},
+    )
     await session.execute(
         text("""
             INSERT INTO employee_profiles (user_id, email, display_name, job_title)
