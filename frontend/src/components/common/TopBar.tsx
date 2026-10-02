@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ViewMode, ThemeMode } from '../../types';
-import { Search, Sun, Moon, ShieldCheck, UserCheck, AlertTriangle, Bell, Menu } from 'lucide-react';
+import { Search, Sun, Moon, ShieldCheck, UserCheck, AlertTriangle, Bell, Menu, LogOut } from 'lucide-react';
 import { BrandMark } from './BrandMark';
 import { FloatingQa } from './FloatingQa';
 import { useMailboxHealth, useRFQs, useSystemHealth } from '../../hooks/useApiResources';
@@ -184,6 +184,17 @@ export const TopBar: React.FC<TopBarProps> = ({
               <span>{isOnline ? 'ONLINE' : 'OFFLINE'}</span>
             </span>
           </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => { void apiService.signOut().finally(() => { window.location.href = window.location.hostname.startsWith('team.') ? '/' : '/team-portal'; }); }}
+          aria-label="Sign out"
+          title="Sign out"
+          className="flex min-h-11 min-w-11 shrink-0 items-center justify-center space-x-1.5 rounded-xl border border-slate-200 bg-slate-100 p-2 text-xs font-semibold text-slate-700 transition-all hover:border-red-400 hover:text-red-600 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-300 md:px-3"
+        >
+          <LogOut className="w-4 h-4" aria-hidden="true" />
+          <span className="hidden md:inline">Sign out</span>
         </button>
       </div>
     </header>
