@@ -67,6 +67,64 @@ class CarrierTrackingService:
         return response.json()
 
     @staticmethod
+    def _extract_tracking(payload: Dict[str, Any]) -> Dict[str, Any]:
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if isinstance(data, dict):
+            trackings = data.get("trackings")
+            if isinstance(trackings, list):
+                return trackings[0] if trackings else {}
+            if isinstance(data.get("tracking"), dict):
+                return data["tracking"]
+            if data.get("tracking_number"):
+                return data
+        return {}
+
+    def lookup_live(self, carrier: str, tracking_number: str) -> Optional[Dict[str, Any]]:
+        """Fetch live carrier status from AfterShip, registering the number if needed."""
+        if not self.api_key:
+            return None
+        tracking: Dict[str, Any] = {}
+        try:
+            response = requests.get(
+                f"{self.base_url}/trackings",
+                headers=self._headers(),
+                params={"tracking_numbers": tracking_number},
+                timeout=15,
+            )
+            if response.ok:
+                tracking = self._extract_tracking(response.json())
+            if not tracking:
+                body: Dict[str, Any] = {"tracking_number": tracking_number}
+                if carrier:
+                    body["slug"] = carrier.lower()
+                created = requests.post(f"{self.base_url}/trackings", headers=self._headers(), json=body, timeout=15)
+                if created.ok:
+                    tracking = self._extract_tracking(created.json())
+        except (requests.RequestException, ValueError):
+            return None
+        if not tracking:
+            return None
+        checkpoints = tracking.get("checkpoints") or []
+        events = [
+            {
+                "status": self.normalize_status(cp.get("tag")),
+                "location": cp.get("location") or ", ".join(filter(None, [cp.get("city"), cp.get("state"), cp.get("country_iso3")])) or None,
+                "description": cp.get("message") or "",
+                "occurred_at": cp.get("checkpoint_time"),
+            }
+            for cp in reversed(checkpoints)
+        ]
+        eta = tracking.get("expected_delivery") or tracking.get("courier_estimated_delivery_date") or tracking.get("aftership_estimated_delivery_date")
+        if isinstance(eta, dict):
+            eta = eta.get("estimated_delivery_date") or eta.get("estimated_delivery_date_max")
+        return {
+            "status": self.normalize_status(tracking.get("tag")),
+            "carrier": (tracking.get("slug") or carrier or "").upper() or carrier,
+            "estimated_delivery": eta,
+            "events": events,
+        }
+
+    @staticmethod
     def normalize_status(value: Optional[str]) -> str:
         if not value:
             return "Preparing Shipment"

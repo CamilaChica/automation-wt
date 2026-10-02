@@ -109,8 +109,6 @@ logger = logging.getLogger("winged-tycoons.api")
 _CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 _CSRF_EXEMPT_PATHS = {"/healthz", "/ready", "/", "/api/auth/otp/request", "/api/auth/otp/verify"}
 _RATE_LIMIT_RULES = {
-    "/api/auth/otp/request": (20, 3600),
-    "/api/auth/otp/verify": (20, 900),
     "/api/rfqs/intake": (30, 60),
     "/api/purchase-orders": (20, 60),
     "/api/catalog/search": (120, 60),
@@ -136,11 +134,9 @@ def _auth_environment() -> str:
 
 def _rate_limit(request: Request) -> tuple[bool, int]:
     rule = _RATE_LIMIT_RULES.get(request.url.path)
-    otp_route = request.url.path in {"/api/auth/otp/request", "/api/auth/otp/verify"}
-    production_auth = _auth_environment() == "production"
-    if rule and otp_route and production_auth:
-        limit, window = rule
-        return check_shared_rate_limit(request.url.path, _client_key(request), limit, window)
+    # OTP limits are enforced per email (request) and per challenge (verify), never per shared IP.
+    if request.url.path in {"/api/auth/otp/request", "/api/auth/otp/verify"}:
+        return True, 0
     if not rule or os.getenv("RATE_LIMIT_ENABLED", "true").strip().lower() in {"0", "false", "no", "off"}:
         return True, 0
     limit, window = rule
@@ -1728,16 +1724,17 @@ async def track_shipment(public_token: str, session=Depends(get_async_db)):
         carrier_match = _detect_carrier_tracking(public_token)
         if carrier_match:
             carrier, number, url = carrier_match
+            live = await asyncio.to_thread(carrier_tracking_service.lookup_live, carrier, number)
             return {
                 "shipment_id": number,
-                "status": f"In transit with {carrier}",
+                "status": (live or {}).get("status") or f"In transit with {carrier}",
                 "part_numbers": [],
                 "quantity": 0,
                 "carrier": carrier,
                 "tracking_number": number,
                 "tracking_url": url,
-                "estimated_delivery": None,
-                "events": [],
+                "estimated_delivery": (live or {}).get("estimated_delivery"),
+                "events": (live or {}).get("events") or [],
             }
         raise HTTPException(status_code=404, detail="We couldn't find that shipment. Please check the tracking number.")
     events = (

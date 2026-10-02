@@ -581,6 +581,17 @@ class RFQIntakeAgent(BaseAgent):
         if is_ambiguous_condition:
             ambiguous_fields.append("condition")
 
+        # A low-confidence model escalation should not park an RFQ whose
+        # customer, part number and quantity were parsed deterministically.
+        if (
+            pending_human_review
+            and not missing_fields
+            and not ambiguous_fields
+            and part_number
+            and is_valid_extracted_part_number(part_number)
+        ):
+            pending_human_review = False
+
         # ── 4. Determine overall status ─────────────────────────────────
         needs_clarification = bool(missing_fields or ambiguous_fields or pending_human_review)
         status = "NEEDS_CLARIFICATION" if needs_clarification else "COMPLETE"
