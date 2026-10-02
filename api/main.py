@@ -109,8 +109,8 @@ logger = logging.getLogger("winged-tycoons.api")
 _CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 _CSRF_EXEMPT_PATHS = {"/healthz", "/ready", "/", "/api/auth/otp/request", "/api/auth/otp/verify"}
 _RATE_LIMIT_RULES = {
-    "/api/auth/otp/request": (3, 3600),
-    "/api/auth/otp/verify": (10, 900),
+    "/api/auth/otp/request": (20, 3600),
+    "/api/auth/otp/verify": (20, 900),
     "/api/rfqs/intake": (30, 60),
     "/api/purchase-orders": (20, 60),
     "/api/catalog/search": (120, 60),
@@ -123,6 +123,10 @@ _rate_limit_events: dict[tuple[str, str], deque[float]] = defaultdict(deque)
 
 
 def _client_key(request: Request) -> str:
+    # Render's proxy terminates TLS; the real client IP is the first X-Forwarded-For entry.
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    if forwarded:
+        return forwarded
     return request.client.host if request.client else "unknown"
 
 
