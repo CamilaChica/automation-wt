@@ -43,7 +43,10 @@ const hostedApiBase = isCompanyDomainHost
     : '/api';
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL?.trim();
 const isDeployedStaticHost = isCompanyDomainHost || window.location.hostname === 'winged-tycoons-frontend.onrender.com';
-export const API_BASE = isDeployedStaticHost && (!configuredApiBase || configuredApiBase.startsWith('/'))
+// Company domains must use the same-site API so the session cookie is never treated as third-party.
+export const API_BASE = isCompanyDomainHost
+  ? hostedApiBase
+  : isDeployedStaticHost && (!configuredApiBase || configuredApiBase.startsWith('/'))
   ? hostedApiBase
   : (configuredApiBase || hostedApiBase);
 axios.defaults.timeout = 10000;
