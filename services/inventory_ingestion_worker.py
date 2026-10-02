@@ -453,7 +453,15 @@ class InventoryIngestionWorker:
                     savepoint.rollback()
                     raise
                 # Non-quote mail is archived and marked handled so the backfill keeps advancing.
-                savepoint.commit()
+                # A helper may swallow a SQL error and leave the savepoint aborted; roll it back then.
+                try:
+                    if hasattr(connection, "execute"):
+                        from sqlalchemy import text as _sql_text
+                        connection.execute(_sql_text("SELECT 1"))
+                    savepoint.commit()
+                except Exception:
+                    logger.warning("Ingestion savepoint aborted for %s; rolled back partial writes.", message_id)
+                    savepoint.rollback()
                 operations_store.mark_inbound_message_processed(message_id, internet_message_id)
         else:
             if message_id and not operations_store.claim_inbound_message(message_id, self.mailbox, internet_message_id):
