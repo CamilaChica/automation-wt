@@ -102,7 +102,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         {/* AOG Priority Badge */}
         <div className={`flex shrink-0 items-center space-x-2 whitespace-nowrap border px-3 py-1 rounded-full font-mono text-[11px] font-semibold ${activeAogCount > 0 ? 'bg-red-50 dark:bg-aog-red/10 border-red-200 dark:border-aog-red/40 text-aog-red aog-pulse-badge' : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'}`}>
           <AlertTriangle className="w-3.5 h-3.5 animate-bounce" />
-          <span className="whitespace-nowrap">{rfqQuery.isLoading ? 'AOG ALERTS: …' : rfqQuery.error ? 'AOG ALERTS: UNAVAILABLE' : `AOG ALERTS: ${activeAogCount} ACTIVE`}</span>
+          <span className="whitespace-nowrap">{rfqQuery.isLoading ? 'Urgent (AOG): …' : rfqQuery.error ? 'Urgent (AOG): —' : `Urgent (AOG): ${activeAogCount}`}</span>
         </div>
 
         {/* Global Omnibar */}
@@ -117,7 +117,7 @@ export const TopBar: React.FC<TopBarProps> = ({
               setSearchQuery(e.target.value);
               onSearch?.(e.target.value);
             }}
-            placeholder="Search P/N, NSN, S/N, CAGE... [Cmd + K]"
+            placeholder="Search part number or RFQ"
             className="w-full bg-slate-100 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-700 rounded-xl pl-9 pr-3 py-1.5 text-slate-900 dark:text-slate-200 placeholder-slate-400 focus:ring-2 focus:ring-aero-blue focus:outline-none transition-colors font-mono text-[11px]"
           />
         </div>
@@ -141,7 +141,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <div className="hidden min-[1700px]:flex items-center space-x-3 text-[11px] font-mono text-slate-600 dark:text-slate-400">
           <span className="flex items-center space-x-1 text-emerald-600 dark:text-emerald-400 font-semibold">
             <ShieldCheck className="w-3.5 h-3.5" />
-            <span>SPEED. TRACEABILITY. RELIABILITY.</span>
+            <span>Live</span>
           </span>
           <span className="text-slate-300 dark:text-slate-600">|</span>
           <span className="font-semibold text-slate-800 dark:text-slate-200">{timeString}</span>

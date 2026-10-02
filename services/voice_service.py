@@ -5,72 +5,6 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 
-VOICE_INVENTORY = [
-    {
-        "part_number": "060-1234-00",
-        "description": "Main Wheel Assembly",
-        "quantity": 4,
-        "condition_code": "FN",
-        "condition_description": "Factory New",
-        "unit_price": 4250.00,
-        "lead_time": "Immediate",
-    },
-    {
-        "part_number": "45-0912-3",
-        "description": "Hydraulic Pump",
-        "quantity": 0,
-        "condition_code": "OH",
-        "condition_description": "Overhauled",
-        "unit_price": 1800.00,
-        "lead_time": "14 Days",
-    },
-    {
-        "part_number": "060-5678-01",
-        "description": "Brake Rotor Disk",
-        "quantity": 12,
-        "condition_code": "NE",
-        "condition_description": "New Surplus",
-        "unit_price": 850.00,
-        "lead_time": "Immediate",
-    },
-    {
-        "part_number": "10-60539-1",
-        "description": "Starter Generator",
-        "quantity": 2,
-        "condition_code": "AR",
-        "condition_description": "As Removed",
-        "unit_price": 2100.00,
-        "lead_time": "3 Days",
-    },
-]
-
-VOICE_REQUESTS = [
-    {
-        "id": "WT-48291",
-        "customer_name": "AeroNorth Maintenance",
-        "part_number": "060-5678-01",
-        "status": "Pending Quote",
-        "tracking_details": None,
-        "review_notice": None,
-    },
-    {
-        "id": "WT-48276",
-        "customer_name": "Pacific Flight Group",
-        "part_number": "10-60539-1",
-        "status": "Inventory Reserved",
-        "tracking_details": "Shipment preparation in progress",
-        "review_notice": None,
-    },
-    {
-        "id": "WT-48240",
-        "customer_name": "Meridian Aero Services",
-        "part_number": "45-0912-3",
-        "status": "Escalated to Sales",
-        "tracking_details": None,
-        "review_notice": "Sales review required before quote release",
-    },
-]
-
 _human_queue: list[dict[str, Any]] = []
 _queue_lock = threading.Lock()
 
@@ -79,16 +13,27 @@ def _normalized_part_number(value: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", value.upper())
 
 
-def check_inventory_availability(part_number: str) -> dict[str, Any]:
+def _inventory_payload(item: Any) -> dict[str, Any]:
+    return {
+        "part_number": str(getattr(item, "part_number", "")),
+        "description": str(getattr(item, "description", "") or ""),
+        "quantity": int(getattr(item, "quantity_available", 0) or 0),
+        "condition_code": str(getattr(item, "condition_code", "")),
+        "certificate_type": str(getattr(item, "certificate_type", "") or ""),
+        "has_full_trace": bool(getattr(item, "has_full_trace", False)),
+    }
+
+
+def check_inventory_availability(part_number: str, inventory: Iterable[Any] = ()) -> dict[str, Any]:
     query = _normalized_part_number(part_number.strip())
     if not query:
         return {"matches": [], "message": "Enter a part number to search inventory."}
 
     matches = [
-        item.copy()
-        for item in VOICE_INVENTORY
-        if query in _normalized_part_number(item["part_number"])
-        or _normalized_part_number(item["part_number"]) in query
+        _inventory_payload(item)
+        for item in inventory
+        if query in _normalized_part_number(_inventory_payload(item)["part_number"])
+        or _normalized_part_number(_inventory_payload(item)["part_number"]) in query
     ]
     return {
         "matches": matches,
@@ -96,14 +41,23 @@ def check_inventory_availability(part_number: str) -> dict[str, Any]:
     }
 
 
-def get_order_status(rfq_or_order_id: str, rfqs: Iterable[Any] = ()) -> dict[str, Any]:
-    query = rfq_or_order_id.strip().upper()
-    for request in VOICE_REQUESTS:
-        if request["id"].upper() == query:
-            return {"found": True, **request}
+def _normalize_reference(value: str) -> str:
+    """Treat 'RFQ 681941', 'rfq681941', '681941' and 'RFQ-681941' as the same reference."""
+    import re
 
+    text = (value or "").strip().upper()
+    match = re.fullmatch(r"(?:([A-Z]{2,4})[\s_#:-]*)?(\d[\d\s-]*)", text)
+    if not match:
+        return text
+    prefix = match.group(1) or "RFQ"
+    digits = re.sub(r"\D", "", match.group(2))
+    return f"{prefix}-{digits}"
+
+
+def get_order_status(rfq_or_order_id: str, rfqs: Iterable[Any] = ()) -> dict[str, Any]:
+    query = _normalize_reference(rfq_or_order_id)
     for rfq in rfqs:
-        if str(getattr(rfq, "id", "")).upper() != query:
+        if _normalize_reference(str(getattr(rfq, "id", ""))) != query:
             continue
         status = str(getattr(rfq, "status", "In review"))
         return {
@@ -124,11 +78,11 @@ def get_customer_order_status(
     customer_email: str,
     rfqs: Iterable[Any] = (),
 ) -> dict[str, Any]:
-    query = rfq_or_order_id.strip().upper()
+    query = _normalize_reference(rfq_or_order_id)
     email = customer_email.strip().lower()
     for rfq in rfqs:
         if (
-            str(getattr(rfq, "id", "")).upper() != query
+            _normalize_reference(str(getattr(rfq, "id", ""))) != query
             or str(getattr(rfq, "customer_email", "")).lower() != email
         ):
             continue
@@ -175,21 +129,15 @@ def log_customer_concern(
     return {"logged": True, "requires_review": requires_review, "concern": entry}
 
 
-def get_voice_dashboard(rfqs: Iterable[Any] = ()) -> dict[str, Any]:
-    requests = [request.copy() for request in VOICE_REQUESTS]
-    known_ids = {request["id"] for request in requests}
-    for rfq in rfqs:
-        rfq_id = str(getattr(rfq, "id", ""))
-        if not rfq_id or rfq_id in known_ids:
-            continue
-        requests.append({
-            "id": rfq_id,
-            "customer_name": getattr(rfq, "customer_name", "Customer"),
-            "part_number": getattr(rfq, "part_number", "-"),
-            "status": getattr(rfq, "status", "Pending Quote"),
-            "tracking_details": None,
-            "review_notice": None,
-        })
+def get_voice_dashboard(rfqs: Iterable[Any] = (), inventory: Iterable[Any] = ()) -> dict[str, Any]:
+    requests = [{
+        "id": str(getattr(rfq, "id", "")),
+        "customer_name": str(getattr(rfq, "customer_name", "") or ""),
+        "part_number": str(getattr(rfq, "part_number", "") or ""),
+        "status": str(getattr(rfq, "status", "") or ""),
+        "tracking_details": None,
+        "review_notice": "Operator review is required." if any(term in str(getattr(rfq, "status", "")).lower() for term in ("review", "hold")) else None,
+    } for rfq in rfqs if getattr(rfq, "id", None)]
     with _queue_lock:
         queue = [entry.copy() for entry in _human_queue]
-    return {"inventory": [item.copy() for item in VOICE_INVENTORY], "requests": requests[:10], "human_queue": queue}
+    return {"inventory": [_inventory_payload(item) for item in inventory], "requests": requests[:10], "human_queue": queue}

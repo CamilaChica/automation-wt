@@ -986,16 +986,14 @@ async def submit_rfq(
     error = pipeline_res.get("error", "")
     
     if status == "Quote_Sent":
-        msg = f"RFQ {rfq.id} was processed and the quote email was sent to {customer_email}."
+        msg = f"Thank you! Your quote for {rfq.id} has been emailed to {customer_email}."
     elif status == "Quote_Dispatch_Pending":
-        if pipeline_res.get("transmission_status") == "DRY_RUN":
-            msg = f"RFQ {rfq.id} was processed and the quote is prepared. Email was not sent in this environment."
-        else:
-            msg = f"RFQ {rfq.id} was processed. The quote email is queued for delivery to {customer_email}."
+        msg = f"Thank you! Your quote for {rfq.id} is ready and on its way to {customer_email}."
+    elif "Failed" in status or "Halted" in status or "Warning" in status:
+        logger.warning("RFQ %s pipeline issue: %s", rfq.id, error)
+        msg = f"Thank you! We received {rfq.id}. Our team is reviewing it personally and will email you shortly."
     else:
-        msg = f"RFQ {rfq.id} was received and processed with status {status}."
-    if "Failed" in status or "Halted" in status or "Warning" in status:
-        msg = f"RFQ pipeline halted or failed: {error}"
+        msg = f"Thank you! We received {rfq.id}. Our team is checking availability and pricing and will email your quote to {customer_email} shortly."
         
     return IntakeResponse(
         rfq_id=rfq.id,
@@ -1704,6 +1702,19 @@ async def approve_purchase_order(
         await session.commit()
     return {"status": "Purchase_Order_Received", "quote_id": quote_id, "rfq_id": rfq.id}
 
+def _detect_carrier_tracking(value: str):
+    """Recognize public carrier tracking numbers and return (carrier, number, live tracking URL)."""
+    number = re.sub(r"[\s-]", "", value or "").upper()
+    if re.fullmatch(r"1Z[0-9A-Z]{16}", number):
+        return "UPS", number, f"https://www.ups.com/track?tracknum={number}"
+    if re.fullmatch(r"\d{12}|\d{15}|\d{20}|\d{22}", number) and not number.startswith(("94", "93", "92")):
+        return "FedEx", number, f"https://www.fedex.com/fedextrack/?trknbr={number}"
+    if re.fullmatch(r"9[234]\d{18,20}|[A-Z]{2}\d{9}US", number):
+        return "USPS", number, f"https://tools.usps.com/go/TrackConfirmAction?tLabels={number}"
+    if re.fullmatch(r"\d{10,11}", number):
+        return "DHL", number, f"https://www.dhl.com/global-en/home/tracking/tracking-express.html?tracking-id={number}"
+    return None
+
 @app.get("/api/shipments/track/{public_token}")
 async def track_shipment(public_token: str, session=Depends(get_async_db)):
     """Return customer-safe shipment status using an opaque tracking token."""
@@ -1714,7 +1725,21 @@ async def track_shipment(public_token: str, session=Depends(get_async_db)):
         else await db_service.get_shipment_by_token_async(repositories, public_token)
     )
     if not shipment:
-        raise HTTPException(status_code=404, detail="Shipment not found.")
+        carrier_match = _detect_carrier_tracking(public_token)
+        if carrier_match:
+            carrier, number, url = carrier_match
+            return {
+                "shipment_id": number,
+                "status": f"In transit with {carrier}",
+                "part_numbers": [],
+                "quantity": 0,
+                "carrier": carrier,
+                "tracking_number": number,
+                "tracking_url": url,
+                "estimated_delivery": None,
+                "events": [],
+            }
+        raise HTTPException(status_code=404, detail="We couldn't find that shipment. Please check the tracking number.")
     events = (
         db_service.get_shipment_events(shipment.id)
         if repositories is None

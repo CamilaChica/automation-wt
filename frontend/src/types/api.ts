@@ -111,6 +111,7 @@ export interface ShipmentTraceResponse {
   quantity: number;
   carrier?: string | null;
   tracking_number?: string | null;
+  tracking_url?: string | null;
   estimated_delivery?: string | null;
   events: Array<ShipmentEvent & { shipment_id: string; occurred_at: IsoDateTime }>;
 }

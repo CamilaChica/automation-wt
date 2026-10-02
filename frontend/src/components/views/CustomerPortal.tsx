@@ -349,6 +349,9 @@ export const CustomerPortal: React.FC = () => {
                   <div>{t('latestLocation')}: <span className="text-slate-900">{shipment.events?.[shipment.events.length - 1]?.location || t('pendingUpdate')}</span></div>
                   <div>{t('estimatedDelivery')}: <span className="text-slate-900">{shipment.estimated_delivery || t('toBeConfirmed')}</span></div>
                 </div>
+                {shipment.tracking_url && (
+                  <a href={shipment.tracking_url} target="_blank" rel="noopener noreferrer" className="mt-4 inline-flex rounded-xl bg-cyan-700 px-4 py-2 text-sm font-bold text-white hover:bg-cyan-800">View live status on {shipment.carrier} →</a>
+                )}
                 <div className="mt-5 border-l border-slate-300 pl-4">
                   {(shipment.events || []).slice().reverse().map((event, index: number) => (
                     <div key={`${event.id}-${index}`} className="relative pb-4 last:pb-0">

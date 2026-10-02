@@ -134,3 +134,11 @@
 .aero-glow {
   box-shadow: 0 0 15px rgba(0, 107, 255, 0.25);
 }
+
+.auth-input { user-select: text; -webkit-user-select: text; }
+.auth-input:-webkit-autofill,
+.auth-input:-webkit-autofill:focus {
+  -webkit-text-fill-color: currentColor;
+  caret-color: currentColor;
+  transition: background-color 9999s ease-out 0s;
+}

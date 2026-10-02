@@ -3,7 +3,7 @@ import { ViewMode, ThemeMode, AgentAuditLog, AutomationEvent } from './types';
 import { TopBar } from './components/common/TopBar';
 import { Sidebar } from './components/common/Sidebar';
 import { AuditLogDrawer } from './components/common/AuditLogDrawer';
-import { CustomerDashboard } from './components/views/CustomerDashboard';
+import { OperationsHomeView } from './components/views/OperationsHomeView';
 import { SupplierSourcingView } from './components/views/SupplierSourcingView';
 import { AeroProcurementView } from './components/views/AeroProcurementView';
 import { TraceVaultView } from './components/views/TraceVaultView';
@@ -113,7 +113,7 @@ const InternalApp: React.FC = () => {
   const renderActiveView = () => {
     switch (currentView) {
       case 'customer':
-        return <CustomerDashboard />;
+        return <OperationsHomeView onSelectView={setCurrentView} />;
       case 'sourcing':
         return <SupplierSourcingView />;
       case 'aero-procurement':
@@ -127,7 +127,7 @@ const InternalApp: React.FC = () => {
       case 'voice-service':
         return <VoiceServiceView />;
       default:
-        return <CustomerDashboard />;
+        return <OperationsHomeView onSelectView={setCurrentView} />;
     }
   };
 
