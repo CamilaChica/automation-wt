@@ -275,7 +275,7 @@ class InventoryIngestionWorker:
                 result = await import_inventory_attachments_async(message, self.mailbox, repositories)
                 if result is None:
                     if message_id:
-                        await repositories.records.release_inbound_message(message_id)
+                        await repositories.records.mark_inbound_message_processed(message_id)
                     return {"success": False, "skipped": True, "message_id": message_id}
                 if result.get("success"):
                     await self._record_supplier_negotiations_async(repositories, message, result)
@@ -284,9 +284,40 @@ class InventoryIngestionWorker:
                 if message_id:
                     await repositories.records.mark_inbound_message_processed(message_id)
                 return {"message_id": message_id, "result": result, "success": bool(result.get("success"))}
+        except Exception as exc:
+            return await self._record_failed_message_async(message, engine, exc)
         finally:
             if owns_engine:
                 await engine.dispose()
+
+    async def _record_failed_message_async(self, message: dict[str, Any], engine, exc: Exception) -> dict[str, Any]:
+        from repositories.runtime import create_operational_repositories
+
+        message_id = str(message.get("message_id") or "").strip()
+        logger.exception("Inventory ingestion failed for %s; marking as failed", message_id or "unknown")
+        if message_id:
+            try:
+                async with session_scope(engine) as session:
+                    repositories = create_operational_repositories(session)
+                    await repositories.records.claim_inbound_message(message_id, self.mailbox)
+                    await repositories.records.archive_raw_email(
+                        mailbox=self.mailbox,
+                        provider_message_id=message_id,
+                        internet_message_id=message.get("internet_message_id"),
+                        conversation_id=message.get("conversation_id"),
+                        sender=str(message.get("from") or "") or None,
+                        subject=str(message.get("subject") or "") or None,
+                        received_at=_received_at(message.get("date")),
+                        body=str(message.get("body") or ""),
+                        raw_mime=message.get("raw_mime"),
+                        headers=message.get("headers") or [],
+                        attachments=[],
+                        processing_status="failed",
+                    )
+                    await repositories.records.mark_inbound_message_processed(message_id)
+            except Exception:
+                logger.exception("Could not record failed inventory message %s", message_id)
+        return {"message_id": message_id, "success": False, "failed": True, "error": str(exc)}
 
     async def _process_plain_supplier_message_async(
         self, message: dict[str, Any], engine=None
@@ -356,16 +387,20 @@ class InventoryIngestionWorker:
                 successful = bool(result.get("success"))
                 held_for_review = result.get("status") == "Pending_Human_Review"
                 if message_id:
-                    if successful or held_for_review or "no part number" in str(result.get("error", "")).lower():
-                        await repositories.records.mark_inbound_message_processed(message_id)
-                    else:
-                        await repositories.records.release_inbound_message(message_id)
+                    # Always advance: unparseable supplier mail must not be re-ingested every poll.
+                    await repositories.records.mark_inbound_message_processed(message_id)
+                    if not (successful or held_for_review):
+                        await repositories.records.set_raw_email_processing_status(
+                            self.mailbox, message_id, "no_inventory_data"
+                        )
                 if successful:
                     for item in result.get("items") or [result]:
                         await self._enqueue_waiting_rfqs_async(
                             repositories, str(item.get("part_number") or result.get("part_number") or "")
                         )
                 return {"message_id": message_id, "result": result, "success": successful}
+        except Exception as exc:
+            return await self._record_failed_message_async(message, engine, exc)
         finally:
             if owns_engine:
                 await engine.dispose()
@@ -552,7 +587,10 @@ class InventoryIngestionWorker:
             asyncio.run(preflight_database())
         while True:
             started = time.monotonic()
-            self.poll_once()
+            try:
+                self.poll_once()
+            except Exception:
+                logger.exception("Inventory ingestion poll failed; retrying next interval")
             elapsed = time.monotonic() - started
             time.sleep(max(0, self.poll_interval_seconds - elapsed))
 
