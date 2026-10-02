@@ -220,6 +220,11 @@ def _extract_condition(text: str) -> tuple:
     """
     found_codes = []
     upper = text.upper()
+    # An explicit "CND:/COND:/CONDITION:" line wins, so signatures such as
+    # "New Delhi" cannot inject a false "NEW" condition.
+    labeled = re.search(r"^\s*(?:CND|COND|CONDITION)\s*[:\-]\s*(.+)$", upper, re.MULTILINE)
+    if labeled:
+        upper = labeled.group(1)
 
     # Check longest aliases first to avoid partial matches (e.g. "NEW" before "NE")
     sorted_aliases = sorted(CONDITION_MAP.keys(), key=len, reverse=True)
