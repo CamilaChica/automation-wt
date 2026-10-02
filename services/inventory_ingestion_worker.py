@@ -33,6 +33,14 @@ from services.operations_store import operations_store
 logger = logging.getLogger("winged-tycoons-inventory-ingestion")
 
 
+class _NullSavepoint:
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+
 class InventoryIngestionWorker:
     def __init__(
         self,
@@ -382,25 +390,33 @@ class InventoryIngestionWorker:
             return {"success": False, "skipped": True, "error": "Message has no body or attachments."}
 
         if postgres_mode and message_id:
-            with operations_store.transaction():
+            with operations_store.transaction() as connection:
                 if not operations_store.claim_inbound_message(message_id, self.mailbox, internet_message_id):
                     return {"success": True, "skipped": True, "message_id": message_id}
-                archive_inbound_message(message, self.mailbox)
-                result = import_inventory_attachments(message, self.mailbox)
-                if result is None:
-                    result = self.loader.load_raw_email_text(
-                        self._email_text(message),
-                        mailbox=self.mailbox,
-                        message_id=message_id,
-                        attachments=message.get("attachments") or [],
-                    )
+                # Savepoint keeps a failed statement from aborting the claim/release bookkeeping.
+                savepoint = connection.begin_nested() if hasattr(connection, "begin_nested") else _NullSavepoint()
+                try:
+                    archive_inbound_message(message, self.mailbox)
+                    result = import_inventory_attachments(message, self.mailbox)
+                    if result is None:
+                        result = self.loader.load_raw_email_text(
+                            self._email_text(message),
+                            mailbox=self.mailbox,
+                            message_id=message_id,
+                            attachments=message.get("attachments") or [],
+                        )
+                except Exception:
+                    savepoint.rollback()
+                    raise
                 if (
                     result.get("success")
                     or result.get("status") == "Pending_Human_Review"
                     or "No part number detected" in str(result.get("error", ""))
                 ):
+                    savepoint.commit()
                     operations_store.mark_inbound_message_processed(message_id, internet_message_id)
                 else:
+                    savepoint.rollback()
                     operations_store.release_inbound_message(message_id, internet_message_id)
         else:
             if message_id and not operations_store.claim_inbound_message(message_id, self.mailbox, internet_message_id):
