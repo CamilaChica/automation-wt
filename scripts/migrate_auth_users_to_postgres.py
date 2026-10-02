@@ -75,15 +75,13 @@ def main() -> None:
         with target:
             with target.cursor() as cursor:
                 cursor.execute(
-                """SELECT COUNT(*) FROM information_schema.tables
-                WHERE table_schema = current_schema() AND table_name = 'auth_users'"""
+                    """SELECT COUNT(*) FROM information_schema.tables
+                    WHERE table_schema = current_schema() AND table_name = 'auth_users'"""
                 )
                 if cursor.fetchone()[0] != 1:
                     raise RuntimeError("PostgreSQL auth schema is missing; apply the reviewed Alembic migration first.")
 
-                cursor.execute(
-                    "DELETE FROM auth_sessions"
-                )
+                cursor.execute("DELETE FROM auth_sessions")
                 cursor.execute("DELETE FROM auth_otp_challenges")
                 for user in users:
                     cursor.execute(

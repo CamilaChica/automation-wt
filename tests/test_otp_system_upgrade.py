@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from api import auth
-from api.main import _client_key, app
+from api.main import _auth_environment, _client_key, app
 from services import shared_rate_limit
 from api.auth import _PostgresConnection
 
@@ -168,6 +168,13 @@ def test_forwarded_for_is_not_trusted_as_the_client_ip():
     }
 
     assert _client_key(Request(scope)) == "10.0.0.5"
+
+
+def test_auth_environment_falls_back_to_runtime_environment(monkeypatch):
+    monkeypatch.delenv("WT_AUTH_ENV", raising=False)
+    monkeypatch.setenv("WT_ENV", "production")
+
+    assert _auth_environment() == "production"
 
 
 def test_postgres_connection_translates_sqlite_style_placeholders():

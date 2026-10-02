@@ -6,6 +6,7 @@ const authStatePath = resolve(process.cwd(), 'playwright/.auth/user.json');
 
 test('Authenticated user can access internal mailbox status', async ({ page }) => {
   let mailboxAuthorization: string | undefined;
+  let mailboxCookie: string | undefined;
   let rejectMailbox = false;
 
   await page.route('**/api/**', async route => {
@@ -24,10 +25,11 @@ test('Authenticated user can access internal mailbox status', async ({ page }) =
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        headers: { 'Set-Cookie': 'wt_session=playwright-session; HttpOnly; Path=/; SameSite=Strict' },
+        headers: {
+          'Set-Cookie': 'wt_session=playwright-session; HttpOnly; Path=/; SameSite=Lax',
+          'X-CSRF-Token': 'playwright-csrf',
+        },
         body: JSON.stringify({
-          access_token: 'playwright-test-token',
-          token_type: 'bearer',
           role: 'ROLE_ADMIN',
           email: 'operator@wingedtycoons.com',
         }),
@@ -36,6 +38,7 @@ test('Authenticated user can access internal mailbox status', async ({ page }) =
     }
     if (path.endsWith('/internal/mailboxes/health')) {
       mailboxAuthorization = request.headers().authorization;
+      mailboxCookie = request.headers().cookie;
       if (rejectMailbox) {
         await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ detail: 'Invalid session' }) });
         return;
@@ -51,7 +54,12 @@ test('Authenticated user can access internal mailbox status', async ({ page }) =
       });
       return;
     }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: { 'X-CSRF-Token': 'playwright-csrf' },
+      body: '[]',
+    });
   });
 
   await page.goto('/internal');
@@ -66,7 +74,8 @@ test('Authenticated user can access internal mailbox status', async ({ page }) =
   });
   expect(mailboxState.sales?.status).toBe('ok');
   expect(mailboxState.purchasing?.status).toBe('ok');
-  expect(mailboxAuthorization).toBe('Bearer playwright-test-token');
+  expect(mailboxAuthorization).toBeUndefined();
+  expect(mailboxCookie).toContain('wt_session=playwright-session');
 
   await mkdir(dirname(authStatePath), { recursive: true });
   await page.context().storageState({ path: authStatePath });

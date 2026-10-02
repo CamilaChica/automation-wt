@@ -4,6 +4,7 @@ services:
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    preDeployCommand: ALLOW_REMOTE_ALEMBIC_MIGRATIONS=true ALLOW_PRODUCTION_ALEMBIC_MIGRATIONS=true alembic upgrade head
     healthCheckPath: /healthz
     autoDeploy: true
     disk:

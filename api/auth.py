@@ -19,17 +19,21 @@ SESSION_TTL_SECONDS = 8 * 60 * 60
 MAX_OTP_REQUESTS_PER_HOUR = 3
 MAX_OTP_ATTEMPTS = 5
 OTP_LOCK_SECONDS = 15 * 60
-AUTH_ENV = os.getenv("WT_AUTH_ENV", "development").strip().lower()
+AUTH_ENV = os.getenv("WT_AUTH_ENV", os.getenv("WT_ENV", "development")).strip().lower()
+RUNTIME_ENV = os.getenv("WT_ENV", AUTH_ENV).strip().lower()
+if RUNTIME_ENV == "production" and AUTH_ENV != "production":
+    raise RuntimeError("WT_AUTH_ENV must be production when WT_ENV is production.")
+IS_PRODUCTION = RUNTIME_ENV == "production" or AUTH_ENV == "production"
 AUTH_STORAGE_BACKEND = os.getenv(
     "WT_AUTH_STORAGE_BACKEND",
-    "postgres" if AUTH_ENV == "production" else "sqlite",
+    "postgres" if IS_PRODUCTION else "sqlite",
 ).strip().lower()
 if AUTH_STORAGE_BACKEND not in {"sqlite", "postgres"}:
     raise RuntimeError("WT_AUTH_STORAGE_BACKEND must be 'sqlite' or 'postgres'.")
-if AUTH_ENV == "production" and AUTH_STORAGE_BACKEND != "postgres":
+if IS_PRODUCTION and AUTH_STORAGE_BACKEND != "postgres":
     raise RuntimeError("Production authentication requires WT_AUTH_STORAGE_BACKEND=postgres.")
 AUTH_SECRET = os.getenv("WT_AUTH_SECRET", "").strip()
-if AUTH_ENV == "production" and len(AUTH_SECRET) < 32:
+if IS_PRODUCTION and len(AUTH_SECRET) < 32:
     raise RuntimeError("WT_AUTH_SECRET must be at least 32 characters in production.")
 if not AUTH_SECRET:
     AUTH_SECRET = "development-only-change-this-secret"
