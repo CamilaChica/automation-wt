@@ -126,10 +126,14 @@ def _client_key(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _auth_environment() -> str:
+    return os.getenv("WT_AUTH_ENV", os.getenv("WT_ENV", "development")).strip().lower()
+
+
 def _rate_limit(request: Request) -> tuple[bool, int]:
     rule = _RATE_LIMIT_RULES.get(request.url.path)
     otp_route = request.url.path in {"/api/auth/otp/request", "/api/auth/otp/verify"}
-    production_auth = os.getenv("WT_AUTH_ENV", "development").strip().lower() == "production"
+    production_auth = _auth_environment() == "production"
     if rule and otp_route and production_auth:
         limit, window = rule
         return check_shared_rate_limit(request.url.path, _client_key(request), limit, window)
@@ -189,12 +193,12 @@ async def security_headers(request: Request, call_next):
         "wt_csrf",
         csrf_token,
         httponly=False,
-        secure=os.getenv("WT_AUTH_ENV", "development").strip().lower() == "production",
-        samesite="None" if os.getenv("WT_AUTH_ENV", "development").strip().lower() == "production" else "Lax",
+        secure=_auth_environment() == "production",
+        samesite="None" if _auth_environment() == "production" else "Lax",
         max_age=8 * 60 * 60,
     )
     response.headers["X-CSRF-Token"] = csrf_token
-    if os.getenv("WT_AUTH_ENV", "development").strip().lower() == "production":
+    if _auth_environment() == "production":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     logger.info(
         "http_request",
@@ -433,6 +437,8 @@ async def initialize_local_voice_recordings():
     if AUTH_STORAGE_BACKEND == "postgres":
         await asyncio.to_thread(init_auth_db)
     production = os.getenv("WT_ENV", os.getenv("WT_AUTH_ENV", "development")).strip().lower() == "production"
+    if production and _auth_environment() != "production":
+        raise RuntimeError("WT_AUTH_ENV must be production when WT_ENV is production.")
     runtime_enabled = os.getenv("OPERATIONAL_POSTGRES_RUNTIME_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
     if production and runtime_enabled:
         await preflight_database()
@@ -445,12 +451,12 @@ async def initialize_local_voice_recordings():
 @app.post("/api/auth/otp/request")
 async def otp_request(request: OtpRequest):
     requested_role = request.role.strip().upper()
-    if requested_role in {"INTERNAL", "ROLE_INTERNAL"} and os.getenv("WT_AUTH_ENV", "development").strip().lower() != "production":
+    if requested_role in {"INTERNAL", "ROLE_INTERNAL"} and _auth_environment() != "production":
         raise HTTPException(
             status_code=503,
             detail="Internal email sign-in is unavailable until WT_AUTH_ENV=production is configured.",
         )
-    if os.getenv("WT_AUTH_ENV", "development").strip().lower() == "production":
+    if _auth_environment() == "production":
         try:
             allowed, retry_after = check_shared_rate_limit(
                 "otp-request-email",
@@ -469,7 +475,7 @@ async def otp_request(request: OtpRequest):
             )
     challenge_id, code = request_otp(request.email, request.role, request.full_name)
     response = {"challenge_id": challenge_id, "message": "If eligible, an OTP has been sent."}
-    auth_env = os.getenv("WT_AUTH_ENV", "development").strip().lower()
+    auth_env = _auth_environment()
     if auth_env == "production":
         try:
             send_otp_email(request.email, code)
@@ -490,7 +496,7 @@ async def otp_verify(request: OtpVerifyRequest, response: Response):
     result = verify_otp(request.challenge_id, request.code)
     response.status_code = 200
     response.headers["Cache-Control"] = "no-store"
-    auth_env = os.getenv("WT_AUTH_ENV", "development").strip().lower()
+    auth_env = _auth_environment()
     response.set_cookie(
         key="wt_session",
         value=result["access_token"],
@@ -511,7 +517,7 @@ async def auth_session(user: dict = Depends(current_user)):
 @app.post("/api/auth/logout", status_code=204)
 async def logout(request: Request, response: Response):
     revoke_session(request.cookies.get("wt_session"))
-    production = os.getenv("WT_AUTH_ENV", "development").strip().lower() == "production"
+    production = _auth_environment() == "production"
     response.delete_cookie(
         "wt_session",
         secure=production,
