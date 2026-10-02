@@ -143,6 +143,11 @@ class MockDatabaseService:
             "shipments", "public_token", public_token
         )
         payload = next(iter(records.values()), None)
+        if not payload:
+            records = await repositories.records.list_by_payload_value(
+                "shipments", "tracking_number", public_token
+            )
+            payload = next(iter(records.values()), None)
         return Shipment.model_validate(payload) if payload else None
 
     async def get_shipment_events_async(self, repositories, shipment_id: str) -> List[ShipmentEvent]:
@@ -1010,8 +1015,12 @@ class MockDatabaseService:
 
     def get_shipment_by_token(self, public_token: str) -> Optional[Shipment]:
         if self._production:
-            return next((shipment for shipment in self._pg_list("shipments", Shipment) if shipment.public_token == public_token), None)
-        return next((shipment for shipment in self.shipments.values() if shipment.public_token == public_token), None)
+            shipments = self._pg_list("shipments", Shipment)
+        else:
+            shipments = list(self.shipments.values())
+        return next((shipment for shipment in shipments if shipment.public_token == public_token), None) or next(
+            (shipment for shipment in shipments if shipment.tracking_number and shipment.tracking_number == public_token), None
+        )
 
     def find_shipment_by_tracking(self, carrier: str, tracking_number: str) -> Optional[Shipment]:
         normalized_carrier = (carrier or "").lower()

@@ -196,6 +196,9 @@ const CustomerPortalRoute: React.FC = () => {
 };
 
 export const App: React.FC = () => {
+  useEffect(() => {
+    void apiService.validateSession();
+  }, []);
   const isTeamHost = window.location.hostname.startsWith('team.');
   const isLandingPath = window.location.pathname === '/' && !isTeamHost;
   const isTeamPortalPath = window.location.pathname === '/team-portal' || (isTeamHost && window.location.pathname === '/');

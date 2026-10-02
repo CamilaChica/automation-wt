@@ -101,7 +101,7 @@ axios.interceptors.response.use(
     if (typeof token === 'string' && token) csrfToken = token;
     return response;
   },
-  error => {
+  async error => {
     if (import.meta.env.DEV) {
       console.warn('API request failed', {
         method: error.config?.method,
@@ -113,8 +113,22 @@ axios.interceptors.response.use(
     const token = error.response?.headers?.['x-csrf-token'];
     if (typeof token === 'string' && token) csrfToken = token;
     const path = requestPath(error.config?.url);
-    const isOtpFlow = /\/auth\/otp\/(request|verify)$/.test(path);
-    if (error.response?.status === 401 && !isOtpFlow) clearStoredAuth();
+    const status = error.response?.status;
+    const config = error.config as (typeof error.config & { _wtRetried?: boolean }) | undefined;
+    const isCsrfFailure = status === 403 && String(error.response?.data ?? '').includes('CSRF validation failed');
+    if (isCsrfFailure && config && !config._wtRetried) {
+      config._wtRetried = true;
+      csrfToken = null;
+      return axios.request(config);
+    }
+    const isAuthCheck = /\/auth\/(otp\/(request|verify)|session|logout|csrf)$/.test(path);
+    if (status === 401 && !isAuthCheck && storedValue('wt_role')) {
+      try {
+        await axios.get(`${API_BASE}/auth/session`);
+      } catch (sessionError) {
+        if (axios.isAxiosError(sessionError) && sessionError.response?.status === 401) clearStoredAuth();
+      }
+    }
     return Promise.reject(error);
   },
 );
@@ -140,9 +154,11 @@ axios.interceptors.request.use(async config => {
 });
 
 const rethrowAuthError = (error: unknown): never => {
-  if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) {
-    apiService.logout();
-    throw new Error('Your session expired. Please sign in again.');
+  if (axios.isAxiosError(error) && error.response?.status === 401) {
+    throw new Error(apiService.isAuthenticated() ? 'Request was not authorized. Please retry.' : 'Your session expired. Please sign in again.');
+  }
+  if (axios.isAxiosError(error) && error.response?.status === 403) {
+    throw new Error('This action is not available for your account.');
   }
   throw error;
 };
@@ -243,6 +259,17 @@ export const apiService = {
   },
   logout() {
     clearStoredAuth();
+  },
+
+  async validateSession(): Promise<void> {
+    if (!storedValue('wt_role')) return;
+    try {
+      const res = await axios.get(`${API_BASE}/auth/session`);
+      if (res.data?.role) localStorage.setItem('wt_role', res.data.role);
+      if (res.data?.email) localStorage.setItem('wt_email', res.data.email);
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 401) clearStoredAuth();
+    }
   },
 
   getRole(): 'customer' | 'internal' | null {
