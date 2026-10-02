@@ -163,9 +163,10 @@ def _validate_source_grounding(
     source_text: str,
     task: str,
 ) -> list[str]:
-    required = {"part_number", "quantity", "condition_code", "unit_of_measure"}
+    # Customers rarely state condition/UOM; intake defaults those downstream.
+    required = {"part_number", "quantity"}
     if task == "supplier_quote_extraction":
-        required.update({"target_price", "currency", "lead_time_days", "trace_documents"})
+        required.update({"condition_code", "unit_of_measure", "target_price", "currency", "lead_time_days", "trace_documents"})
     required_missing: set[str] = set()
     extracted_missing = set(result.missing_fields)
     grounded_fields = (
@@ -306,7 +307,11 @@ def extract_email_intelligence(
     if not result.items:
         result.confidence_score = 0.0
         result.missing_fields = list(dict.fromkeys([*result.missing_fields, "part number and quantity"]))
-    if result.confidence_score < EXTRACTION_CONFIDENCE_THRESHOLD:
+    # Grounded customer RFQs (part + qty proven in source) clear at a lower bar.
+    confidence_threshold = (
+        EXTRACTION_CONFIDENCE_THRESHOLD if task == "supplier_quote_extraction" else 0.75
+    )
+    if result.confidence_score < confidence_threshold:
         escalation_reason = escalation_reason or "low_extraction_confidence"
 
     model_escalation_reason = escalation_reason if escalation_reason and not deterministic_currency_hold else None
