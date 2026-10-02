@@ -39,6 +39,8 @@ if not AUTH_SECRET:
     AUTH_SECRET = "development-only-change-this-secret"
 ROLE_CUSTOMER = "ROLE_CUSTOMER"
 ROLE_INTERNAL = "ROLE_INTERNAL"
+STAFF_DEFAULT_ROLE = os.getenv("WT_STAFF_DEFAULT_ROLE", "ROLE_MANAGER").strip().upper()
+OWNER_ADMIN_EMAIL = os.getenv("WT_OWNER_ADMIN_EMAIL", "camila@wingedtycoons.com").strip().lower()
 
 
 class _PostgresConnection:
@@ -129,6 +131,19 @@ def init_auth_db() -> None:
             raise RuntimeError(
                 "PostgreSQL authentication schema is not ready; apply the reviewed Alembic migration."
             )
+        with _connect() as connection:
+            updated = connection.execute(
+                """UPDATE auth_users SET role = ?, is_active = TRUE, is_email_verified = TRUE
+                WHERE email = ?""",
+                ("ROLE_ADMIN", OWNER_ADMIN_EMAIL),
+            )
+            if updated.rowcount == 0:
+                connection.execute(
+                    """INSERT INTO auth_users
+                    (id,email,full_name,role,is_email_verified,created_at)
+                    VALUES (?,?,?,?,?,?)""",
+                    (f"INT-{secrets.token_hex(4).upper()}", OWNER_ADMIN_EMAIL, "Camila", "ROLE_ADMIN", True, _now()),
+                )
         return
 
     with _connect() as connection:
@@ -219,8 +234,6 @@ def request_otp(email: str, role: str, full_name: str = "") -> tuple[str, str]:
 
     now = int(time.time())
     user = _user_row(normalized)
-    if role == ROLE_INTERNAL and (not user or not user["is_email_verified"]):
-        raise HTTPException(403, "Internal access requires an approved staff account.")
 
     with _connect() as connection:
         window = connection.execute(
@@ -237,6 +250,25 @@ def request_otp(email: str, role: str, full_name: str = "") -> tuple[str, str]:
                 (id,email,full_name,role,is_email_verified,created_at)
                 VALUES (?,?,?,?,?,?)""",
                 (f"CUST-{secrets.token_hex(4).upper()}", normalized, full_name or normalized, role, False, _now()),
+            )
+        if role == ROLE_INTERNAL and not user:
+            existing = connection.execute(
+                f"SELECT id FROM {_table('users')} WHERE email = ?", (normalized,)
+            ).fetchone()
+            if existing:
+                raise HTTPException(403, "This staff account has been deactivated.")
+            connection.execute(
+                f"""INSERT INTO {_table('users')}
+                (id,email,full_name,role,is_email_verified,created_at)
+                VALUES (?,?,?,?,?,?)""",
+                (
+                    f"INT-{secrets.token_hex(4).upper()}",
+                    normalized,
+                    full_name or normalized.split("@", 1)[0].replace(".", " ").title(),
+                    STAFF_DEFAULT_ROLE,
+                    False,
+                    _now(),
+                ),
             )
 
         code = f"{secrets.randbelow(1_000_000):06d}"
