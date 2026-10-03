@@ -1733,7 +1733,31 @@ async def submit_purchase_order(
         or await repositories.quote.get(request.quote_id)
     )
     if not quote:
-        raise HTTPException(status_code=404, detail="Quote not found.")
+        # Customers often enter the RFQ number they received; resolve it to its quote.
+        rfq_reference = request.quote_id.strip().upper()
+        if repositories is None:
+            quote = db_service.get_quote_by_rfq(rfq_reference)
+            reference_rfq = db_service.get_rfq(rfq_reference)
+        else:
+            quote_records = await repositories.records.list_by_payload_value(
+                "quotes", "rfq_id", rfq_reference
+            )
+            candidates = list(quote_records.values())
+            quote = next(
+                (value for value in candidates if value.get("status") == "Sent"),
+                candidates[0] if candidates else None,
+            )
+            reference_rfq = await db_service.get_rfq_async(repositories, rfq_reference)
+        if reference_rfq and user["role"] == ROLE_CUSTOMER and not _customer_owns_rfq(reference_rfq, user["email"]):
+            raise HTTPException(status_code=403, detail="You can only submit a purchase order for your own quote.")
+        if reference_rfq and not quote:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Your quote for {rfq_reference} is still being prepared. You can send the purchase order once we email it to you.",
+            )
+        if not quote:
+            raise HTTPException(status_code=404, detail="Quote not found. Enter the quote or RFQ number from your email.")
+        request.quote_id = quote.id if hasattr(quote, "id") else quote.get("id")
     rfq_id = quote.rfq_id if hasattr(quote, "rfq_id") else quote.get("rfq_id")
     rfq = (
         db_service.get_rfq(rfq_id)

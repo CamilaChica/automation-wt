@@ -73,6 +73,27 @@ class TestRfqPoWorkflow(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         notify.assert_not_called()
 
+    def test_purchase_order_with_rfq_number_explains_quote_is_pending(self):
+        rfq = db_service.create_rfq("Buyer", "buyer@example.com", "P/N 060-1234-00 qty 1")
+        response = TestClient(app).post(
+            "/api/purchase-orders",
+            json={"quote_id": rfq.id, "po_number": "PO-1003", "attachment_ids": ["ATT-0000000000000001"]},
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("still being prepared", response.json()["detail"])
+
+    def test_purchase_order_accepts_rfq_number_with_sent_quote(self):
+        rfq = db_service.create_rfq("Buyer", "buyer@example.com", "P/N 060-1234-00 qty 1")
+        quote = db_service.create_quote(rfq.id, 100.0, 0.0, 100.0)
+        quote.status = "Sent"
+        response = TestClient(app).post(
+            "/api/purchase-orders",
+            json={"quote_id": rfq.id.lower(), "po_number": "PO-1004", "attachment_ids": []},
+        )
+        # Resolved to the quote, so it now reaches attachment validation.
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("purchase order document", response.json()["detail"])
+
     def test_purchase_order_rejects_unuploaded_or_invalid_pdfs(self):
         rfq = db_service.create_rfq("Buyer", "buyer@example.com", "P/N 060-1234-00 qty 1")
         quote = db_service.create_quote(rfq.id, 100.0, 0.0, 100.0)

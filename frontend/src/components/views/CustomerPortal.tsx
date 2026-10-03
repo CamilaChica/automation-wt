@@ -411,7 +411,7 @@ export const CustomerPortal: React.FC = () => {
             <p className="mt-1 text-sm text-slate-700">{t('purchaseOrderDescription')}</p>
             <div className="mt-5 space-y-3">
               <label htmlFor="quote-id" className="sr-only">{t('quoteReference')}</label>
-              <input id="quote-id" name="quote-id" autoComplete="off" required disabled={isSubmittingPo} value={quoteId} onChange={event => setQuoteId(event.target.value)} placeholder="e.g., QTE-123456" className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none disabled:opacity-60" />
+              <input id="quote-id" name="quote-id" autoComplete="off" required disabled={isSubmittingPo} value={quoteId} onChange={event => setQuoteId(event.target.value)} placeholder="Quote or RFQ number, e.g., RFQ-75478E" className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none disabled:opacity-60" />
               <label htmlFor="po-number" className="sr-only">{t('poNumber')}</label>
               <input id="po-number" name="po-number" autoComplete="off" required disabled={isSubmittingPo} value={poNumber} onChange={event => setPoNumber(event.target.value)} placeholder="e.g., PO-1001" className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none disabled:opacity-60" />
               <label htmlFor="po-email" className="sr-only">{t('poEmail')}</label>
