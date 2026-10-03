@@ -385,7 +385,7 @@ class TestSupplierEmailIngestion(unittest.TestCase):
             part_number="7013270-983",
             unit_cost=47000.0,
             source_email_id="EMAIL-1",
-            round_number=3,
+            round_number=4,
         )
 
         self.assertEqual(task["task_type"], "supplier_discount_request")

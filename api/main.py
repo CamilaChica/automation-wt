@@ -1787,6 +1787,7 @@ async def submit_purchase_order(
         else await repositories.quote.get_operational_record("quotes", request.quote_id)
         or await repositories.quote.get(request.quote_id)
     )
+    resolved_from_rfq_number = not quote
     if not quote:
         # Customers often enter the RFQ number they received; resolve it to its quote.
         rfq_reference = request.quote_id.strip().upper()
@@ -1824,6 +1825,8 @@ async def submit_purchase_order(
     if rfq.status in {"Purchase_Order_Received", "Pending_PO_Review"}:
         raise HTTPException(status_code=409, detail="Purchase order already received for this RFQ.")
     if quote_status != "Sent":
+        if not resolved_from_rfq_number:
+            raise HTTPException(status_code=409, detail="This quote has not been sent yet. Enter your RFQ number instead.")
         return _accept_prequote_purchase_order(request, rfq, rfq.id)
 
     customer_email = (
