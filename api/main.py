@@ -87,6 +87,9 @@ app = FastAPI(
     version="1.0.0"
 )
 
+from api.partsbase_routes import router as partsbase_router
+app.include_router(partsbase_router)
+
 attachment_service = AttachmentService()
 
 

@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Inbox, Loader2, Package, RefreshCw, Send } from 'lucide-react';
+import axios from 'axios';
+import { AlertTriangle, CheckCircle2, Inbox, Loader2, Package, RefreshCw, Search, Send } from 'lucide-react';
+import { API_BASE } from '../../services/api';
 import { ViewMode, RFQ } from '../../types';
 import { useProcessRFQ, useRFQs, useShipments } from '../../hooks/useApiResources';
 
@@ -65,6 +67,31 @@ export const OperationsHomeView: React.FC<{ onSelectView: (view: ViewMode) => vo
     }
   };
 
+  const handlePartsBase = async (rfq: RFQ) => {
+    const entered = window.prompt('Part numbers to request on PartsBase (up to 20, separated by commas):', rfq.part_number || '');
+    if (!entered || !entered.trim()) return;
+    setBusyId(`pb-${rfq.id}`);
+    setMessage(`Requesting quotes on PartsBase for ${rfq.id}…`);
+    try {
+      const { data: job } = await axios.post(`${API_BASE}/internal/rfqs/${encodeURIComponent(rfq.id)}/partsbase-quote`, { part_numbers: entered });
+      let status = job.status;
+      for (let i = 0; i < 60 && (status === 'queued' || status === 'running'); i += 1) {
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        const { data } = await axios.get(`${API_BASE}/internal/partsbase-jobs/${job.job_id}`);
+        status = data.status;
+        if (status === 'failed') throw new Error(data.error || 'PartsBase request failed');
+      }
+      setMessage(status === 'sent'
+        ? `PartsBase RFQ sent for ${job.part_numbers.join(', ')}. Supplier answers will arrive by email.`
+        : `PartsBase request for ${rfq.id} is still running. Check again in a few minutes.`);
+    } catch (error) {
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : undefined;
+      setMessage(`PartsBase request for ${rfq.id} failed: ${detail || (error instanceof Error ? error.message : 'unknown error')}`);
+    } finally {
+      setBusyId('');
+    }
+  };
+
   const cards = [
     { label: 'Need your action', value: needsAction.length, icon: AlertTriangle, tone: needsAction.length ? 'text-amber-500' : 'text-emerald-500', view: null },
     { label: 'Quotes sent', value: quoted, icon: Send, tone: 'text-sky-500', view: 'sales' as ViewMode },
@@ -125,7 +152,10 @@ export const OperationsHomeView: React.FC<{ onSelectView: (view: ViewMode) => vo
                   {` · ${ageLabel(rfq.created_at)}`}
                 </div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
+                <button type="button" disabled={busyId === `pb-${rfq.id}`} onClick={() => void handlePartsBase(rfq)} className="flex min-h-11 items-center gap-2 rounded-xl border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+                  {busyId === `pb-${rfq.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />} PartsBase
+                </button>
                 <button type="button" onClick={() => onSelectView('sales')} className="min-h-11 rounded-xl border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Open</button>
                 <button type="button" disabled={busyId === rfq.id} onClick={() => void handleProcess(rfq)} className="flex min-h-11 items-center gap-2 rounded-xl bg-aero-blue px-4 text-sm font-bold text-white hover:opacity-90 disabled:opacity-60">
                   {busyId === rfq.id && <Loader2 className="h-4 w-4 animate-spin" />} Process
