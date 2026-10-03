@@ -424,10 +424,10 @@ export const OperationsControlRoom: React.FC<{
   };
 
   const metricCards = [
-    { label: 'Needs Human Review', value: pendingReviews.length, icon: FileSearch, tone: 'ops-tone-gold' },
-    { label: 'Supplier Inbox', value: supplierMessages.length, icon: Inbox, tone: 'ops-tone-cyan' },
-    { label: 'Negotiations', value: discountEvents.length, icon: Sparkles, tone: 'ops-tone-violet' },
-    { label: 'POs In Pipeline', value: purchaseOrders.length + poApprovals.length, icon: PackageCheck, tone: 'ops-tone-green' },
+    { label: 'Needs Human Review', value: reviews.isLoading || reviews.error ? '—' : pendingReviews.length, icon: FileSearch, tone: 'ops-tone-gold' },
+    { label: 'Supplier Inbox', value: purchasingInbox.isLoading || purchasingInbox.error ? '—' : supplierMessages.length, icon: Inbox, tone: 'ops-tone-cyan' },
+    { label: 'Negotiations', value: events.isLoading || events.error ? '—' : discountEvents.length, icon: Sparkles, tone: 'ops-tone-violet' },
+    { label: 'POs In Pipeline', value: rfqLoading || rfqError ? '—' : purchaseOrders.length + poApprovals.length, icon: PackageCheck, tone: 'ops-tone-green' },
   ];
 
   return (
@@ -467,7 +467,9 @@ export const OperationsControlRoom: React.FC<{
           <section className="ops-panel ops-activity-panel" aria-labelledby="ops-activity-heading">
             <div className="ops-panel-head">
               <div className="ops-panel-title"><span className="ops-panel-icon ops-tone-cyan"><Activity size={17} aria-hidden="true" /></span><div><h2 id="ops-activity-heading">Live Email &amp; Agent Activity</h2><p>Client intake, parsing &amp; agent actions</p></div></div>
-              <span className="ops-live-label"><span className="ops-live-pip" /> LIVE</span>
+              <span className={`ops-live-label ${events.error || salesInbox.error ? 'is-degraded' : ''}`}>
+                <span className="ops-live-pip" />{events.error || salesInbox.error ? 'DEGRADED' : 'LIVE'}
+              </span>
             </div>
             {(events.error || salesInbox.error) && <p className="ops-inline-error" role="alert">{events.error?.message || salesInbox.error?.message}</p>}
             <ul className="ops-activity-list">
@@ -498,10 +500,13 @@ export const OperationsControlRoom: React.FC<{
                   </li>
                 );
               })}
-              {!clientFeed.length && !events.isLoading && !salesInbox.isLoading && (
+              {!clientFeed.length && (events.error || salesInbox.error) && (
+                <li className="ops-empty"><AlertTriangle size={17} aria-hidden="true" />Activity unavailable. Check API connectivity and refresh.</li>
+              )}
+              {!clientFeed.length && !events.error && !salesInbox.error && !events.isLoading && !salesInbox.isLoading && (
                 <li className="ops-empty"><Activity size={17} aria-hidden="true" />No recent client or agent activity.</li>
               )}
-              {(events.isLoading || salesInbox.isLoading) && !clientFeed.length && <li className="ops-empty">Loading activity…</li>}
+              {(events.isLoading || salesInbox.isLoading) && !events.error && !salesInbox.error && !clientFeed.length && <li className="ops-empty">Loading activity…</li>}
             </ul>
           </section>
 
@@ -515,12 +520,12 @@ export const OperationsControlRoom: React.FC<{
             {(purchasingInbox.error || mailboxHealth.error) && <p className="ops-inline-error" role="alert">{purchasingInbox.error?.message || mailboxHealth.error?.message}</p>}
             <div className="ops-catalog-health">
               <span className="ops-mini-icon"><PackageCheck size={15} aria-hidden="true" /></span>
-              <div><strong>Catalog &amp; inventory ingestion</strong><p>{catalogEvents.length ? `${catalogEvents.length} recent ingestion event${catalogEvents.length === 1 ? '' : 's'} in the audit feed` : 'No recent ingestion event recorded'}</p></div>
+              <div><strong>Catalog &amp; inventory ingestion</strong><p>{catalogEvents.length ? `${catalogEvents.length} recent ingestion event${catalogEvents.length === 1 ? '' : 's'} in the audit feed` : events.error || events.isLoading ? 'Ingestion data unavailable' : 'No recent ingestion event recorded'}</p></div>
               <span className={`ops-health-text ${catalogEvents.some(event => event.status === 'FAILED') ? 'is-alert' : ''}`}>
-                {catalogEvents.some(event => event.status.toUpperCase() === 'FAILED') ? 'Review needed' : catalogEvents.length ? 'Feed active' : 'No signal'}
+                {catalogEvents.some(event => event.status.toUpperCase() === 'FAILED') ? 'Review needed' : catalogEvents.length ? 'Feed active' : events.error || events.isLoading ? 'Unavailable' : 'No signal'}
               </span>
             </div>
-            <div className="ops-subsection-head"><h3>Supplier Inbox</h3><span>{supplierMessages.length} messages</span></div>
+            <div className="ops-subsection-head"><h3>Supplier Inbox</h3><span>{purchasingInbox.error || purchasingInbox.isLoading ? 'Unavailable' : `${supplierMessages.length} messages`}</span></div>
             <ul className="ops-compact-list">
               {supplierMessages.slice(0, 4).map(message => (
                 <li key={message.message_id}>
@@ -528,17 +533,18 @@ export const OperationsControlRoom: React.FC<{
                   <button type="button" className="ops-small-button" onClick={() => setManualTask({ kind: 'email', mailbox: 'purchasing', message })}>Counteroffer</button>
                 </li>
               ))}
-              {!supplierMessages.length && !purchasingInbox.isLoading && <li className="ops-empty ops-empty-small">No supplier messages in the current inbox.</li>}
-              {purchasingInbox.isLoading && !supplierMessages.length && <li className="ops-empty ops-empty-small">Loading purchasing inbox…</li>}
+              {!supplierMessages.length && purchasingInbox.error && <li className="ops-empty ops-empty-small">Supplier inbox unavailable.</li>}
+              {!supplierMessages.length && !purchasingInbox.error && !purchasingInbox.isLoading && <li className="ops-empty ops-empty-small">No supplier messages in the current inbox.</li>}
+              {purchasingInbox.isLoading && !purchasingInbox.error && !supplierMessages.length && <li className="ops-empty ops-empty-small">Loading purchasing inbox…</li>}
             </ul>
-            <div className="ops-subsection-head"><h3>Discount Negotiations</h3><span>{discountEvents.length} audit events</span></div>
+            <div className="ops-subsection-head"><h3>Discount Negotiations</h3><span>{events.error || events.isLoading ? 'Unavailable' : `${discountEvents.length} audit events`}</span></div>
             {discountEvents.length ? (
               <ul className="ops-negotiation-list">
                 {discountEvents.slice(0, 3).map(event => (
                   <li key={event.id}><Sparkles size={13} aria-hidden="true" /><span>{event.entity_id} · {eventLabel(event)}</span><b>{humanize(event.status)}</b></li>
                 ))}
               </ul>
-            ) : <p className="ops-empty ops-empty-small">No discount or negotiation events recorded recently.</p>}
+            ) : <p className="ops-empty ops-empty-small">{events.error || events.isLoading ? 'Negotiation activity unavailable.' : 'No discount or negotiation events recorded recently.'}</p>}
           </section>
         </div>
 
@@ -546,7 +552,7 @@ export const OperationsControlRoom: React.FC<{
           <section className="ops-panel" aria-labelledby="ops-review-heading">
             <div className="ops-panel-head">
               <div className="ops-panel-title"><span className="ops-panel-icon ops-tone-gold"><FileSearch size={17} aria-hidden="true" /></span><div><h2 id="ops-review-heading">Manual Exception Queue</h2><p>Low-confidence parsing &amp; workflow holds</p></div></div>
-              <span className="ops-count-badge">{pendingReviews.length}</span>
+              <span className="ops-count-badge">{reviews.error || reviews.isLoading ? '—' : pendingReviews.length}</span>
             </div>
             {reviews.error && <p className="ops-inline-error" role="alert">{reviews.error.message}</p>}
             <ul className="ops-exception-list">
@@ -559,19 +565,20 @@ export const OperationsControlRoom: React.FC<{
                   </div>
                 </li>
               ))}
-              {!pendingReviews.length && !reviews.isLoading && <li className="ops-empty ops-empty-small">No pending extraction reviews.</li>}
-              {reviews.isLoading && !pendingReviews.length && <li className="ops-empty ops-empty-small">Checking review queue…</li>}
+              {!pendingReviews.length && reviews.error && <li className="ops-empty ops-empty-small">Review queue unavailable.</li>}
+              {!pendingReviews.length && !reviews.error && !reviews.isLoading && <li className="ops-empty ops-empty-small">No pending extraction reviews.</li>}
+              {reviews.isLoading && !reviews.error && !pendingReviews.length && <li className="ops-empty ops-empty-small">Checking review queue…</li>}
             </ul>
           </section>
 
           <section className="ops-panel" aria-labelledby="ops-po-heading">
             <div className="ops-panel-head">
               <div className="ops-panel-title"><span className="ops-panel-icon ops-tone-green"><Bell size={17} aria-hidden="true" /></span><div><h2 id="ops-po-heading">PO &amp; Notification Watchtower</h2><p>Order commitments &amp; dispatch trail</p></div></div>
-              <span className="ops-count-badge ops-count-green">{purchaseOrders.length}</span>
+              <span className="ops-count-badge ops-count-green">{rfqError || rfqLoading ? '—' : purchaseOrders.length}</span>
             </div>
             <div className="ops-notification-summary">
               <Bell size={14} aria-hidden="true" />
-              <span>{notificationEvents.length ? `${notificationEvents.length} notification-related audit event${notificationEvents.length === 1 ? '' : 's'} recorded` : 'No PO notification event found in the current audit feed'}</span>
+              <span>{notificationEvents.length ? `${notificationEvents.length} notification-related audit event${notificationEvents.length === 1 ? '' : 's'} recorded` : events.error || events.isLoading ? 'Notification activity unavailable' : 'No PO notification event found in the current audit feed'}</span>
             </div>
             {notificationEvents.slice(0, 2).map(event => (
               <div className="ops-notification-row" key={event.id}>
@@ -580,7 +587,7 @@ export const OperationsControlRoom: React.FC<{
                 {`${event.result || ''} ${event.error || ''}`.toLowerCase().includes('camila@wingedtycoons.com') && <small>Recipient: camila@wingedtycoons.com</small>}
               </div>
             ))}
-            <div className="ops-subsection-head"><h3>Awaiting PO Approval</h3><span>{poApprovals.length}</span></div>
+            <div className="ops-subsection-head"><h3>Awaiting PO Approval</h3><span>{rfqError || rfqLoading ? '—' : poApprovals.length}</span></div>
             <ul className="ops-compact-list">
               {poApprovals.slice(0, 4).map(rfq => (
                 <li key={rfq.id}>
@@ -588,10 +595,11 @@ export const OperationsControlRoom: React.FC<{
                   <button type="button" className="ops-small-button" onClick={() => setManualTask({ kind: 'purchase-order', rfq })}>Review PO</button>
                 </li>
               ))}
-              {!poApprovals.length && !rfqLoading && <li className="ops-empty ops-empty-small">No purchase orders waiting for approval.</li>}
-              {rfqLoading && !poApprovals.length && <li className="ops-empty ops-empty-small">Loading orders…</li>}
+              {!poApprovals.length && rfqError && <li className="ops-empty ops-empty-small">Purchase-order data unavailable.</li>}
+              {!poApprovals.length && !rfqError && !rfqLoading && <li className="ops-empty ops-empty-small">No purchase orders waiting for approval.</li>}
+              {rfqLoading && !rfqError && !poApprovals.length && <li className="ops-empty ops-empty-small">Loading orders…</li>}
             </ul>
-            <div className="ops-subsection-head"><h3>Issued / Received Orders</h3><span>{purchaseOrders.length}</span></div>
+            <div className="ops-subsection-head"><h3>Issued / Received Orders</h3><span>{rfqError || rfqLoading ? '—' : purchaseOrders.length}</span></div>
             <ul className="ops-compact-list">
               {purchaseOrders.slice(0, 4).map(rfq => (
                 <li key={rfq.id}>
@@ -599,7 +607,8 @@ export const OperationsControlRoom: React.FC<{
                   <span className="ops-order-status"><CheckCircle2 size={12} aria-hidden="true" /> Logged</span>
                 </li>
               ))}
-              {!purchaseOrders.length && !rfqLoading && <li className="ops-empty ops-empty-small">No issued or received POs in the current RFQ list.</li>}
+              {!purchaseOrders.length && rfqError && <li className="ops-empty ops-empty-small">Purchase-order data unavailable.</li>}
+              {!purchaseOrders.length && !rfqError && !rfqLoading && <li className="ops-empty ops-empty-small">No issued or received POs in the current RFQ list.</li>}
             </ul>
           </section>
         </div>

@@ -176,12 +176,19 @@ test('shows authenticated operations activity and allows a manual client reply',
   await page.getByRole('button', { name: 'Today' }).click();
 
   await expect(page.getByRole('heading', { name: 'Live Email & Agent Activity' })).toBeVisible();
+  const operationsPanel = page.locator('.ops-panel').first();
+  await expect(operationsPanel).toHaveCSS('background-color', 'rgb(11, 21, 34)');
+  await page.getByRole('button', { name: 'Switch to light mode' }).click();
+  await expect(page.locator('html')).toHaveClass(/light/);
+  await expect(page.locator('.ops-control-room')).toHaveCSS('color-scheme', 'light');
+  await expect(operationsPanel).toHaveCSS('background-color', 'rgb(255, 255, 255)');
   await expect(page.getByText('RE: Actuator availability')).toBeVisible();
   await expect(page.getByText('RFQ created from client email')).toBeVisible();
   await page.getByRole('button', { name: 'Take Over Thread' }).click();
 
   const dialog = page.getByRole('dialog', { name: 'Take Over Client Thread' });
   await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveCSS('background-color', 'rgb(255, 255, 255)');
   await dialog.getByLabel('Message').fill('The part is available in overhauled condition.');
   await dialog.getByRole('button', { name: 'Send Reply' }).click();
 
@@ -225,4 +232,28 @@ test('shows authenticated operations activity and allows a manual client reply',
     operator_name: 'camila@wingedtycoons.com',
     comments: 'PO total and part scope verified.',
   });
+});
+
+test('shows unavailable operations data instead of zero counts when APIs fail', async ({ page }) => {
+  const unavailable = (route: import('@playwright/test').Route) => route.fulfill({
+    status: 503,
+    contentType: 'application/json',
+    body: JSON.stringify({ detail: 'Service unavailable' }),
+  });
+  await page.route('**/api/rfqs', unavailable);
+  await page.route('**/api/internal/automation-events**', unavailable);
+  await page.route('**/api/internal/extraction-reviews**', unavailable);
+  await page.route('**/api/internal/mailboxes/**', unavailable);
+
+  await seedInternalSession(page);
+  await page.goto('/internal');
+  await page.getByRole('button', { name: 'Today' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Operations Control Room' })).toBeVisible();
+  await expect(page.locator('.ops-metric-value')).toHaveText(['—', '—', '—', '—']);
+  await expect(page.getByText('DEGRADED')).toBeVisible();
+  await expect(page.getByText('Activity unavailable. Check API connectivity and refresh.')).toBeVisible();
+  await expect(page.getByText('Supplier inbox unavailable.')).toBeVisible();
+  await expect(page.getByText('Review queue unavailable.')).toBeVisible();
+  await expect(page.getByText('Purchase-order data unavailable.').first()).toBeVisible();
 });
