@@ -153,21 +153,21 @@ class TestRFQIntakeAgent(unittest.TestCase):
     # ================================================================== #
     # 3. Omitted Quantity
     # ================================================================== #
-    def test_omitted_quantity_is_not_guessed(self):
-        """No quantity in text → clarification with quantity unset."""
+    def test_omitted_quantity_defaults_to_one(self):
+        """No quantity in text → quote per unit (qty 1) instead of parking."""
         raw = (
             "United Airlines maintenance needs Part Number 456-789-OH. "
             "Condition OH. Required by 2026-10-01. Ship to Chicago O'Hare."
         )
         res = self._run(raw)
 
-        self.assertFalse(res.success)
+        self.assertTrue(res.success, res.error_message)
         d = res.data
-        self.assertEqual(d["status"], "NEEDS_CLARIFICATION")
-        self.assertIn("quantity", d["missing_fields"])
-        self.assertIsNone(d["quantity"])
+        self.assertEqual(d["status"], "COMPLETE")
+        self.assertNotIn("quantity", d["missing_fields"])
+        self.assertEqual(d["quantity"], 1)
         self.assertTrue(d["quantity_defaulted"])
-        self.assertIsNone(d["items"][0]["quantity"])
+        self.assertEqual(d["items"][0]["quantity"], 1)
         self.assertEqual(d["items"][0]["condition_preference"], "OH")
         # Part number still extracted and normalized
         self.assertEqual(d["part_number"], "456-789-OH")
@@ -183,7 +183,7 @@ class TestRFQIntakeAgent(unittest.TestCase):
     # 4. Ambiguous Condition
     # ================================================================== #
     def test_ambiguous_condition(self):
-        """Two condition codes in text → NEEDS_CLARIFICATION, 'condition' in ambiguous_fields."""
+        """Multiple acceptable conditions are quoted, not parked for clarification."""
         raw = (
             "From: Sky Parts Ltd.\n"
             "PN: 060-1234-00, Qty: 2\n"
@@ -192,12 +192,10 @@ class TestRFQIntakeAgent(unittest.TestCase):
         )
         res = self._run(raw)
 
-        self.assertFalse(res.success)
+        self.assertTrue(res.success)
         d = res.data
-        self.assertEqual(d["status"], "NEEDS_CLARIFICATION")
-        self.assertIn("condition", d["ambiguous_fields"])
-        self.assertIsNotNone(res.escalation_triggered)
-        self.assertEqual(res.escalation_triggered.condition, "ambiguous_condition")
+        self.assertEqual(d["status"], "COMPLETE")
+        self.assertNotIn("condition", d["ambiguous_fields"])
         # Core fields still extracted
         self.assertEqual(d["part_number"], "060-1234-00")
         self.assertEqual(d["quantity"], 2)

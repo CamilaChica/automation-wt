@@ -505,7 +505,12 @@ class RFQIntakeAgent(BaseAgent):
             )
             extraction_telemetry = llm_data.telemetry
             pending_human_review = llm_data.pending_human_review
-            if llm_data.items and not pending_human_review:
+            # Part numbers that survive source grounding are usable even when
+            # the model flags other fields (e.g. no quantity) for review.
+            if llm_data.items and any(
+                item.part_number.value and is_valid_extracted_part_number(item.part_number.value)
+                for item in llm_data.items
+            ):
                 llm_extraction_used = True
                 extracted_items = [
                     {
@@ -576,6 +581,20 @@ class RFQIntakeAgent(BaseAgent):
         # ── 3. Validation ───────────────────────────────────────────────
         missing_fields: List[str] = []
         ambiguous_fields: List[str] = []
+
+        # Customers often omit quantity/condition: quote per unit instead of
+        # parking the RFQ, and identify the customer by email if unnamed.
+        if part_number and is_valid_extracted_part_number(part_number):
+            if quantity is None:
+                quantity = 1
+                quantity_defaulted = True
+            for item in extracted_items:
+                if not item.get("quantity"):
+                    item["quantity"] = 1
+                    item["quantity_defaulted"] = True
+            is_ambiguous_condition = False
+            if not customer_name and not company and customer_email:
+                customer_name = customer_email
 
         # Mandatory: some form of customer identity
         if not customer_name and not company:

@@ -238,7 +238,15 @@ class CommunicationService:
     ) -> Dict[str, Any]:
         subject = f"Re: RFQ request: {part_number.upper()} - information needed"
         body = self._missing_fields_request(part_number, missing_fields)
-        return self._send("purchasing", recipient, subject, body, reply_to=reply_to)
+        return self._send(
+            "purchasing", recipient, subject, body, reply_to=reply_to,
+            deduplication_key=self._supplier_info_key(recipient, part_number),
+        )
+
+    @staticmethod
+    def _supplier_info_key(recipient: str, part_number: str) -> str:
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return f"supplier-info:{recipient.strip().lower()}:{part_number.strip().upper()}:{day}"
 
     async def request_missing_supplier_fields_async(
         self,
@@ -254,9 +262,7 @@ class CommunicationService:
             raise ValueError("Recipient email is invalid. Email dispatch aborted.")
         subject = f"Re: RFQ request: {part_number.upper()} - information needed"
         body = self._missing_fields_request(part_number, missing_fields)
-        key = hashlib.sha256(
-            "\0".join(("purchasing", recipient.lower(), subject, body, reply_to or "", "", entity_id or "")).encode("utf-8")
-        ).hexdigest()
+        key = self._supplier_info_key(recipient, part_number)
         queued = await repositories.records.enqueue_outbox_message(
             deduplication_key=key,
             mailbox="purchasing",
@@ -742,6 +748,42 @@ class CommunicationService:
                 reply_to=reply_to,
             ))
         return scheduled
+
+    def send_rfq_acknowledgement(
+        self,
+        *,
+        rfq_id: str,
+        recipient: str,
+        customer_name: str | None,
+        part_numbers: List[str],
+        reply_to: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Tell the customer, in-thread and once per RFQ, that their request is being quoted."""
+        if not recipient or not self._is_valid_email(recipient):
+            return None
+        lowered = recipient.lower()
+        if "partsbase" in lowered or lowered.endswith("@wingedtycoons.com"):
+            return None
+        parts = ", ".join(dict.fromkeys(p for p in part_numbers if p)) or "the requested parts"
+        name = safe_display_text(customer_name or "") or "there"
+        body = (
+            f"Hello {name},\n\n"
+            f"Thank you for your request for quote. We have received it under reference {rfq_id} "
+            f"for: {parts}.\n\n"
+            "Our team is checking stock and supplier availability now, and we will send you our quotation "
+            "in this same email thread shortly. If you need a specific quantity, condition, or certification, "
+            "just reply here.\n\n"
+            "Best regards,\nWinged Tycoons Sales Team"
+        )
+        return self._send(
+            "sales",
+            recipient,
+            f"Re: Your request for quote {rfq_id} - received",
+            body,
+            reply_to=reply_to,
+            entity_id=rfq_id,
+            deduplication_key=f"rfq-ack:{rfq_id}",
+        )
 
     def send_customer_information_response(
         self,

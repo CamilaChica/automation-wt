@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
@@ -18,6 +19,8 @@ from services.storage import storage_service
 from services.agents.prompts import AgentPipelineState
 from services.operations_store import operations_store
 from services.supplier_database import supplier_db
+
+logger = logging.getLogger(__name__)
 
 
 class ReviewDecisionConflict(RuntimeError):
@@ -499,6 +502,16 @@ class OrchestrationService:
                 "SUCCESS", json.dumps(res.data)
             )
             rfq = db_service.update_rfq_status(rfq_id, "Validating")
+            try:
+                communication_service.send_rfq_acknowledgement(
+                    rfq_id=rfq_id,
+                    recipient=rfq.customer_email,
+                    customer_name=rfq.customer_name,
+                    part_numbers=[item.get("requested_part_number") for item in items_data],
+                    reply_to=None if _is_partsbase_rfq(rfq) else rfq.thread_id,
+                )
+            except Exception as exc:
+                logger.warning("rfq_acknowledgement_failed rfq_id=%s error=%s", rfq_id, type(exc).__name__)
 
         # 2. Part Catalog Validation Stage
         if rfq.status == "Validating":

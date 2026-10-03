@@ -166,7 +166,7 @@ class TestMultiAgentSalesOrchestration(unittest.TestCase):
             if case.get("minimum_items"):
                 self.assertGreaterEqual(len(intake.data.get("items", [])), case["minimum_items"])
             if case.get("expected_intake_review"):
-                self.assertTrue(structured.ambiguous_fields or not intake.success)
+                self.assertTrue(intake.success, case["name"])
 
             parts = await parts_agent.execute({"requested_part_number": case["part_number"]})
             self.assertTrue(parts.success, parts.error_message)
