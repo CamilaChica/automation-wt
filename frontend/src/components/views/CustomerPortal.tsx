@@ -11,6 +11,10 @@ import { useCreatePurchaseOrder, useCreateRFQ, useShipmentTrace } from '../../ho
 
 type CatalogResult = Awaited<ReturnType<typeof apiService.searchCatalog>>[number];
 
+const PO_FILE_EXTENSIONS = ['.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png'];
+const PO_FILE_ACCEPT = '.pdf,.doc,.docx,.jpg,.jpeg,.png,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png';
+const PO_MAX_BYTES = 25 * 1024 * 1024;
+
 export const CustomerPortal: React.FC = () => {
   const [language, setLanguage] = useState<CustomerLanguage>(getCustomerLanguagePreference);
   const [isContactMenuOpen, setIsContactMenuOpen] = useState(false);
@@ -142,6 +146,26 @@ export const CustomerPortal: React.FC = () => {
     }
   };
 
+  const pickPoFile = (event: React.ChangeEvent<HTMLInputElement>, setFile: (file: File | null) => void) => {
+    const file = event.target.files?.[0] ?? null;
+    if (file) {
+      const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
+      const problem = !PO_FILE_EXTENSIONS.includes(extension)
+        ? `"${file.name}" is not supported. Please attach a PDF, Word (.docx/.doc), JPG or PNG file.`
+        : file.size > PO_MAX_BYTES
+          ? `"${file.name}" is larger than 25 MB. Please attach a smaller file.`
+          : file.size === 0 ? `"${file.name}" is empty. Please attach the signed document.` : '';
+      if (problem) {
+        event.target.value = '';
+        setFile(null);
+        setNoticeType('error');
+        setNotice(problem);
+        return;
+      }
+    }
+    setFile(file);
+  };
+
   const handlePurchaseOrder = async (event: React.FormEvent) => {
     event.preventDefault();
     if (isSubmittingPo) return;
@@ -152,7 +176,14 @@ export const CustomerPortal: React.FC = () => {
     }
     setIsSubmittingPo(true);
     try {
-      const uploaded = await Promise.all([exportCertificate, kycForm, poDocument].map(file => apiService.uploadAttachment(file)));
+      const uploaded = [];
+      for (const file of [exportCertificate, kycForm, poDocument]) {
+        try {
+          uploaded.push(await apiService.uploadAttachment(file));
+        } catch (uploadError) {
+          throw new Error(`Could not upload "${file.name}": ${getApiErrorMessage(uploadError, 'please try again.')}`);
+        }
+      }
       const poResponse = await purchaseOrderMutation.mutateAsync({
         quoteId,
         poNumber,
@@ -367,9 +398,9 @@ export const CustomerPortal: React.FC = () => {
               <label htmlFor="po-email" className="sr-only">{t('poEmail')}</label>
               <input id="po-email" name="po-email" autoComplete="email" required disabled={isSubmittingPo} type="email" value={customerEmail} onChange={event => setCustomerEmail(event.target.value)} placeholder="e.g., buyer@airline.com" className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none disabled:opacity-60" />
               <div className="rounded-xl border border-slate-300 bg-white p-3 text-xs text-slate-700"><p className="font-semibold">{t('requiredDocuments')}</p><div className="mt-2 flex flex-wrap gap-3"><a className="text-emerald-800 underline" href="/documents/WingedTycoons-Export-Compliance-Certification.pdf" download>{t('downloadExport')}</a><a className="text-emerald-800 underline" href="/documents/WingedTycoons-KYC-Form.pdf" download>{t('downloadKyc')}</a></div></div>
-              <label htmlFor="po-export" className="block text-xs text-slate-700">{t('signedExport')}<input id="po-export" name="po-export" required disabled={isSubmittingPo} type="file" accept=".pdf,application/pdf" onChange={event => setExportCertificate(event.target.files?.[0] ?? null)} className="mt-1 block w-full text-xs disabled:opacity-60" /></label>
-              <label htmlFor="po-kyc" className="block text-xs text-slate-700">{t('signedKyc')}<input id="po-kyc" name="po-kyc" required disabled={isSubmittingPo} type="file" accept=".pdf,application/pdf" onChange={event => setKycForm(event.target.files?.[0] ?? null)} className="mt-1 block w-full text-xs disabled:opacity-60" /></label>
-              <label htmlFor="po-document" className="block text-xs text-slate-700">{t('poDocument')}<input id="po-document" name="po-document" required disabled={isSubmittingPo} type="file" accept=".pdf,application/pdf" onChange={event => setPoDocument(event.target.files?.[0] ?? null)} className="mt-1 block w-full text-xs disabled:opacity-60" /></label>
+              <label htmlFor="po-export" className="block text-xs text-slate-700">{t('signedExport')}<input id="po-export" name="po-export" required disabled={isSubmittingPo} type="file" accept={PO_FILE_ACCEPT} onChange={event => pickPoFile(event, setExportCertificate)} className="mt-1 block w-full text-xs disabled:opacity-60" /></label>
+              <label htmlFor="po-kyc" className="block text-xs text-slate-700">{t('signedKyc')}<input id="po-kyc" name="po-kyc" required disabled={isSubmittingPo} type="file" accept={PO_FILE_ACCEPT} onChange={event => pickPoFile(event, setKycForm)} className="mt-1 block w-full text-xs disabled:opacity-60" /></label>
+              <label htmlFor="po-document" className="block text-xs text-slate-700">{t('poDocument')}<input id="po-document" name="po-document" required disabled={isSubmittingPo} type="file" accept={PO_FILE_ACCEPT} onChange={event => pickPoFile(event, setPoDocument)} className="mt-1 block w-full text-xs disabled:opacity-60" /></label>
               <button disabled={isSubmittingPo} aria-busy={isSubmittingPo} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60">{isSubmittingPo ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <ArrowRight className="h-4 w-4" />} {isSubmittingPo ? t('sendingPo') : t('submitPo')}</button>
             </div>
           </form>

@@ -1677,14 +1677,13 @@ async def submit_purchase_order(
     if len(request.attachment_ids) != 3 or any(not attachment_id.strip() for attachment_id in request.attachment_ids):
         raise HTTPException(status_code=400, detail="Three signed documents are required: export certification, KYC form, and purchase order.")
     if len({attachment_id.strip().upper() for attachment_id in request.attachment_ids}) != 3:
-        raise HTTPException(status_code=400, detail="Upload three separate signed document PDFs.")
+        raise HTTPException(status_code=400, detail="Upload three separate signed documents.")
     for attachment_id in request.attachment_ids:
         document_path = attachment_service.get_stored_path(attachment_id)
-        if document_path is None or document_path.suffix.lower() != ".pdf":
-            raise HTTPException(status_code=400, detail="Upload three accepted PDF documents before submitting the purchase order.")
-        with document_path.open("rb") as document:
-            if document.read(5) != b"%PDF-":
-                raise HTTPException(status_code=400, detail="Each purchase-order document must be a valid PDF.")
+        if document_path is None or document_path.suffix.lower() not in attachment_service.document_extensions:
+            raise HTTPException(status_code=400, detail="Upload three accepted documents (PDF, Word, JPG or PNG) before submitting the purchase order.")
+        if attachment_service._detect_type(document_path.suffix.lower(), document_path.read_bytes()) is None:
+            raise HTTPException(status_code=400, detail="Each purchase-order document must be a valid PDF, Word, JPG or PNG file.")
     previous_po_number = None
     previous_quote_id = None
     if rfq.status and rfq.status != "Intake":

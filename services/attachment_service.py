@@ -23,12 +23,15 @@ class AttachmentRecord(BaseModel):
 
 
 class AttachmentService:
-    allowed_extensions = {".pdf", ".png", ".jpg", ".jpeg", ".txt", ".csv", ".xlsx", ".xls"}
+    allowed_extensions = {".pdf", ".png", ".jpg", ".jpeg", ".txt", ".csv", ".xlsx", ".xls", ".docx", ".doc"}
+    document_extensions = {".pdf", ".docx", ".doc", ".png", ".jpg", ".jpeg"}
     allowed_types = {
         "application/pdf", "image/png", "image/jpeg",
         "text/plain", "text/csv",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
     }
     max_bytes = 25 * 1024 * 1024
 
@@ -57,7 +60,7 @@ class AttachmentService:
         safe_name = re.sub(r"[^A-Za-z0-9._ -]", "_", Path(filename).name)[:200] or f"upload{suffix}"
         detected_type = self._detect_type(suffix, content)
         if suffix not in self.allowed_extensions or detected_type is None:
-            return AttachmentRecord(attachment_id=attachment_id, filename=safe_name, content_type=content_type, size_bytes=len(content), sha256=digest, status="REJECTED", warning="Unsupported or invalid file. Please upload a CSV, Excel (.xlsx/.xls), PDF, or image file.")
+            return AttachmentRecord(attachment_id=attachment_id, filename=safe_name, content_type=content_type, size_bytes=len(content), sha256=digest, status="REJECTED", warning="Unsupported or invalid file. Please upload a PDF, Word (.docx/.doc), CSV, Excel (.xlsx/.xls), JPG or PNG file.")
         target = self.storage_dir / f"{attachment_id}{suffix}"
         target.write_bytes(content)
         return AttachmentRecord(attachment_id=attachment_id, filename=safe_name, content_type=detected_type, size_bytes=len(content), sha256=digest, stored_path=str(target), status="ACCEPTED")
@@ -77,6 +80,12 @@ class AttachmentService:
             return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if content.startswith(b"PK\x03\x04") else None
         if suffix == ".xls":
             return "application/vnd.ms-excel" if content.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1") else None
+        if suffix == ".docx":
+            # ZIP entry names are stored uncompressed, so a real Word file contains "word/".
+            is_docx = content.startswith(b"PK\x03\x04") and b"word/" in content
+            return "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if is_docx else None
+        if suffix == ".doc":
+            return "application/msword" if content.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1") else None
         if suffix in {".csv", ".txt"}:
             if b"\x00" in content[:8192]:
                 return None
