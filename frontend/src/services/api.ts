@@ -419,8 +419,13 @@ export const apiService = {
   async uploadAttachment(file: File): Promise<{ attachment_id: string; filename: string; status: string }> {
     const form = new FormData();
     form.append('file', file);
-    const res = await axios.post(`${API_BASE}/attachments`, form);
-    return res.data;
+    try {
+      const res = await axios.post(`${API_BASE}/attachments`, form);
+      return res.data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
+      throw error;
+    }
   },
   async submitCustomerRFQ(raw_text: string, customer_name: string, customer_email: string, attachment_ids: string[] = []): Promise<IntakeResponse> {
     try {

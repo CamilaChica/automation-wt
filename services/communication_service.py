@@ -941,7 +941,72 @@ class CommunicationService:
             "Kind regards,\nWinged Tycoons Aviation Team"
         ), customer_name, satisfaction_question="Does this answer your question and provide everything you need?")
         subject = f"Re: Quotation {quote_id} - requested details"
-        deduplication_key = hashlib.sha256(
+        return await self._enqueue_customer_reply_async(
+            repositories, recipient, subject, body, reply_to, quote_id
+        )
+
+    @staticmethod
+    def _rfq_update_email(rfq_id: str, customer_name: str, customer_text: str, original_subject: str, quote_answer: str | None = None) -> tuple[str, str]:
+        from services.customer_reply_routing import build_rfq_update_reply
+
+        body = enforce_customer_email_policy(
+            build_rfq_update_reply(rfq_id, customer_text, quote_answer), customer_name
+        )
+        base = re.sub(r"^\s*(?:(?:re|fw|fwd)\s*:\s*)+", "", original_subject or "", flags=re.IGNORECASE).strip()
+        subject = f"Re: {base}" if base else f"Re: Your request for quote {rfq_id}"
+        return subject, body
+
+    def send_rfq_update_reply(
+        self,
+        *,
+        recipient: str,
+        customer_name: str,
+        rfq_id: str,
+        customer_text: str,
+        original_subject: str,
+        reply_to: Optional[str],
+        inbound_message_id: str,
+        quote_answer: str | None = None,
+    ) -> Dict[str, Any]:
+        """Reply in the customer's thread when they add details/questions to an existing RFQ."""
+        subject, body = self._rfq_update_email(rfq_id, customer_name, customer_text, original_subject, quote_answer)
+        return self._send(
+            "sales",
+            recipient,
+            subject,
+            body,
+            reply_to=reply_to,
+            entity_id=rfq_id,
+            deduplication_key=f"rfq-update:{rfq_id}:{inbound_message_id}",
+        )
+
+    async def send_rfq_update_reply_async(
+        self,
+        repositories,
+        *,
+        recipient: str,
+        customer_name: str,
+        rfq_id: str,
+        customer_text: str,
+        original_subject: str,
+        reply_to: Optional[str],
+        inbound_message_id: str,
+        quote_answer: str | None = None,
+    ) -> Dict[str, Any]:
+        if not self._is_valid_email(recipient):
+            raise ValueError("Customer email is invalid. Email dispatch aborted.")
+        subject, body = self._rfq_update_email(rfq_id, customer_name, customer_text, original_subject, quote_answer)
+        return await self._enqueue_customer_reply_async(
+            repositories, recipient, subject, body, reply_to, rfq_id,
+            deduplication_key=f"rfq-update:{rfq_id}:{inbound_message_id}",
+        )
+
+    async def _enqueue_customer_reply_async(
+        self, repositories, recipient: str, subject: str, body: str, reply_to: Optional[str], entity_id: str,
+        deduplication_key: str | None = None,
+    ) -> Dict[str, Any]:
+        quote_id = entity_id
+        deduplication_key = deduplication_key or hashlib.sha256(
             "\0".join(("sales", recipient.lower(), subject, body, reply_to or "", "", quote_id)).encode("utf-8")
         ).hexdigest()
         queued = await repositories.records.enqueue_outbox_message(

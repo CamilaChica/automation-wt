@@ -26,6 +26,7 @@ validate_development_database_target(
 from services.mailbox_service import fetch_inbox_messages, html_to_text
 from services.inbound_email_archive import _received_at, archive_inbound_message
 from services.inbound_message_classifier import classify_inbound_customer_message
+from services.customer_reply_routing import company_name_for_sender, find_rfq_for_reply
 from services.email_intelligence import analyze_communication_sentiment
 from services.communication_service import communication_service
 from services.supplier_database import supplier_db
@@ -148,6 +149,36 @@ def _mailboxes_to_poll() -> list[str]:
     return ["sales"]
 
 
+def _reply_to_rfq_update(message: dict[str, Any], rfq, sender: str, body: str) -> None:
+    """Keep customer replies on their original RFQ and answer them in the same thread."""
+    inbound_id = str(message.get("internet_message_id") or message.get("message_id") or uuid.uuid4().hex)
+    customer_name = company_name_for_sender(db_service.list_rfqs(), sender) if "@" in sender else rfq.customer_name
+    try:
+        db_service.add_audit_log(
+            rfq.id,
+            "CustomerCommunicationAgent",
+            "customer_additional_info",
+            (body or "")[:4000],
+            "SUCCESS",
+            json.dumps({"inbound_message_id": inbound_id, "subject": message.get("subject", "")}),
+        )
+    except Exception as exc:
+        logger.warning("customer_additional_info_audit_failed rfq=%s error=%s", rfq.id, type(exc).__name__)
+    try:
+        communication_service.send_rfq_update_reply(
+            recipient=sender,
+            customer_name=customer_name,
+            rfq_id=rfq.id,
+            customer_text=body,
+            original_subject=str(message.get("subject") or ""),
+            reply_to=message.get("message_id") or rfq.thread_id,
+            inbound_message_id=inbound_id,
+        )
+    except Exception as exc:
+        logger.warning("customer_update_reply_failed rfq=%s error=%s", rfq.id, type(exc).__name__)
+        _review_inbound_customer_message(message, f"customer_update_reply_failed:{type(exc).__name__}", rfq.id)
+
+
 async def _ingest_sales_message(message: dict[str, str]) -> bool:
     """Create and process a customer RFQ received by the sales mailbox."""
     sender = (message.get("from") or "").strip()
@@ -162,14 +193,8 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
     if not body and not attachments:
         return True
     sender_email = sender.lower()
-    existing = next(
-        (
-            candidate for candidate in reversed(db_service.list_rfqs())
-            if candidate.customer_email.lower() == sender_email
-            and candidate.status in {"Quote_Sent", "Pending_PO_Review", "Purchase_Order_Received"}
-        ),
-        None,
-    )
+    all_rfqs = db_service.list_rfqs()
+    existing = find_rfq_for_reply(all_rfqs, sender_email, message.get("subject", ""), body)
     quote = db_service.get_quote_by_rfq(existing.id) if existing else None
     if quote:
         communication_service.cancel_customer_followups(quote.id)
@@ -214,6 +239,9 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
         _record_email_purchase_order(message, existing, quote, str(po_number))
         logger.info("Email PO %s routed for review against RFQ %s", po_number, existing.id)
         return True
+    if existing and not quote:
+        _reply_to_rfq_update(message, existing, sender, body)
+        return True
     if classification["category"] == "client_question":
         try:
             response = communication_service.send_customer_information_response(
@@ -236,13 +264,16 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
                 }),
             )
         except Exception as exc:
+            _reply_to_rfq_update(message, existing, sender, body)
             _review_inbound_customer_message(message, f"customer_question_needs_review:{type(exc).__name__}", existing.id)
         return True
     if classification["category"] == "other":
+        if existing:
+            _reply_to_rfq_update(message, existing, sender, body)
         _review_inbound_customer_message(message, "inbound_message_not_identified_as_an_rfq", existing.id if existing else None)
         return True
     rfq = db_service.create_rfq(
-        customer_name=sender.split("@", 1)[0].replace(".", " ").title(),
+        customer_name=company_name_for_sender(all_rfqs, sender_email),
         customer_email=sender,
         raw_text=build_email_context(f"From: {sender}\nSubject: {message.get('subject', '')}\n\n{body}", attachments),
         thread_id=message.get("message_id") or None,
@@ -259,6 +290,28 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
     return True
 
 
+async def _reply_to_rfq_update_async(message: dict[str, Any], rfq, sender: str, body: str, rfqs, repositories) -> None:
+    inbound_id = str(message.get("internet_message_id") or message.get("message_id") or uuid.uuid4().hex)
+    await repositories.rfq.add_audit_log(
+        rfq_id=rfq.id,
+        agent_name="CustomerCommunicationAgent",
+        action_type="customer_additional_info",
+        message=(body or "")[:4000],
+        status="SUCCESS",
+        payload_json=json.dumps({"inbound_message_id": inbound_id, "subject": message.get("subject", "")}),
+    )
+    await communication_service.send_rfq_update_reply_async(
+        repositories,
+        recipient=sender,
+        customer_name=company_name_for_sender(rfqs, sender),
+        rfq_id=rfq.id,
+        customer_text=body,
+        original_subject=str(message.get("subject") or ""),
+        reply_to=str(message.get("message_id") or "") or rfq.thread_id,
+        inbound_message_id=inbound_id,
+    )
+
+
 async def _ingest_existing_sales_message_async(message: dict[str, Any], repositories) -> bool | None:
     from models.db_models import Quote, QuoteItem
 
@@ -267,11 +320,7 @@ async def _ingest_existing_sales_message_async(message: dict[str, Any], reposito
     message_id = str(message.get("message_id") or message.get("internet_message_id") or "")
     body = html_to_text(str(message.get("body") or ""))
     rfqs = await db_service.list_rfqs_async(repositories)
-    existing = next((
-        candidate for candidate in reversed(rfqs)
-        if candidate.customer_email.lower() == sender
-        and candidate.status in {"Quote_Sent", "Pending_PO_Review", "Purchase_Order_Received"}
-    ), None)
+    existing = find_rfq_for_reply(rfqs, sender, str(message.get("subject") or ""), body)
     quote = None
     quote_items = []
     if existing is not None:
@@ -373,6 +422,9 @@ async def _ingest_existing_sales_message_async(message: dict[str, Any], reposito
             entity_id=existing.id if existing else message_key,
         )
         return True
+    if existing is not None and quote is None:
+        await _reply_to_rfq_update_async(message, existing, sender, body, rfqs, repositories)
+        return True
     if category == "client_question":
         if existing is None or quote is None:
             reason = "customer_question_has_no_related_quote"
@@ -399,6 +451,7 @@ async def _ingest_existing_sales_message_async(message: dict[str, Any], reposito
                 return True
             except Exception as exc:
                 reason = f"customer_question_needs_review:{type(exc).__name__}"
+                await _reply_to_rfq_update_async(message, existing, sender, body, rfqs, repositories)
         await repositories.records.enqueue_operator_review(
             idempotency_key=f"customer-email-review:{message_id or sender}",
             task="customer_email_classification",
@@ -412,6 +465,8 @@ async def _ingest_existing_sales_message_async(message: dict[str, Any], reposito
         return True
     if category == "other":
         reason = "inbound_message_not_identified_as_an_rfq"
+        if existing is not None:
+            await _reply_to_rfq_update_async(message, existing, sender, body, rfqs, repositories)
         await repositories.records.enqueue_operator_review(
             idempotency_key=f"customer-email-review:{message_id or sender}",
             task="customer_email_classification",
@@ -435,9 +490,10 @@ async def _ingest_new_sales_message_async(message: dict[str, Any], repositories)
         f"From: {sender}\nSubject: {message.get('subject', '')}\n\n{str(message.get('body') or '').strip()}",
         message.get("attachments") or [],
     )
+    rfqs = await db_service.list_rfqs_async(repositories)
     rfq = await db_service.create_rfq_async(
         repositories,
-        customer_name=sender.split("@", 1)[0].replace(".", " ").title(),
+        customer_name=company_name_for_sender(rfqs, sender),
         customer_email=sender,
         raw_text=raw_text,
         thread_id=message.get("message_id") or None,

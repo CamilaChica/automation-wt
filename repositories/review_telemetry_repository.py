@@ -1056,10 +1056,16 @@ class PostgresReviewTelemetryRepository:
                 "p.certificate_type, p.lead_time_days, p.condition_code, p.approval_status, p.confidence, "
                 "p.updated_at, p.source_email_id, s.company_name AS supplier_name, s.email AS supplier_email, "
                 "s.approval_status AS supplier_approval_status FROM supplier_parts p JOIN suppliers s ON s.id = p.supplier_id "
-                "WHERE p.part_number = :part_number AND (p.quantity_available IS NULL OR p.quantity_available >= :quantity) "
-                "AND (p.approval_status = 'Approved' OR s.approval_status = 'Approved') "
-                "ORDER BY p.updated_at DESC, p.unit_cost ASC LIMIT 50"
-            ), {"part_number": part_number.strip().upper(), "quantity": max(1, int(quantity_needed))}).mappings().all()
+                "WHERE REGEXP_REPLACE(UPPER(COALESCE(p.part_number, '')), '[^A-Z0-9]', '', 'g') = :part_number "
+                "AND (p.quantity_available IS NULL OR p.quantity_available >= :quantity) "
+                "AND COALESCE(p.unit_cost, 0) > 0 "
+                "AND COALESCE(p.approval_status, '') <> 'Rejected' AND COALESCE(s.approval_status, '') <> 'Rejected' "
+                "ORDER BY (p.approval_status = 'Approved' OR s.approval_status = 'Approved') DESC, "
+                "p.updated_at DESC, p.unit_cost ASC LIMIT 50"
+            ), {
+                "part_number": re.sub(r"[^A-Z0-9]", "", part_number.upper()),
+                "quantity": max(1, int(quantity_needed)),
+            }).mappings().all()
             return [dict(row) for row in rows]
 
     def search_supplier_offers(self, query: str, condition: str | None = None) -> list[dict[str, Any]]:

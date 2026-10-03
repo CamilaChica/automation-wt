@@ -29,16 +29,16 @@ class TestRfqPoWorkflow(unittest.TestCase):
         self.assertTrue(all(item["part_number"].lower().find("060-1234") >= 0 for item in response.json()))
         self.assertTrue(all(item["condition_code"] == "NE" for item in response.json()))
 
-    def test_purchase_order_requires_three_attachment_ids(self):
+    def test_purchase_order_requires_po_attachment(self):
         rfq = db_service.create_rfq("Buyer", "buyer@example.com", "P/N 060-1234-00 qty 1")
         quote = db_service.create_quote(rfq.id, 100.0, 0.0, 100.0)
         quote.status = "Sent"
         response = TestClient(app).post(
             "/api/purchase-orders",
-            json={"quote_id": quote.id, "po_number": "PO-1001", "customer_email": "buyer@example.com", "attachment_ids": ["ATT-1"]},
+            json={"quote_id": quote.id, "po_number": "PO-1001", "customer_email": "buyer@example.com", "attachment_ids": []},
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("Three signed documents", response.json()["detail"])
+        self.assertIn("purchase order document", response.json()["detail"])
 
     def test_duplicate_purchase_order_does_not_send_second_notification(self):
         rfq = db_service.create_rfq("Buyer", "buyer@example.com", "P/N 060-1234-00 qty 1")
@@ -90,7 +90,7 @@ class TestRfqPoWorkflow(unittest.TestCase):
             },
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("accepted PDF", response.json()["detail"])
+        self.assertIn("accepted documents", response.json()["detail"])
 
 
 if __name__ == "__main__":

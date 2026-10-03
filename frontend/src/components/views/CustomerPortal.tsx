@@ -37,6 +37,9 @@ export const CustomerPortal: React.FC = () => {
   const [kycForm, setKycForm] = useState<File | null>(null);
   const [poDocument, setPoDocument] = useState<File | null>(null);
   const [isSubmittingPo, setIsSubmittingPo] = useState(false);
+  const [poNotice, setPoNotice] = useState('');
+  const [poNoticeType, setPoNoticeType] = useState<'success' | 'error'>('success');
+  const [poFormKey, setPoFormKey] = useState(0);
   const [trackingToken, setTrackingToken] = useState('');
   const [requestedTrackingToken, setRequestedTrackingToken] = useState('');
   const [isSearching, setIsSearching] = useState(false);
@@ -158,26 +161,28 @@ export const CustomerPortal: React.FC = () => {
       if (problem) {
         event.target.value = '';
         setFile(null);
-        setNoticeType('error');
-        setNotice(problem);
+        setPoNoticeType('error');
+        setPoNotice(problem);
         return;
       }
     }
+    setPoNotice('');
     setFile(file);
   };
 
   const handlePurchaseOrder = async (event: React.FormEvent) => {
     event.preventDefault();
     if (isSubmittingPo) return;
-    if (!exportCertificate || !kycForm || !poDocument) {
-      setNoticeType('error');
-      setNotice('Upload the signed export certification, signed KYC form, and purchase order document before submitting.');
+    setPoNotice('');
+    if (!poDocument) {
+      setPoNoticeType('error');
+      setPoNotice('Please attach your purchase order document (PDF, Word, JPG or PNG).');
       return;
     }
     setIsSubmittingPo(true);
     try {
       const uploaded = [];
-      for (const file of [exportCertificate, kycForm, poDocument]) {
+      for (const file of [poDocument, exportCertificate, kycForm].filter((item): item is File => Boolean(item))) {
         try {
           uploaded.push(await apiService.uploadAttachment(file));
         } catch (uploadError) {
@@ -191,16 +196,17 @@ export const CustomerPortal: React.FC = () => {
         attachmentIds: uploaded.map(item => item.attachment_id),
       });
       if (!poResponse) return;
-      setNoticeType('success');
-      setNotice(t('poReceived', { number: poNumber }));
+      setPoNoticeType('success');
+      setPoNotice(t('poReceived', { number: poNumber }));
       setQuoteId('');
       setPoNumber('');
       setExportCertificate(null);
       setKycForm(null);
       setPoDocument(null);
+      setPoFormKey(key => key + 1);
     } catch (error) {
-      setNoticeType('error');
-      setNotice(getApiErrorMessage(error, t('purchaseOrderFailed')));
+      setPoNoticeType('error');
+      setPoNotice(error instanceof Error && !('isAxiosError' in error) ? error.message : getApiErrorMessage(error, t('purchaseOrderFailed')));
     } finally {
       setIsSubmittingPo(false);
     }
@@ -339,7 +345,7 @@ export const CustomerPortal: React.FC = () => {
                 />
               </div>
                 <label htmlFor="rfq-condition" className="sr-only">{t('targetCondition')}</label>
-                <select id="rfq-condition" name="condition" aria-label={t('targetCondition')} required value={condition} onChange={event => setCondition(event.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 focus:ring-2 focus:ring-cyan-400 focus:outline-none"><option value="">{t('selectCondition')}</option><option value="NE">{t('newCondition')}</option><option value="FN">{t('factoryNew')}</option><option value="NS">{t('newSurplus')}</option><option value="OH">{t('overhauled')}</option><option value="SVC">{t('serviceable')}</option><option value="RP">{t('repaired')}</option><option value="AR">{t('asRemoved')}</option><option value="IN">{t('inspected')}</option></select>
+                <select id="rfq-condition" name="condition" aria-label={t('targetCondition')} required={!partsListFile} value={condition} onChange={event => setCondition(event.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 focus:ring-2 focus:ring-cyan-400 focus:outline-none"><option value="">{t('selectCondition')}</option><option value="NE">{t('newCondition')}</option><option value="FN">{t('factoryNew')}</option><option value="NS">{t('newSurplus')}</option><option value="OH">{t('overhauled')}</option><option value="SVC">{t('serviceable')}</option><option value="RP">{t('repaired')}</option><option value="AR">{t('asRemoved')}</option><option value="IN">{t('inspected')}</option></select>
               <label htmlFor="rfq-details" className="sr-only">{t('rfqDetails')}</label>
               <textarea id="rfq-details" name="details" aria-label={t('rfqDetails')} autoComplete="off" value={details} onChange={event => setDetails(event.target.value)} placeholder={t('detailsPlaceholder')} rows={4} className="w-full resize-none rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
               <label className="block rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700">
@@ -398,11 +404,14 @@ export const CustomerPortal: React.FC = () => {
               <label htmlFor="po-email" className="sr-only">{t('poEmail')}</label>
               <input id="po-email" name="po-email" autoComplete="email" required disabled={isSubmittingPo} type="email" value={customerEmail} onChange={event => setCustomerEmail(event.target.value)} placeholder="e.g., buyer@airline.com" className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none disabled:opacity-60" />
               <div className="rounded-xl border border-slate-300 bg-white p-3 text-xs text-slate-700"><p className="font-semibold">{t('requiredDocuments')}</p><div className="mt-2 flex flex-wrap gap-3"><a className="text-emerald-800 underline" href="/documents/WingedTycoons-Export-Compliance-Certification.pdf" download>{t('downloadExport')}</a><a className="text-emerald-800 underline" href="/documents/WingedTycoons-KYC-Form.pdf" download>{t('downloadKyc')}</a></div></div>
-              <label htmlFor="po-export" className="block text-xs text-slate-700">{t('signedExport')}<input id="po-export" name="po-export" required disabled={isSubmittingPo} type="file" accept={PO_FILE_ACCEPT} onChange={event => pickPoFile(event, setExportCertificate)} className="mt-1 block w-full text-xs disabled:opacity-60" /></label>
-              <label htmlFor="po-kyc" className="block text-xs text-slate-700">{t('signedKyc')}<input id="po-kyc" name="po-kyc" required disabled={isSubmittingPo} type="file" accept={PO_FILE_ACCEPT} onChange={event => pickPoFile(event, setKycForm)} className="mt-1 block w-full text-xs disabled:opacity-60" /></label>
-              <label htmlFor="po-document" className="block text-xs text-slate-700">{t('poDocument')}<input id="po-document" name="po-document" required disabled={isSubmittingPo} type="file" accept={PO_FILE_ACCEPT} onChange={event => pickPoFile(event, setPoDocument)} className="mt-1 block w-full text-xs disabled:opacity-60" /></label>
+              <div key={poFormKey} className="space-y-3">
+                <label htmlFor="po-document" className="block text-xs font-semibold text-slate-700">{t('poDocument')} <span className="text-red-600" aria-hidden="true">*</span><input id="po-document" name="po-document" disabled={isSubmittingPo} type="file" accept={PO_FILE_ACCEPT} onChange={event => pickPoFile(event, setPoDocument)} className="mt-1 block w-full text-xs disabled:opacity-60" />{poDocument && <span className="mt-1 block text-emerald-800">✓ {poDocument.name}</span>}</label>
+                <label htmlFor="po-export" className="block text-xs text-slate-700">{t('signedExport')} (optional)<input id="po-export" name="po-export" disabled={isSubmittingPo} type="file" accept={PO_FILE_ACCEPT} onChange={event => pickPoFile(event, setExportCertificate)} className="mt-1 block w-full text-xs disabled:opacity-60" />{exportCertificate && <span className="mt-1 block text-emerald-800">✓ {exportCertificate.name}</span>}</label>
+                <label htmlFor="po-kyc" className="block text-xs text-slate-700">{t('signedKyc')} (optional)<input id="po-kyc" name="po-kyc" disabled={isSubmittingPo} type="file" accept={PO_FILE_ACCEPT} onChange={event => pickPoFile(event, setKycForm)} className="mt-1 block w-full text-xs disabled:opacity-60" />{kycForm && <span className="mt-1 block text-emerald-800">✓ {kycForm.name}</span>}</label>
+              </div>
               <button disabled={isSubmittingPo} aria-busy={isSubmittingPo} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60">{isSubmittingPo ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <ArrowRight className="h-4 w-4" />} {isSubmittingPo ? t('sendingPo') : t('submitPo')}</button>
             </div>
+            {poNotice && <p role={poNoticeType === 'error' ? 'alert' : 'status'} aria-live="polite" className={`mt-4 flex gap-2 rounded-xl p-3 text-sm ${poNoticeType === 'error' ? 'bg-red-50 text-red-800' : 'bg-emerald-50 text-emerald-800'}`}>{poNoticeType === 'error' ? <AlertTriangle className="h-5 w-5 shrink-0" /> : <CheckCircle2 className="h-5 w-5 shrink-0" />}{poNotice}</p>}
           </form>
 
           <form aria-label={t('trackShipment')} onSubmit={handleTrackShipment} className="min-w-0 rounded-3xl border border-slate-200 bg-white p-6">
