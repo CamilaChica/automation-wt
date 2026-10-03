@@ -93,7 +93,7 @@ export const getApiErrorMessage = (error: unknown, fallback = 'The request could
   if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
     return 'The request timed out. Please retry.';
   }
-  if (!error.response) return 'Unable to reach the service. Check your connection and retry.';
+  if (!error.response) return 'Connection interrupted for a moment. Please try again.';
   const detail = error.response.data?.detail;
   return typeof detail === 'string' ? detail : error.message || fallback;
 };
@@ -132,6 +132,17 @@ axios.interceptors.response.use(
         if (axios.isAxiosError(sessionError) && sessionError.response?.status === 401) clearStoredAuth();
       }
     }
+    // Ride out brief API restarts: retry safe reads only, never submissions.
+    const isNetworkFailure = !error.response && error.code === 'ERR_NETWORK';
+    const networkConfig = config as (typeof config & { _wtNetworkRetries?: number }) | undefined;
+    const retries = networkConfig?._wtNetworkRetries ?? 0;
+    const isSafeRead = ['GET', 'HEAD'].includes((networkConfig?.method || 'get').toUpperCase());
+    if (isNetworkFailure && networkConfig && isSafeRead && retries < 3) {
+      networkConfig._wtNetworkRetries = retries + 1;
+      await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** retries));
+      return axios.request(networkConfig);
+    }
+    if (isNetworkFailure) error.message = 'Connection interrupted for a moment. Please try again.';
     return Promise.reject(error);
   },
 );
