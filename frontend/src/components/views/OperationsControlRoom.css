@@ -331,7 +331,7 @@
 }
 
 .ops-text-action {
-  min-height: 34px;
+  min-height: 44px;
   align-self: center;
   padding: 0 9px;
   border-color: rgb(237 189 103 / 26%);
@@ -432,7 +432,7 @@
 
 .ops-small-button,
 .ops-quiet-button {
-  min-height: 33px;
+  min-height: 44px;
   flex: 0 0 auto;
   padding: 0 9px;
   border-color: rgb(237 189 103 / 24%);

@@ -222,7 +222,7 @@ function EmailReplyDialog({
     try {
       await sendMessage.mutateAsync({
         mailbox: task.mailbox,
-        message: { recipient, subject: subject.trim(), body: messageBody },
+        message: { recipient, subject: subject.trim(), body: messageBody, reply_to: task.message.message_id },
       });
       onDone(supplierMode ? 'Supplier counteroffer sent.' : 'Client reply sent.');
     } catch (cause) {
@@ -487,8 +487,8 @@ export const OperationsControlRoom: React.FC<{
                 }
                 return (
                   <li className="ops-activity-item" key={`event-${item.event.id}-${index}`}>
-                    <span className={`ops-timeline-mark ${item.event.status === 'FAILED' ? 'ops-mark-alert' : 'ops-mark-agent'}`}>
-                      {item.event.status === 'FAILED' ? <AlertTriangle size={13} aria-hidden="true" /> : <Zap size={13} aria-hidden="true" />}
+                    <span className={`ops-timeline-mark ${item.event.status.toUpperCase() === 'FAILED' ? 'ops-mark-alert' : 'ops-mark-agent'}`}>
+                      {item.event.status.toUpperCase() === 'FAILED' ? <AlertTriangle size={13} aria-hidden="true" /> : <Zap size={13} aria-hidden="true" />}
                     </span>
                     <div className="ops-activity-copy">
                       <div className="ops-activity-meta"><span>{humanize(item.event.event_type)} · {humanize(item.event.status)}</span><time dateTime={item.at}>{dateTime.format(new Date(item.at))}</time></div>
@@ -517,7 +517,7 @@ export const OperationsControlRoom: React.FC<{
               <span className="ops-mini-icon"><PackageCheck size={15} aria-hidden="true" /></span>
               <div><strong>Catalog &amp; inventory ingestion</strong><p>{catalogEvents.length ? `${catalogEvents.length} recent ingestion event${catalogEvents.length === 1 ? '' : 's'} in the audit feed` : 'No recent ingestion event recorded'}</p></div>
               <span className={`ops-health-text ${catalogEvents.some(event => event.status === 'FAILED') ? 'is-alert' : ''}`}>
-                {catalogEvents.some(event => event.status === 'FAILED') ? 'Review needed' : catalogEvents.length ? 'Feed active' : 'No signal'}
+                {catalogEvents.some(event => event.status.toUpperCase() === 'FAILED') ? 'Review needed' : catalogEvents.length ? 'Feed active' : 'No signal'}
               </span>
             </div>
             <div className="ops-subsection-head"><h3>Supplier Inbox</h3><span>{supplierMessages.length} messages</span></div>

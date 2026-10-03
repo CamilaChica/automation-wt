@@ -190,6 +190,7 @@ test('shows authenticated operations activity and allows a manual client reply',
     recipient: 'maintenance@northstar.example',
     subject: 'Re: Actuator availability',
     body: 'The part is available in overhauled condition.',
+    reply_to: 'MAIL-OPS-001',
   });
 
   await page.getByRole('button', { name: 'Counteroffer' }).click();
@@ -200,6 +201,7 @@ test('shows authenticated operations activity and allows a manual client reply',
   await expect(page.getByRole('status')).toContainText('Supplier counteroffer sent');
   expect(supplierCounteroffer).toMatchObject({
     recipient: 'quotes@partssource.example',
+    reply_to: 'MAIL-SUPPLIER-001',
     body: 'Please confirm this unit cost for the requested quantity.\n\nTarget unit cost: $1,250.00',
   });
 
