@@ -594,7 +594,7 @@ async def test_async_purchase_order_submission_commits_outbox_with_review_state(
         "subject": "PO review", "reply_to": None, "transmission_status": "PENDING",
         "communication_id": "OUT-PO-ASYNC", "outbox_id": "OUT-PO-ASYNC",
     })
-    quote = {"id": "QTE-1001", "rfq_id": "RFQ-PO-ASYNC", "total_amount": 125.0}
+    quote = {"id": "QTE-1001", "rfq_id": "RFQ-PO-ASYNC", "total_amount": 125.0, "status": "Sent"}
     repositories = SimpleNamespace(
         quote=SimpleNamespace(get_operational_record=AsyncMock(return_value=quote)),
         rfq=SimpleNamespace(
@@ -625,6 +625,17 @@ async def test_async_purchase_order_submission_commits_outbox_with_review_state(
     monkeypatch.setattr(main.communication_service, "notify_purchase_order_async", notification)
     monkeypatch.setattr(main.db_service, "get_quote", Mock(side_effect=AssertionError("sync quote read used")))
     monkeypatch.setattr(main.db_service, "get_rfq", Mock(side_effect=AssertionError("sync RFQ read used")))
+    from pathlib import Path
+    import tempfile
+    document_dir = Path(tempfile.mkdtemp())
+    for attachment_id in ("ATT-1", "ATT-2", "ATT-3"):
+        (document_dir / f"{attachment_id}.pdf").write_bytes(b"%PDF-1.4\n%test\n")
+    monkeypatch.setattr(
+        main.attachment_service,
+        "get_stored_path",
+        Mock(side_effect=lambda attachment_id: document_dir / f"{attachment_id}.pdf"),
+    )
+    monkeypatch.setattr(main.communication_service, "cancel_customer_followups_async", AsyncMock())
     monkeypatch.setattr(
         main.operations_store,
         "record_purchase_order",

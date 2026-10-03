@@ -162,7 +162,7 @@ async def test_customer_rfq_detail_uses_parent_scoped_record_queries(monkeypatch
     }
     quote = {
         "id": "QUOTE-ASYNC-1", "rfq_id": rfq.id, "subtotal": 100,
-        "shipping_cost": 0, "total_amount": 100, "status": "Draft",
+        "shipping_cost": 0, "total_amount": 100, "status": "Sent",
     }
     quote_item = {
         "id": "QUOTE-ITEM-ASYNC-1", "quote_id": quote["id"], "rfq_item_id": rfq_item["id"],
@@ -182,6 +182,9 @@ async def test_customer_rfq_detail_uses_parent_scoped_record_queries(monkeypatch
         records=SimpleNamespace(list_by_payload_value=scoped_records),
     )
     monkeypatch.setattr(main, "create_operational_repositories", Mock(return_value=repositories))
+    monkeypatch.setattr(
+        main.communication_service, "cancel_customer_followups_async", AsyncMock(return_value=None)
+    )
 
     result = await main.get_rfq_detail(
         rfq.id,
@@ -645,7 +648,10 @@ async def test_voice_dashboard_uses_async_rfq_repository_when_available(monkeypa
     monkeypatch.setattr(
         main.db_service, "list_rfqs", Mock(side_effect=AssertionError("sync RFQ list used"))
     )
-    monkeypatch.setattr(main, "create_operational_repositories", Mock(return_value=object()))
+    from types import SimpleNamespace
+
+    repositories = SimpleNamespace(records=SimpleNamespace(list=AsyncMock(return_value={})))
+    monkeypatch.setattr(main, "create_operational_repositories", Mock(return_value=repositories))
     monkeypatch.setattr(main, "get_voice_dashboard", Mock(return_value={"rfq_count": 1}))
 
     result = await main.voice_dashboard(_user={"role": "ROLE_ADMIN"}, session=object())
