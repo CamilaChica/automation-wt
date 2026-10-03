@@ -757,22 +757,54 @@ class CommunicationService:
         customer_name: str | None,
         part_numbers: List[str],
         reply_to: Optional[str] = None,
+        items: Optional[List[Dict[str, Any]]] = None,
+        certifications: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Tell the customer, in-thread and once per RFQ, that their request is being quoted."""
+        """Tell the customer, in-thread and once per RFQ, what we understood and what to confirm."""
         if not recipient or not self._is_valid_email(recipient):
             return None
         lowered = recipient.lower()
         if "partsbase" in lowered or lowered.endswith("@wingedtycoons.com"):
             return None
-        parts = ", ".join(dict.fromkeys(p for p in part_numbers if p)) or "the requested parts"
         name = safe_display_text(customer_name or "") or "there"
+        lines: List[str] = []
+        to_confirm: List[str] = []
+        seen: set[str] = set()
+        for item in items or [{"requested_part_number": p} for p in part_numbers]:
+            pn = safe_display_text(str(item.get("requested_part_number") or ""), fallback="").strip()
+            if not pn or pn in seen:
+                continue
+            seen.add(pn)
+            qty = item.get("quantity") or 1
+            qty_text = f"{qty}" + (" (assumed)" if item.get("quantity_defaulted") or not item.get("quantity") else "")
+            condition = safe_display_text(str(item.get("condition_preference") or ""), fallback="").strip()
+            cond_text = condition or "any available (NE / NS / OH / SV)"
+            lines.append(f"  - P/N {pn}: Qty {qty_text}, Condition {cond_text}")
+            if "(assumed)" in qty_text:
+                to_confirm.append(f"the quantity you need for {pn}")
+            if not condition:
+                to_confirm.append(f"your preferred condition for {pn}")
+        if not lines:
+            lines.append("  - the requested parts")
+        if not certifications:
+            to_confirm.append("any certification you require (e.g. FAA 8130-3, EASA Form 1)")
+        confirm_text = ""
+        if to_confirm:
+            confirm_text = (
+                "To make sure we quote exactly what you need, could you please confirm:\n"
+                + "\n".join(f"  - {entry}" for entry in dict.fromkeys(to_confirm))
+                + "\n\nWe are already working on your quote while you reply, so nothing is on hold.\n\n"
+            )
         body = (
             f"Hello {name},\n\n"
-            f"Thank you for your request for quote. We have received it under reference {rfq_id} "
-            f"for: {parts}.\n\n"
-            "Our team is checking stock and supplier availability now, and we will send you our quotation "
-            "in this same email thread shortly. If you need a specific quantity, condition, or certification, "
-            "just reply here.\n\n"
+            f"Thank you for your request for quote. We have received it under reference {rfq_id}, "
+            "and this is what we understood:\n\n"
+            + "\n".join(lines)
+            + "\n\n"
+            "Our team is checking our inventory and supplier network right now, and we will send you our "
+            "quotation in this same email thread as soon as it is ready.\n\n"
+            + confirm_text
+            + "Just reply to this email with any changes or details.\n\n"
             "Best regards,\nWinged Tycoons Sales Team"
         )
         return self._send(

@@ -509,6 +509,8 @@ class OrchestrationService:
                     customer_name=rfq.customer_name,
                     part_numbers=[item.get("requested_part_number") for item in items_data],
                     reply_to=None if _is_partsbase_rfq(rfq) else rfq.thread_id,
+                    items=items_data,
+                    certifications=res.data.get("certification_requirements") or [],
                 )
             except Exception as exc:
                 logger.warning("rfq_acknowledgement_failed rfq_id=%s error=%s", rfq_id, type(exc).__name__)
