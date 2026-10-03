@@ -130,6 +130,7 @@ if not logging.getLogger().handlers:
 for _handler in logging.getLogger().handlers:
     _handler.setFormatter(_JsonLogFormatter())
 logger = logging.getLogger("winged-tycoons.api")
+OTP_SEND_WAIT_SECONDS = 8.0
 
 _CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 _CSRF_EXEMPT_PATHS = {"/healthz", "/ready", "/", "/api/auth/otp/request", "/api/auth/otp/verify"}
@@ -527,8 +528,19 @@ async def otp_request(request: OtpRequest):
     response = {"challenge_id": challenge_id, "message": "If eligible, an OTP has been sent."}
     auth_env = _auth_environment()
     if auth_env == "production":
+        delivery = asyncio.ensure_future(asyncio.to_thread(send_otp_email, request.email, code))
         try:
-            send_otp_email(request.email, code)
+            # Slow mail-provider calls continue in the background instead of timing out the login form.
+            await asyncio.wait_for(asyncio.shield(delivery), timeout=OTP_SEND_WAIT_SECONDS)
+        except asyncio.TimeoutError:
+            recipient_domain = request.email.rsplit("@", 1)[-1]
+
+            def _log_late_delivery(task: "asyncio.Future") -> None:
+                if not task.cancelled() and task.exception() is not None:
+                    logger.error("otp_delivery_failed_late recipient_domain=%s error=%s", recipient_domain, type(task.exception()).__name__)
+
+            delivery.add_done_callback(_log_late_delivery)
+            logger.warning("otp_delivery_slow recipient_domain=%s", recipient_domain)
         except Exception as exc:
             logger.exception("otp_delivery_failed recipient_domain=%s error=%s", request.email.rsplit("@", 1)[-1], type(exc).__name__)
             raise HTTPException(

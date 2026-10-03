@@ -276,13 +276,13 @@ export const apiService = {
 
   async requestOtp(email: string, role: 'ROLE_CUSTOMER' | 'ROLE_INTERNAL', fullName = ''): Promise<OtpRequestResponse> {
     const body: OtpRequestBody = { email, role, full_name: fullName };
-    const res = await axios.post(`${API_BASE}/auth/otp/request`, body);
+    const res = await axios.post(`${API_BASE}/auth/otp/request`, body, { timeout: 30000 });
     return res.data;
   },
 
   async verifyOtp(challengeId: string, code: string): Promise<LoginResponse> {
     const body: OtpVerifyBody = { challenge_id: challengeId, code };
-    const res = await axios.post(`${API_BASE}/auth/otp/verify`, body);
+    const res = await axios.post(`${API_BASE}/auth/otp/verify`, body, { timeout: 30000 });
     localStorage.setItem('wt_role', res.data.role);
     localStorage.setItem('wt_email', res.data.email);
     return res.data;
