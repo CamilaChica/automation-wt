@@ -36,7 +36,7 @@ from repositories.inventory_repository import InventoryRepository
 from repositories.quote_repository import QuoteRepository
 from repositories.rfq_repository import RFQRepository
 from repositories.supplier_repository import SupplierRepository
-from repositories.review_telemetry_repository import inbound_dedupe_key
+from repositories.review_telemetry_repository import inbound_claim_stale_seconds, inbound_dedupe_key
 
 
 @dataclass(frozen=True)
@@ -107,11 +107,17 @@ class OperationalRecordRepository:
         if stable_key and stable_key not in keys:
             keys.append(stable_key)
         claimed: list[str] = []
+        stale_before = func.now() - timedelta(seconds=inbound_claim_stale_seconds())
         for key in keys:
             statement = postgres_insert(InboundMessageIdempotencyRecord).values(
                 message_id=key, mailbox=mailbox, status="processing"
-            ).on_conflict_do_nothing(
-                index_elements=[InboundMessageIdempotencyRecord.message_id]
+            ).on_conflict_do_update(
+                index_elements=[InboundMessageIdempotencyRecord.message_id],
+                set_={"status": "processing", "processed_at": func.now(), "mailbox": mailbox},
+                where=(
+                    InboundMessageIdempotencyRecord.status.in_(("processing", "duplicate"))
+                    & (InboundMessageIdempotencyRecord.processed_at < stale_before)
+                ),
             ).returning(InboundMessageIdempotencyRecord.message_id)
             inserted = await self.session.scalar(statement)
             if inserted is None:

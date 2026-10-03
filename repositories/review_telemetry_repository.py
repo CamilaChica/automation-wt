@@ -27,6 +27,14 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Engine
 
 
+def inbound_claim_stale_seconds() -> int:
+    """Claims stuck in 'processing' longer than this are retried (e.g. after a DB outage)."""
+    try:
+        return max(60, int(os.getenv("INBOUND_CLAIM_STALE_SECONDS", "600")))
+    except ValueError:
+        return 600
+
+
 def inbound_dedupe_key(internet_message_id: str | None) -> str | None:
     """Stable idempotency key for an RFC 5322 Message-ID (hashed to fit the key column)."""
     normalized = str(internet_message_id or "").strip().strip("<>").strip().lower()
@@ -218,11 +226,16 @@ class PostgresReviewTelemetryRepository:
             claim = text(
                 "INSERT INTO inbound_message_idempotency (message_id, mailbox, processed_at, status) "
                 "VALUES (:message_id, :mailbox, now(), 'processing') "
-                "ON CONFLICT (message_id) DO NOTHING RETURNING message_id"
+                "ON CONFLICT (message_id) DO UPDATE "
+                "SET processed_at = now(), status = 'processing', mailbox = EXCLUDED.mailbox "
+                "WHERE inbound_message_idempotency.status IN ('processing', 'duplicate') "
+                "AND inbound_message_idempotency.processed_at < now() - make_interval(secs => :stale) "
+                "RETURNING message_id"
             )
-            if connection.execute(claim, {"message_id": message_id, "mailbox": mailbox}).scalar_one_or_none() is None:
+            stale = inbound_claim_stale_seconds()
+            if connection.execute(claim, {"message_id": message_id, "mailbox": mailbox, "stale": stale}).scalar_one_or_none() is None:
                 return False
-            if secondary_key and connection.execute(claim, {"message_id": secondary_key, "mailbox": mailbox}).scalar_one_or_none() is None:
+            if secondary_key and connection.execute(claim, {"message_id": secondary_key, "mailbox": mailbox, "stale": stale}).scalar_one_or_none() is None:
                 connection.execute(text(
                     "UPDATE inbound_message_idempotency SET status = 'duplicate' WHERE message_id = :message_id"
                 ), {"message_id": message_id})

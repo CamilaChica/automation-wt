@@ -788,7 +788,11 @@ def run() -> None:
                                 logger.info("Mailbox %s skipped PostgreSQL-claimed message %s", mailbox, message_id)
                                 continue
                             archive_inbound_message(message, mailbox)
-                            processed = asyncio.run(_ingest_sales_message(message))
+                            try:
+                                processed = asyncio.run(_ingest_sales_message(message))
+                            except Exception:
+                                operations_store.release_inbound_message(message_id, internet_message_id)
+                                raise
                             if processed:
                                 operations_store.mark_inbound_message_processed(message_id, internet_message_id)
                             else:
