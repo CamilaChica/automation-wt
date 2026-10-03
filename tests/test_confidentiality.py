@@ -56,9 +56,12 @@ class TestCommunicationConfidentiality(unittest.TestCase):
             recipient="buyer@example.com",
             shipment_id="SHP-100",
             public_token="private-token",
+            company_name="Global Airlines",
         )
 
         self.assertIn("private-token", result["body"])
+        self.assertIn("Dear Global Airlines's team!", result["body"])
+        self.assertIn("https://portal.wingedtycoons.com/customer-portal", result["body"])
         self.assertNotIn("supplier", result["body"].lower())
         self.assertNotIn("margin", result["body"].lower())
 

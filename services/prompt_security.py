@@ -30,6 +30,16 @@ class PromptSecurityService:
         r"\b(?P<label>phone|telephone|tel|call)\s*[:#-]?\s*(?P<number>\d{3}[ .-]\d{3}[ .-]\d{4})\b",
         re.IGNORECASE,
     )
+    _LABELED_SECRET_PATTERN = re.compile(
+        r"\b(?P<label>api[_-]?key|access[_-]?token|auth(?:entication)?[_-]?token|"
+        r"client[_-]?secret|password|secret)\s*[:=]\s*"
+        r"(?P<value>[^ \t\r\n,;\"']+)",
+        re.IGNORECASE,
+    )
+    _BEARER_TOKEN_PATTERN = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
+    _KNOWN_TOKEN_PATTERN = re.compile(
+        r"\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})\b"
+    )
     _CONTROL_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
     def inspect(self, text: str, policy: PromptSecurity | None = None) -> SecurityInspection:
@@ -42,6 +52,16 @@ class PromptSecurityService:
             or self._PHONE_PATTERN.search(sanitized)
             or self._LABELED_PHONE_PATTERN.search(sanitized)
         )
+        secret_matches = bool(
+            self._LABELED_SECRET_PATTERN.search(sanitized)
+            or self._BEARER_TOKEN_PATTERN.search(sanitized)
+            or self._KNOWN_TOKEN_PATTERN.search(sanitized)
+        )
+        sanitized = self._LABELED_SECRET_PATTERN.sub(
+            lambda match: f"{match.group('label')}=[SECRET REDACTED]", sanitized
+        )
+        sanitized = self._BEARER_TOKEN_PATTERN.sub("Bearer [SECRET REDACTED]", sanitized)
+        sanitized = self._KNOWN_TOKEN_PATTERN.sub("[SECRET REDACTED]", sanitized)
         if policy.mask_pii:
             sanitized = self._EMAIL_PATTERN.sub("[EMAIL REDACTED]", sanitized)
             sanitized = self._LABELED_PHONE_PATTERN.sub(
@@ -50,6 +70,8 @@ class PromptSecurityService:
             sanitized = self._PHONE_PATTERN.sub("[PHONE REDACTED]", sanitized)
         if pii_matches:
             findings.append("pii_masked")
+        if secret_matches:
+            findings.append("secret_masked")
         return SecurityInspection(
             sanitized_text=sanitized,
             detected_injection=injection,

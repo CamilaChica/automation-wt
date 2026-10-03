@@ -30,6 +30,7 @@ Winged Tycoons is an aerospace procurement application with a customer parts por
 - Backend: Python + FastAPI
 - Frontend: React + TypeScript + Vite + Tailwind
 - Workflow model: multi-agent processing with human approval and escalation gates
+- LLM tool access: explicit voice-service allowlist; backend role checks and a separate user confirmation gate for concern logging
 - Local development: SQLite-compatible operational stores and seeded/mock data are used by parts of the application
 - Production persistence: PostgreSQL models and repositories exist, but full runtime wiring and live integration are not yet verified; consult the release gate below
 
@@ -88,6 +89,8 @@ npm run test:e2e
 Use the repository test commands in [AGENTS.md](AGENTS.md) and the detailed local evidence in [docs/AUTO_CRAWLER_FINDINGS.md](docs/AUTO_CRAWLER_FINDINGS.md). The recorded UI and unit-test results are local/mock verification, not proof of production database or email behavior.
 
 ## Core workflows
+
+The voice assistant can call only the registered inventory lookup, order-status, and concern-logging tools. Customer order lookups are scoped to the signed-in account. Concern logging requires an explicit confirmation in the application; authentication and server-side validation remain authoritative for every tool call.
 
 ### Internal operations flow
 

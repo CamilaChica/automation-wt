@@ -224,6 +224,17 @@ test('admin can inspect LLM health and telemetry without exposing credentials', 
       created_at: '2026-09-28T12:00:00Z',
     }]),
   }));
+  await page.route('**/api/internal/llm/test-connections', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      results: [
+        { provider: 'openai', status: 'connected', model: 'gpt-test', latency_ms: 130 },
+        { provider: 'anthropic', status: 'failed', model: 'claude-test', message: 'The provider rejected the credentials or model access.' },
+        { provider: 'gemini', status: 'not_configured', model: null },
+      ],
+    }),
+  }));
   await seedSession(page, 'internal');
   await page.goto('/');
   await page.locator('aside button').filter({ hasText: 'Trace Vault' }).first().click();
@@ -232,4 +243,9 @@ test('admin can inspect LLM health and telemetry without exposing credentials', 
   await expect(page.getByText('openai', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('rfq_extraction', { exact: true }).last()).toBeVisible();
   await expect(page.getByText('DO_NOT_RENDER_SECRET')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Test live connections' }).click();
+  await expect(page.getByText('Model: gpt-test')).toBeVisible();
+  await expect(page.getByText('The provider rejected the credentials or model access.')).toBeVisible();
+  await expect(page.getByText('Not configured', { exact: true })).toBeVisible();
 });

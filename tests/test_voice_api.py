@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from api.auth import current_user
 from api.main import app
+from services.async_database import get_async_db
 
 
 class VoiceApiTests(unittest.TestCase):
@@ -15,6 +16,7 @@ class VoiceApiTests(unittest.TestCase):
 
     def setUp(self):
         app.dependency_overrides[current_user] = lambda: self.staff
+        app.dependency_overrides[get_async_db] = lambda: None
         self.client = TestClient(app)
 
     def tearDown(self):
@@ -40,19 +42,55 @@ class VoiceApiTests(unittest.TestCase):
         session = openai_post.call_args.kwargs["json"]["session"]
         self.assertEqual(session["audio"]["input"]["transcription"]["language"], "fr")
         self.assertEqual(session["audio"]["output"]["voice"], "marin")
-        self.assertIn("You are Camila", session["instructions"])
+        self.assertIn("You are Claire", session["instructions"])
 
     def test_customer_can_use_inventory_tools_but_not_operations_dashboard(self):
         app.dependency_overrides[current_user] = lambda: {"role": "ROLE_CUSTOMER", "email": "buyer@example.com"}
-        inventory = self.client.post(
-            "/api/voice/tools/check_inventory_availability",
-            json={"part_number": "060-1234-00"},
+        live_item = SimpleNamespace(
+            part_number="LIVE-060-1234",
+            quantity_available=5,
+            condition_code="NE",
+            certificate_type="FAA 8130-3",
+            has_full_trace=True,
         )
+        inventory_store = SimpleNamespace(values=lambda: [live_item])
+        with patch("api.main.db_service.inventory", inventory_store):
+            inventory = self.client.post(
+                "/api/voice/tools/check_inventory_availability",
+                json={"part_number": "LIVE-060-1234"},
+            )
         dashboard = self.client.get("/api/voice/dashboard")
 
         self.assertEqual(inventory.status_code, 200)
-        self.assertEqual(inventory.json()["matches"][0]["unit_price"], 4250.0)
+        self.assertEqual(inventory.json()["matches"][0]["quantity"], 5)
+        self.assertNotIn("unit_cost", inventory.json()["matches"][0])
         self.assertEqual(dashboard.status_code, 403)
+
+    def test_operations_dashboard_maps_only_live_rfq_and_inventory_records(self):
+        rfq = SimpleNamespace(
+            id="WT-LIVE-01",
+            customer_name="Live Customer",
+            part_number="LIVE-060-1234",
+            status="Quoted",
+        )
+        inventory = SimpleNamespace(
+            part_number="LIVE-060-1234",
+            quantity_available=5,
+            condition_code="NE",
+            certificate_type="FAA 8130-3",
+            has_full_trace=True,
+        )
+        inventory_store = SimpleNamespace(values=lambda: [inventory])
+        with patch("api.main.db_service.list_rfqs", return_value=[rfq]), patch(
+            "api.main.db_service.inventory", inventory_store
+        ):
+            response = self.client.get("/api/voice/dashboard")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual([row["id"] for row in payload["requests"]], ["WT-LIVE-01"])
+        self.assertEqual([row["part_number"] for row in payload["inventory"]], ["LIVE-060-1234"])
+        self.assertNotIn("WT-48291", {row["id"] for row in payload["requests"]})
 
     def test_customer_session_uses_configured_custom_voice(self):
         openai_response = SimpleNamespace(status_code=200, json=lambda: {"value": "customer-ephemeral-token"})

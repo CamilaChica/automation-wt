@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import uuid
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -158,14 +158,28 @@ class OperationalRecordRepository:
         )
 
     async def cancel_communication_task(self, task_key: str) -> None:
-        task = await self.session.scalar(
+        tasks = list(await self.session.scalars(
             select(CommunicationTaskRecord).where(
                 CommunicationTaskRecord.task_key == task_key
+            ).with_for_update()
+        ))
+        for task in tasks:
+            if task.status == "pending":
+                task.status = "cancelled"
+        task_ids = [task.id for task in tasks]
+        if task_ids:
+            await self.session.execute(
+                update(OutboxMessageRecord)
+                .where(
+                    OutboxMessageRecord.communication_task_id.in_(task_ids),
+                    OutboxMessageRecord.status == "PENDING",
+                )
+                .values(
+                    status="CANCELLED",
+                    error_message="Customer activity cancelled the scheduled follow-up",
+                )
             )
-        )
-        if task is not None and task.status == "pending":
-            task.status = "cancelled"
-            await self.session.flush()
+        await self.session.flush()
 
     async def archive_raw_email(self, **values) -> None:
         message_id = str(values["provider_message_id"])

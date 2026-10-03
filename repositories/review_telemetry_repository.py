@@ -1151,6 +1151,13 @@ class PostgresReviewTelemetryRepository:
     def cancel_communication_task(self, task_key: str) -> None:
         with self._begin() as connection:
             connection.execute(text("UPDATE communication_tasks SET status = 'cancelled' WHERE task_key = :key AND status = 'pending'"), {"key": task_key})
+            connection.execute(text(
+                "UPDATE outbox_messages SET status = 'CANCELLED', "
+                "error_message = 'Customer activity cancelled the scheduled follow-up' "
+                "WHERE communication_task_id IN ("
+                "SELECT id FROM communication_tasks WHERE task_key = :key"
+                ") AND status = 'PENDING'"
+            ), {"key": task_key})
 
     def retry_communication_task(self, task_id: str, error: str) -> None:
         with self._begin() as connection:

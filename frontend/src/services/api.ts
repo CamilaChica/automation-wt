@@ -15,6 +15,7 @@ import type {
   FreightQuoteResponse,
   IntakeResponse,
   LoginResponse,
+  LlmConnectionTestResponse,
   LlmHealthResponse,
   LlmTelemetryRecord,
   MailboxHealthResponse,
@@ -260,8 +261,16 @@ export const apiService = {
     return res.data as T;
   },
 
-  async executeVoiceTool<T = unknown>(toolName: string, body: VoiceToolRequest): Promise<T> {
-    const res = await axios.post(`${API_BASE}/voice/tools/${encodeURIComponent(toolName)}`, body);
+  async executeVoiceTool<T = unknown>(
+    toolName: string,
+    body: VoiceToolRequest,
+    humanConfirmed = false,
+  ): Promise<T> {
+    const res = await axios.post(
+      `${API_BASE}/voice/tools/${encodeURIComponent(toolName)}`,
+      body,
+      humanConfirmed ? { headers: { 'X-Human-Confirmed': 'true' } } : undefined,
+    );
     return res.data as T;
   },
 
@@ -379,6 +388,11 @@ export const apiService = {
 
   async getLlmHealth(): Promise<LlmHealthResponse> {
     const res = await axios.get<LlmHealthResponse>(`${API_BASE}/internal/llm/health`);
+    return res.data;
+  },
+
+  async testLlmConnections(): Promise<LlmConnectionTestResponse> {
+    const res = await axios.post<LlmConnectionTestResponse>(`${API_BASE}/internal/llm/test-connections`);
     return res.data;
   },
 

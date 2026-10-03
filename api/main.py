@@ -7,13 +7,15 @@ import logging
 import time
 import re
 import asyncio
+import ipaddress
 from contextlib import nullcontext
 from pathlib import Path
 from collections import defaultdict, deque
 from typing import List, Dict, Any, Optional, Literal
+from urllib.parse import urlsplit
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, File, Request, Response, UploadFile
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, File, Header, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
 _process_database_url = os.getenv("DATABASE_URL")
@@ -29,7 +31,7 @@ from config.env_check import validate_production_environment
 
 validate_production_environment()
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from models.db_models import RFQ, RFQItem, Quote, QuoteItem, AgentAuditLog, InventoryItem, Supplier
 from models.operational_models import AuditLogRecord
 from services.db_service import db_service
@@ -61,7 +63,10 @@ from services.llm_provider import (
     OpenAIProvider,
     ProviderTimeoutError,
     ProviderUnavailableError,
+    StructuredOutputError,
 )
+from services.rag_pipeline import RAGPipelineError
+from agents.orchestrator_agent import OrchestratorAgent
 from services.voice_service import (
     check_inventory_availability,
     get_customer_order_status,
@@ -70,6 +75,12 @@ from services.voice_service import (
     log_customer_concern,
 )
 from services.voice_media import initialize_voice_media
+from tools.registry import (
+    ToolAuthorizationError,
+    ToolConfirmationRequired,
+    ToolNotFoundError,
+)
+from tools.voice_tools import VOICE_TOOL_REGISTRY
 from api.auth import (
     AUTH_STORAGE_BACKEND,
     MAX_OTP_REQUESTS_PER_HOUR,
@@ -243,7 +254,43 @@ production_origins = {
     "https://portal.wingedtycoons.com",
     "https://team.wingedtycoons.com",
 }
-allowed_origins = sorted(configured_origins | development_origins | (production_origins if runtime_env == "production" else set()))
+
+
+def _build_allowed_origins(configured: set[str], environment: str) -> list[str]:
+    if environment != "production":
+        return sorted(configured | development_origins)
+
+    for origin in configured:
+        try:
+            parsed = urlsplit(origin)
+            hostname = parsed.hostname
+            invalid_host = hostname is None or hostname.lower() == "localhost"
+            if hostname:
+                try:
+                    invalid_host = invalid_host or ipaddress.ip_address(hostname).is_loopback
+                except ValueError:
+                    pass
+        except ValueError:
+            invalid_host = True
+            parsed = None
+        if (
+            parsed is None
+            or parsed.scheme.lower() != "https"
+            or invalid_host
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise RuntimeError(
+                "Production CORS origins must be HTTPS public origins without paths."
+            )
+
+    return sorted(configured | production_origins)
+
+
+allowed_origins = _build_allowed_origins(configured_origins, runtime_env)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -269,7 +316,7 @@ def _customer_owns_rfq(rfq, email: str) -> bool:
 
 class IntakeRequest(BaseModel):
     raw_text: str = Field(..., description="Raw email or RFQ text submitted by customer")
-    customer_name: Optional[str] = Field(None, description="Customer company or contact name")
+    customer_name: Optional[str] = Field(None, description="Customer company name used in client communications")
     customer_email: Optional[str] = Field(None, description="Customer email for quote updates")
     reply_to: Optional[str] = Field(None, description="Original email message ID for same-thread replies")
     customer_country: Optional[str] = Field(None, description="Customer or destination country for export screening")
@@ -413,6 +460,13 @@ class InternalCommandRequest(BaseModel):
     entity_id: str = Field(..., min_length=1)
     details: Optional[str] = None
 
+class AgentOrchestrationRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=4000)
+    response_mode: Literal["human", "app"] = Field(
+        default="app",
+        description="Return descriptive prose for a human or schema-validated JSON for an app consumer.",
+    )
+
 class VoiceToolRequest(BaseModel):
     part_number: Optional[str] = None
     rfq_or_order_id: Optional[str] = None
@@ -422,45 +476,7 @@ class VoiceToolRequest(BaseModel):
 class VoiceSessionRequest(BaseModel):
     language: Literal["en", "es", "fr", "de", "pt", "it", "ja", "zh", "ko", "nl", "ar", "hi"] = "en"
 
-VOICE_TOOL_DEFINITIONS = [
-    {
-        "type": "function",
-        "name": "check_inventory_availability",
-        "description": "Search aerospace stock by exact or partial part number. Quote only the returned quantity, condition, price, and lead time.",
-        "parameters": {
-            "type": "object",
-            "properties": {"part_number": {"type": "string", "description": "Aircraft part number or partial part number"}},
-            "required": ["part_number"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
-        "name": "get_order_status",
-        "description": "Look up the current status, tracking details, or operator review notice for an RFQ or order.",
-        "parameters": {
-            "type": "object",
-            "properties": {"rfq_or_order_id": {"type": "string", "description": "RFQ or order identifier"}},
-            "required": ["rfq_or_order_id"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "type": "function",
-        "name": "log_customer_concern",
-        "description": "Record a concern or quote follow-up. Export-controlled, non-USD, or ambiguous requests are routed to an operator.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "issue_type": {"type": "string"},
-                "details": {"type": "string"},
-                "part_number": {"type": "string"},
-            },
-            "required": ["issue_type", "details", "part_number"],
-            "additionalProperties": False,
-        },
-    },
-]
+VOICE_TOOL_DEFINITIONS = VOICE_TOOL_REGISTRY.realtime_definitions()
 
 # Endpoints
 
@@ -762,8 +778,10 @@ async def create_realtime_session(
             f"Continue speaking in {language_name} unless the customer asks to switch languages. Be "
             "concise, professional, and precise. Use the inventory and order tools before stating "
             "availability, prices, lead times, or status. Prices are USD. Never promise stock or issue "
-            "a binding quote. Route export-controlled, non-USD, ambiguous, or unresolved requests to "
-            "an operator using log_customer_concern, and clearly tell the caller their request is being reviewed."
+            "a binding quote. Before calling log_customer_concern, explain what will be recorded and wait "
+            "for the caller to confirm; the application requires a separate confirmation click. Route "
+            "export-controlled, non-USD, ambiguous, or unresolved requests to an operator and clearly "
+            "tell the caller their request is being reviewed."
         ),
         "audio": {
             "input": {
@@ -852,10 +870,30 @@ async def execute_voice_tool(
     request: VoiceToolRequest,
     user: dict = Depends(require_roles("ROLE_CUSTOMER", "ROLE_INTERNAL", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
     session=Depends(get_async_db),
+    x_human_confirmed: bool = Header(default=False, alias="X-Human-Confirmed"),
 ):
+    try:
+        arguments = VOICE_TOOL_REGISTRY.validate_call(
+            tool_name,
+            request.model_dump(exclude_none=True),
+            role=user.get("role", ""),
+            human_confirmed=x_human_confirmed,
+        )
+    except ToolNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Unknown voice tool.") from error
+    except ToolAuthorizationError as error:
+        raise HTTPException(status_code=403, detail="Insufficient permissions for this tool.") from error
+    except ToolConfirmationRequired as error:
+        raise HTTPException(
+            status_code=428,
+            detail="Explicit user confirmation is required before recording a concern.",
+        ) from error
+    except ValidationError as error:
+        raise HTTPException(status_code=422, detail=error.errors()) from error
+
     if tool_name == "check_inventory_availability":
         inventory = await _voice_inventory_records(session)
-        return check_inventory_availability(request.part_number or "", inventory)
+        return check_inventory_availability(arguments["part_number"], inventory)
     if tool_name == "get_order_status":
         rfqs = (
             db_service.list_rfqs()
@@ -864,16 +902,16 @@ async def execute_voice_tool(
         )
         if user.get("role") == "ROLE_CUSTOMER":
             return get_customer_order_status(
-                request.rfq_or_order_id or "",
+                arguments["rfq_or_order_id"],
                 user.get("email", ""),
                 rfqs,
             )
-        return get_order_status(request.rfq_or_order_id or "", rfqs)
+        return get_order_status(arguments["rfq_or_order_id"], rfqs)
     if tool_name == "log_customer_concern":
         return log_customer_concern(
-            request.issue_type or "unspecified",
-            request.details or "",
-            request.part_number or "",
+            arguments["issue_type"],
+            arguments["details"],
+            arguments["part_number"],
             user.get("email", "") if user.get("role") == "ROLE_CUSTOMER" else "",
         )
     raise HTTPException(status_code=404, detail="Unknown voice tool.")
@@ -1243,6 +1281,44 @@ async def execute_internal_command(
     return {"command": request.command, "entity_id": request.entity_id, "status": "RECORDED", "message": message}
 
 
+@app.post("/api/internal/agents/orchestrate")
+async def orchestrate_internal_agent_task(
+    request: AgentOrchestrationRequest,
+    user: dict = Depends(require_roles(
+        "ROLE_INTERNAL", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"
+    )),
+):
+    """Run bounded, model-selected analysis tools for an authenticated staff member."""
+    try:
+        response = await OrchestratorAgent().execute(
+            {"query": request.query, "response_mode": request.response_mode},
+            {
+                "role": user.get("role", ""),
+                "permissions": {
+                    "read_catalog",
+                    "read_inventory",
+                    "query_suppliers",
+                    "calculate_prices",
+                } | (
+                    {"read_business_records", "search_knowledge"}
+                    if user.get("role") in {"ROLE_ADMIN", "ROLE_MANAGER"}
+                    else set()
+                ),
+            },
+        )
+    except ConfigurationError as error:
+        raise HTTPException(status_code=503, detail="AI orchestration is not configured.") from error
+    except (ProviderTimeoutError, ProviderUnavailableError, StructuredOutputError) as error:
+        raise HTTPException(status_code=502, detail="AI orchestration is temporarily unavailable.") from error
+    except RAGPipelineError as error:
+        raise HTTPException(status_code=502, detail="Knowledge search could not be completed.") from error
+    except TimeoutError as error:
+        raise HTTPException(status_code=504, detail="An orchestration tool timed out.") from error
+    if not response.success:
+        raise HTTPException(status_code=403, detail=response.error_message or "Agent request was denied.")
+    return response.model_dump()
+
+
 @app.get("/api/internal/llm/health")
 async def llm_health(
     _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER")),
@@ -1421,6 +1497,13 @@ async def get_rfq_detail(
         quote_items = [QuoteItem.model_validate(value) for value in quote_item_records.values()]
 
     if user["role"] == "ROLE_CUSTOMER":
+        if quote and quote.status == "Sent":
+            if async_repositories is None:
+                communication_service.cancel_customer_followups(quote.id)
+            else:
+                await communication_service.cancel_customer_followups_async(
+                    async_repositories, quote.id
+                )
         quote_details = None
         if quote and quote.status == "Sent":
             quote_details = CustomerQuoteDetails(
@@ -1515,6 +1598,10 @@ async def get_customer_quote(
         raise HTTPException(status_code=403, detail="You can only access your own quotes.")
     if quote.status != "Sent":
         raise HTTPException(status_code=404, detail="Quote not found.")
+    if repositories is None:
+        communication_service.cancel_customer_followups(quote_id)
+    else:
+        await communication_service.cancel_customer_followups_async(repositories, quote_id)
 
     return CustomerQuoteDetails(
         quote=CustomerQuote(
@@ -1790,6 +1877,10 @@ async def submit_purchase_order(
                 review_url=review_url,
             )
             orchestration_service.mark_purchase_order_received(rfq.id, request.po_number, request.attachment_ids)
+    if repositories is None:
+        communication_service.cancel_customer_followups(request.quote_id)
+    else:
+        await communication_service.cancel_customer_followups_async(repositories, request.quote_id)
     return {
         "status": "Pending_PO_Review",
         "po_number": request.po_number,
@@ -1922,6 +2013,7 @@ async def create_shipment(
             recipient=rfq.customer_email,
             shipment_id=shipment.id,
             public_token=shipment.public_token,
+            company_name=rfq.customer_name,
         )
     else:
         shipment = await db_service.create_shipment_async(repositories, **shipment_values)
@@ -1930,6 +2022,7 @@ async def create_shipment(
             recipient=rfq.customer_email,
             shipment_id=shipment.id,
             public_token=shipment.public_token,
+            company_name=rfq.customer_name,
         )
         await session.commit()
     return {

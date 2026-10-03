@@ -1,33 +1,46 @@
-# Production Delivery Plan
+# Production Delivery Status
 
-**Last updated:** 2026-10-01
-**Scope:** Deliver the existing app with the fewest changes. No unrelated features or repeated test runs.
+**Last updated:** 2026-10-02
+**Target:** Deliver the customer portal today.
+**Status:** Deployed and ready for customer onboarding.
 
-## Live status checked 2026-10-01
+## Live production services
 
-- `https://winged-tycoons-api.onrender.com/healthz`: HTTP 200.
-- `https://winged-tycoons-api.onrender.com/ready`: HTTP 503; after the auth-schema issue is repaired, this endpoint still reports that the operational PostgreSQL cutover is not ready.
-- Render shows the latest API deploy failed because the PostgreSQL authentication schema was missing; the last successful API commit remains live.
-- Production DB was at `0009_prompt_rag_storage` before a migration. The old running image advanced it to `0010_reconciliation_quarantine`, which only adds inactive quarantine tables. No existing rows or tables were deleted. The current source needs a linear migration that adds shared auth state after this revision.
-- `https://winged-tycoons-frontend.onrender.com/internal`: the existing internal static app is served. The customer portal in `apps/web` is a separate Next.js app and is not declared as a Render service in this Blueprint.
-- Render shows the duplicate `backend` and `frontend` aliases are already suspended, as are the email and inventory workers. Keep them suspended unless explicitly needed.
+- Customer portal: <https://winged-tycoons-customer-portal.onrender.com>
+- API: <https://winged-tycoons-api.onrender.com>
+- The existing internal static frontend remains unchanged.
+- The dedicated customer portal is a live Render Node service. Its `API_BASE_URL` points to the HTTPS API, and `CUSTOMER_PORTAL_ORIGIN` is set to the portal's exact HTTPS origin.
+- The API's live `OPERATIONAL_POSTGRES_RUNTIME_ENABLED` setting is `true`.
+- API readiness returned HTTP 200 with `full_operational_persistence_ready: true`, `operational_store: postgresql`, migration head `0011_merge_postgres_migration_heads`, and no missing schema tables.
 
-## Required before customer launch
+## Completed safe live checks
 
-1. **Repair and apply the shared-auth migration.** The migration chain now needs to recognize production revision `0010_reconciliation_quarantine` and add auth tables as `0011_shared_auth_state`. Deploy that chain, apply the migration from the matching deployed image, then recover the API deploy. Do not roll back the additive quarantine tables.
-2. **Complete the PostgreSQL production cutover.** Resolve `/ready` only by confirming inventory mirroring and the RFQ, supplier, and quote repositories are PostgreSQL-backed. Do not bypass the readiness guard. Import customer auth users only after reviewing the dry-run target and count.
-3. **Reconcile Render services without creating aliases.** The Blueprint now names the existing API and internal frontend `winged-tycoons-api` and `winged-tycoons-frontend`; the `backend` and `frontend` aliases are already suspended. Do not run Blueprint Sync until live mappings are reconciled.
-4. **Deploy the customer portal.** Host `apps/web` separately from the internal static frontend, set `API_BASE_URL` to the HTTPS API origin, and set `CUSTOMER_PORTAL_ORIGIN` to its HTTPS public origin.
-5. **Verify one real customer journey.** Confirm sign-in, RFQ submission, sent-quote viewing, and PO document submission; then onboard the intended end users. Do not claim internal PO review is complete: the current API/UI map has an approval endpoint but no pending-PO list endpoint for staff to discover submissions.
+- API `/healthz`: HTTP 200.
+- API readiness: HTTP 200; PostgreSQL operational persistence ready.
+- Portal `/`: HTTP 200.
+- Anonymous portal session lookup: HTTP 401, as expected.
+- OTP proxy request with a valid origin and intentionally empty body: HTTP 422 from API validation, confirming proxy connectivity without requesting a code.
+- OTP proxy request with a mismatched origin: HTTP 403, as expected.
+- No OTP or other test email was sent.
+
+## Customer onboarding
+
+- Customer accounts are created on the customer's first eligible email OTP request; a bulk customer-user import is not required for customer sign-in.
+- Share the portal URL with intended users. Their first real sign-in will send the OTP to their own email address.
+- Internal staff accounts remain approval-controlled.
+- Purchase-order submissions remain subject to human approval before fulfillment. The backend approval endpoint exists; a staff-facing pending-order queue was not verified as part of this deployment.
+
+## Render service cleanup and configuration safety
+
+- The live inventory has eight active services, including this portal, and four already-suspended services: `backend`, `frontend`, `winged-inventory-ingestion`, and `winged-tycoons-email-worker`.
+- No active duplicate API or frontend service was found. The suspended services were left intact; no resource was deleted because the suspended `backend` and `frontend` entries may be needed for recovery, and the two worker entries are distinct services.
+- Do not run Blueprint Sync as part of this delivery. `render.yaml` still contains stale worker definitions and declares the PostgreSQL runtime switch as `false`; a broad sync could recreate services or undo the live runtime setting. The live Render configuration is the current production state.
 
 ## Explicitly deferred by the owner
 
-- Credential rotation (database, mailbox/Graph, and API credentials) is **not a launch gate**. The owner will rotate these after the app has been delivered and is working completely. Do not block delivery on rotation.
-- PostgreSQL restart-durability drill, SMS, analytics, maps, backup cleanup, and historical SQLite import.
+- Credential rotation will happen after delivery and successful end-user operation. It is not a release gate.
+- SMS, analytics, maps, backup cleanup, and historical SQLite import are out of scope for this delivery.
 
-## Safety and scope
+## Delivery handoff
 
-- Do not run Blueprint Sync before checking live service mappings; the wrong service names previously risked creating duplicate Render services.
-- Do not suspend or delete an unverified service, database, or disk.
-- Do not enable a production workflow mode merely to make `/ready` return 200; the database-backed workflows must actually be ready first.
-- Avoid broad/repeated test suites. Run only a targeted check when a code or configuration change requires it, and do not send real customer emails during verification.
+The portal and API are deployed and available for customer onboarding. Real-mail OTP delivery and business acceptance are to be confirmed through the intended user's normal onboarding, not through test emails. The deployment does not depend on credential rotation, a bulk customer-user import, or a broad Render Blueprint Sync.

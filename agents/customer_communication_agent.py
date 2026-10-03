@@ -12,9 +12,11 @@ from services.communication_service import communication_service
 from services.llm_provider import LLMRequest, LLMRouter
 from services.operations_store import operations_store
 from services.agents.prompts import CUSTOMER_COMMUNICATION_PROMPT
+from services.email_context import safe_display_text
+from services.email_templates import enforce_customer_email_policy
 
 logger = logging.getLogger(__name__)
-CUSTOMER_COMMUNICATION_PROMPT_VERSION = "customer-communication-v1"
+CUSTOMER_COMMUNICATION_PROMPT_VERSION = "customer-communication-v2-sentiment"
 CUSTOMER_COMMUNICATION_MODEL_COST_PER_MILLION = {
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4o": (2.50, 10.00),
@@ -82,7 +84,7 @@ class CustomerCommunicationAgent(BaseAgent):
         quantity_question = "\n\nHow many do you need?" if self._quantity_was_defaulted else ""
         return GeneratedEmailDraft(
             subject=f"Winged Tycoons quotation {quote_id}",
-            body_text=(f"Dear {name},\n\nPlease find your approved quotation {quote_id} below.\n\n{summary}{quantity_question}\n\nPlease reply to this email with any questions or a purchase order.\n\nBest regards,\nWinged Tycoons Sales Team"),
+            body_text=(f"Dear {name}'s team!\n\nPlease find your approved quotation {quote_id} below.\n\n{summary}{quantity_question}\n\nPlease reply in our customer portal with any questions or a purchase order.\n\nBest regards,\nWinged Tycoons Sales Team"),
             body_html="<p>Approved quotation details are included in the plain-text version of this message.</p>",
             redacted_fields_applied=["supplier costs", "internal margins", "supplier identities", "warehouse locations"],
             confidence_score=1.0,
@@ -91,18 +93,51 @@ class CustomerCommunicationAgent(BaseAgent):
     async def execute(self, inputs: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> AgentResponse:
         email = inputs.get("customer_email", "")
         name = inputs.get("customer_name", "")
+        company_name = safe_display_text(inputs.get("company_name") or name, fallback="")
+        if not company_name:
+            return AgentResponse(
+                success=False,
+                error_message="Customer company name is required before drafting a customer email.",
+            )
         details = inputs.get("quote_details", {})
         self._quantity_was_defaulted = bool(details.get("quantity_defaulted", False))
         quote_id = details.get("quote_id", "")
         summary = self._format_quote_summary(details)
+        supplied_sentiment = inputs.get("communication_sentiment")
+        sentiment_label = (
+            supplied_sentiment.get("label")
+            if isinstance(supplied_sentiment, dict)
+            and supplied_sentiment.get("label") in {"positive", "neutral", "negative", "mixed"}
+            and float(supplied_sentiment.get("confidence", 0.0) or 0.0) >= 0.65
+            else "neutral"
+        )
+        tone_guidance = {
+            "positive": "Use a warm, upbeat professional tone.",
+            "neutral": "Use a clear, concise, professional tone.",
+            "negative": "Use an empathetic and calm tone; acknowledge concerns without admitting fault or making promises.",
+            "mixed": "Use a measured, balanced professional tone; acknowledge the customer's concern without making assumptions.",
+        }[sentiment_label]
         request = LLMRequest(
             task="customer_communication",
             system_prompt=(f"{CUSTOMER_COMMUNICATION_PROMPT} "
                            "Redact supplier costs, internal margins, supplier identities, warehouse locations, credentials, and private audit data. "
+                           "Address the customer as the supplied company's team, using the company name from the customer portal or verified client communication. "
+                           "Encourage use of the customer portal and confirm whether the quotation meets their needs. "
+                           f"Use the inbound communication sentiment only as tone guidance: {tone_guidance} "
+                           "Do not mention the sentiment label or evidence to the customer. "
                            "Do not invent facts. If quantity_defaulted is true, ask exactly: How many do you need? "
                            "Return exactly the JSON schema."),
             user_prompt=json.dumps({"untrusted_quote_data": {
-                "customer_name": name,
+                "customer_name": company_name,
+                "company_name_from_portal_or_verified_communication": company_name,
+                "communication_sentiment": {
+                    "label": sentiment_label,
+                    "confidence": (
+                        float(supplied_sentiment.get("confidence", 0.0) or 0.0)
+                        if isinstance(supplied_sentiment, dict)
+                        else 0.0
+                    ),
+                },
                 "quote_details": details,
                 "approved_quote_summary": summary,
             }}, ensure_ascii=False, default=str),
@@ -132,6 +167,11 @@ class CustomerCommunicationAgent(BaseAgent):
             draft = self._emergency_template(name, quote_id, summary)
             response = None
 
+        draft.body_text = enforce_customer_email_policy(
+            draft.body_text,
+            company_name,
+            satisfaction_question="Does this quotation meet your needs?",
+        )
         model_id = response.model if response else "template-fallback"
         input_tokens = int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
         output_tokens = int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0)
@@ -197,7 +237,7 @@ class CustomerCommunicationAgent(BaseAgent):
         try:
             transmission = communication_service.send_customer_quote(
                 recipient=email,
-                customer_name=name,
+                customer_name=company_name,
                 quote_id=quote_id,
                 quote_summary=summary,
                 reply_to=inputs.get("reply_to"),

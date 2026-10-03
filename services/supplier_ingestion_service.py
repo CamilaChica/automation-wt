@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import re
 import uuid
 from datetime import datetime, timezone
@@ -7,11 +8,17 @@ from typing import Any, Dict, List, Optional
 
 from services.supplier_database import supplier_db
 from services.supplier_email_extractor import SupplierEmailExtractor
-from services.email_intelligence import extract_email_intelligence
-from services.email_intelligence import EXTRACTION_CONTRACTS
+from services.email_intelligence import (
+    CommunicationSentiment,
+    EXTRACTION_CONTRACTS,
+    analyze_communication_sentiment,
+    extract_email_intelligence,
+)
 from services.document_parser import build_email_context
 from services.llm_provider import LLMRouter
 from services.operations_store import operations_store
+
+logger = logging.getLogger(__name__)
 
 
 def _integer_field_value(value: Optional[str]) -> Optional[int]:
@@ -43,6 +50,57 @@ def _save_supplier_offer(**offer: Any) -> dict[str, Any]:
     return supplier_db.save_supplier_offer(**offer)
 
 
+def _persist_supplier_sentiment(
+    source_email_id: str,
+    sentiment: CommunicationSentiment | None,
+) -> dict[str, Any] | None:
+    if sentiment is None:
+        return None
+    payload = sentiment.model_dump()
+    try:
+        operations_store.record_automation_event(
+            event_type="inbound_communication_sentiment",
+            entity_type="email",
+            entity_id=source_email_id,
+            status=sentiment.label.upper(),
+            result=json.dumps(payload),
+            idempotency_key=f"communication-sentiment:{source_email_id}",
+        )
+    except Exception as exc:
+        logger.warning(
+            "supplier_sentiment_persist_failed message_id=%s error=%s",
+            source_email_id,
+            type(exc).__name__,
+        )
+    return payload
+
+
+async def _persist_supplier_sentiment_async(
+    repositories,
+    source_email_id: str,
+    sentiment: CommunicationSentiment | None,
+) -> dict[str, Any] | None:
+    if sentiment is None:
+        return None
+    payload = sentiment.model_dump()
+    try:
+        await repositories.records.record_automation_event(
+            event_type="inbound_communication_sentiment",
+            entity_type="email",
+            entity_id=source_email_id,
+            status=sentiment.label.upper(),
+            result=json.dumps(payload),
+            idempotency_key=f"communication-sentiment:{source_email_id}",
+        )
+    except Exception as exc:
+        logger.warning(
+            "supplier_sentiment_persist_failed message_id=%s error=%s",
+            source_email_id,
+            type(exc).__name__,
+        )
+    return payload
+
+
 class SupplierEmailIngestionService:
     def __init__(self):
         self.extractor = SupplierEmailExtractor()
@@ -64,6 +122,15 @@ class SupplierEmailIngestionService:
             except Exception:
                 # Deterministic extraction remains the bounded outage fallback.
                 llm_data = None
+            source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
+            sentiment_result = analyze_communication_sentiment(
+                attachment_context,
+                router=self.llm_router,
+            )
+            communication_sentiment = _persist_supplier_sentiment(
+                source_email_id,
+                sentiment_result,
+            )
             unsupported_currencies = sorted({
                 item.currency.value
                 for item in (llm_data.items if llm_data else [])
@@ -77,7 +144,6 @@ class SupplierEmailIngestionService:
                         sender = line.split(":", 1)[1].strip()
                     elif line.lower().startswith("subject:"):
                         subject = line.split(":", 1)[1].strip()
-                source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
                 _save_inbound_email(
                     mailbox=mailbox,
                     message_id=source_email_id,
@@ -101,7 +167,10 @@ class SupplierEmailIngestionService:
                         idempotency_key=f"supplier-email-review:{source_email_id}",
                         task="supplier_quote_extraction",
                         source_text=attachment_context,
-                        extraction=llm_data.model_dump(),
+                        extraction={
+                            **llm_data.model_dump(),
+                            "communication_sentiment": communication_sentiment,
+                        },
                         reason="non_usd_currency",
                         prompt_version=EXTRACTION_CONTRACTS["supplier_quote_extraction"].prompt_version,
                         hold_flags=hold_flags,
@@ -128,6 +197,7 @@ class SupplierEmailIngestionService:
                     "review_event_id": review_event_id,
                     "missing_fields": llm_data.missing_fields,
                     "telemetry": llm_data.telemetry,
+                    "communication_sentiment": communication_sentiment,
                 }
             if llm_data and llm_data.items:
                 structured_items = [{
@@ -179,8 +249,6 @@ class SupplierEmailIngestionService:
             certificate = extracted.get("certificate_type")
             lead_time = extracted.get("lead_time_days") or 3
             condition = extracted.get("condition_code") or "NE"
-            source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
-
             _save_inbound_email(
                 mailbox=mailbox,
                 message_id=source_email_id,
@@ -246,6 +314,7 @@ class SupplierEmailIngestionService:
                 "trace_documents": extracted.get("trace_documents", []),
                 "source_email_id": source_email_id,
                 "items": items,
+                "communication_sentiment": communication_sentiment,
             }
         except Exception as exc:  # pragma: no cover - defensive
             return {"success": False, "error": str(exc)}
@@ -287,6 +356,16 @@ class SupplierEmailIngestionService:
                     subject = line.split(":", 1)[1].strip()
             source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
             telemetry = llm_data.telemetry if llm_data else {}
+            sentiment_result = await asyncio.to_thread(
+                analyze_communication_sentiment,
+                attachment_context,
+                router=self.llm_router,
+            )
+            communication_sentiment = await _persist_supplier_sentiment_async(
+                repositories,
+                source_email_id,
+                sentiment_result,
+            )
 
             if llm_data and (llm_data.pending_human_review or unsupported_currencies):
                 hold_flags = list(llm_data.missing_fields)
@@ -300,7 +379,10 @@ class SupplierEmailIngestionService:
                     or f"supplier-email-review:{source_email_id}",
                     task="supplier_quote_extraction",
                     source_text=attachment_context,
-                    extraction=llm_data.model_dump(),
+                    extraction={
+                        **llm_data.model_dump(),
+                        "communication_sentiment": communication_sentiment,
+                    },
                     reason=review_reason,
                     prompt_version=EXTRACTION_CONTRACTS["supplier_quote_extraction"].prompt_version,
                     hold_flags=hold_flags,
@@ -348,6 +430,7 @@ class SupplierEmailIngestionService:
                     "review_event_id": review_id,
                     "missing_fields": llm_data.missing_fields,
                     "telemetry": telemetry,
+                    "communication_sentiment": communication_sentiment,
                 }
 
             structured_items: list[dict[str, Any]] = []
@@ -470,6 +553,7 @@ class SupplierEmailIngestionService:
                 "trace_documents": extracted.get("trace_documents", []),
                 "source_email_id": source_email_id,
                 "items": items,
+                "communication_sentiment": communication_sentiment,
             }
         except Exception as exc:
             return {"success": False, "error": str(exc)}

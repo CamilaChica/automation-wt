@@ -2,6 +2,8 @@
 
 This inventory reflects the FastAPI routes in `api/main.py`; the backend currently uses `/api`, not `/api/v1`. The UI calls these endpoints through `frontend/src/services/api.ts` and the shared resource hooks in `frontend/src/hooks/useApiResources.ts`. The webhook route is server-to-server only and must not be called by browser code.
 
+The frontend no longer substitutes sample RFQs, inventory, supplier records, catalog results, or voice data when an API request fails. It uses the API response or surfaces the request error. Deterministic fixtures remain test-only. This client-side change does not certify production readiness or replace the PostgreSQL runtime cutover gate.
+
 The external Next.js customer portal calls only its same-origin `/api/customer/*` route handlers. Those handlers allowlist the required customer operations, keep the backend session token in an HttpOnly cookie, verify request origins on writes, and omit internal attachment metadata and notification details from responses.
 
 ## Health and identity
@@ -38,9 +40,9 @@ The external Next.js customer portal calls only its same-origin `/api/customer/*
 
 | Method and path | Access | Request | Response / UI mapping |
 | --- | --- | --- | --- |
-| `GET /api/catalog/search` | Customer/admin/manager/sales/purchasing | `query`, optional `condition` | Customer-safe catalog rows only. Portal search; fallback rows are tagged as sample. |
-| `GET /api/inventory` | Admin/manager/purchasing | None | Role-gated Procurement inventory tab; uses the request-scoped async operational repository when enabled, with internal cost/location fields never shown to sales/customer roles and fallback rows marked sample. |
-| `GET /api/suppliers` | Admin/manager/purchasing | None | Role-gated Procurement supplier directory; uses the request-scoped async supplier repository when enabled, with fallback rows marked sample. |
+| `GET /api/catalog/search` | Customer/admin/manager/sales/purchasing | `query`, optional `condition` | Customer-safe catalog rows only. Portal search; frontend displays only API results and surfaces API errors. |
+| `GET /api/inventory` | Admin/manager/purchasing | None | Role-gated Procurement inventory tab; uses the request-scoped async operational repository when enabled. Internal cost/location fields are not shown to sales/customer roles; frontend displays only API results. |
+| `GET /api/suppliers` | Admin/manager/purchasing | None | Role-gated Procurement supplier directory; uses the request-scoped async supplier repository when enabled; frontend displays only API results. |
 | `GET /api/suppliers/{supplier_id}` | Admin/manager/purchasing | Path `supplier_id` | Selected Procurement supplier profile; uses the request-scoped async supplier repository when enabled. |
 | `GET /api/supplier-offers?part_number=...` | Admin/manager/purchasing/sales | Part number query | Supplier offers. Procurement and Sourcing use `useSupplierOffers`; the request-scoped async supplier repository is used when enabled. |
 | `POST /api/internal/freight/quote` | Admin/manager/purchasing/sales | `FreightRequest` | Procurement collects route/weight/package/service inputs and shows provider rates or `DRY_RUN`; dry-run charges are not applied to quotes and no shipment is booked. |
@@ -56,6 +58,7 @@ The external Next.js customer portal calls only its same-origin `/api/customer/*
 | `GET /api/internal/extraction-reviews/{review_id}` | Admin/manager/sales/purchasing | Path `review_id` | Selected source text, extracted fields, reason, and hold flags in Trace Vault. |
 | `POST /api/internal/extraction-reviews/{review_id}/decision` | Admin/manager/sales/purchasing | `ExtractionReviewDecisionRequest` | Trace Vault approves the displayed extraction with server source-grounding validation or rejects it with operator comments. |
 | `POST /api/internal/commands` | Admin/manager/sales/purchasing | `InternalCommandRequest` | Audited command result. Procurement, Sourcing and Fulfillment hooks invalidate relevant active resources. |
+| `POST /api/internal/agents/orchestrate` | Internal/admin/manager/sales/purchasing | `query` (1-4000 characters), optional `response_mode` (`app` default or `human`) | Bounded model-led analysis using single-purpose, decorator-registered, Pydantic-validated catalog, inventory, supplier-search, pricing, exact RFQ lookup, exact supplier-offer lookup, and citation-backed RAG tools. Database tools accept structured arguments, never model-generated SQL; responses omit raw documents and sensitive contact/source fields. `app` returns schema-validated structured JSON; `human` returns descriptive text in `data.log_message`. Backend enforces tool permissions and does not issue quotes, send communications, or mutate workflow state. |
 | `GET /api/internal/llm/health` | Admin/manager | None | Trace Vault shows provider routing, configuration booleans, and fallback status; no secret values. |
 | `GET /api/internal/llm/telemetry` | Admin/manager | Optional task/limit | Trace Vault shows recent task/model, latency, token, estimated-cost, validation, and review-outcome telemetry. |
 | `GET /api/internal/mailboxes/health` | Internal/admin/manager/sales/purchasing | None | Status strings for `sales_mailbox` and `purchasing_mailbox`, plus authenticated user. TopBar shows live status. |
@@ -80,7 +83,7 @@ The external Next.js customer portal calls only its same-origin `/api/customer/*
 | Method and path | Access | Request | Response / UI mapping |
 | --- | --- | --- | --- |
 | `GET /api/voice/dashboard` | Internal/admin/manager/sales/purchasing | None | Voice operations dashboard derived from RFQs. |
-| `POST /api/voice/tools/{tool_name}` | Customer/internal roles | `VoiceToolRequest` | Inventory, order status or escalation tool response. |
+| `POST /api/voice/tools/{tool_name}` | Customer/internal roles | `VoiceToolRequest` and, for concern recording, explicit `X-Human-Confirmed: true` | Inventory, order status or escalation tool response. Customer voice displays the concern details and waits for a confirmation click before recording. |
 
 ## Employee profile and time tracking
 
@@ -95,14 +98,16 @@ The external Next.js customer portal calls only its same-origin `/api/customer/*
 
 ## View mapping and non-API content
 
+The rows below identify demo-only sections that are not backed by live read APIs. They are not operational evidence and remain delivery blockers until hidden or mapped to persisted API data.
+
 | View | Live bindings | Remaining sample/demo content |
 | --- | --- | --- |
-| TopBar | `/ready`, mailbox health, employee profile/presence | AOG alert count is not API-backed. |
-| Customer Dashboard | RFQ list/detail, quote detail and dispatch, internal shipment counts, RFQ creation | Price-option cards, spend/SLA/savings estimates, document previews and route maps remain badged sample content. |
-| Aero Procurement / Sourcing | RFQ queue and supplier offers | Lead-time history, supplier performance, workload matrix, compliance-document panels remain sample where no read contract exists. |
-| Fulfillment Hub | Shipment list/stage, shipment creation, event and carrier tracking controls for admin/manager/purchasing; SMS is confirmation-gated | Five-step workflow graphic, inspection/package/compliance checks and map route are demos, not shipment milestones. |
-| Trace Vault | RFQs, compliance-related automation events and trace-decision mutation | OCR, document checklist, historical timeline and KPI metrics remain sample. |
-| Customer Portal | Catalog search, RFQ/attachment upload, customer PO and token-based shipment trace | A catalog fallback is explicitly badged and cannot be represented as confirmed availability. |
+| TopBar | `/ready`, mailbox health, employee profile/presence, AOG count derived from live RFQs | Sidebar queue counts are removed until API-backed counts are available. |
+| Customer Dashboard | RFQ list/detail, persisted quote totals/items and dispatch, internal shipment counts, RFQ creation with operator-entered customer identity | Quote comparisons and sample presets are removed; document previews and shipment milestones remain unavailable without read APIs. |
+| Aero Procurement / Sourcing | RFQ queue, inventory/supplier directories, supplier offers, mailbox, and freight quote requests | Supplier-performance, AOG workload, lead-time and document-evidence panels show unavailable states because no live reporting/evidence API exists. |
+| Fulfillment Hub | Shipment list/stage, shipment creation, event and carrier tracking controls for admin/manager/purchasing; SMS is confirmation-gated | Sample inspection, packaging, compliance and route panels are removed; persisted telemetry is not available from the current API. |
+| Trace Vault | RFQs, extraction review records/decisions, LLM telemetry, and compliance-related automation events | Fabricated OCR/certification controls and milestone history are removed; per-document checklist and milestone endpoints are not registered. |
+| Customer Portal | API-backed catalog search, RFQ/attachment upload, customer PO and token-based shipment trace | Client sample fallback is removed; API failures surface as errors. |
 
 ## Contract gaps
 

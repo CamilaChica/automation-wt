@@ -13,13 +13,20 @@ import {
 } from 'lucide-react';
 import { voiceService, VoiceConcern, VoiceDashboard, VoiceRequest } from '../../services/voice';
 
-type CallStatus = 'Idle' | 'Connected' | 'Checking Inventory' | 'Escalated';
+type CallStatus = 'Idle' | 'Connected' | 'Checking Inventory' | 'Awaiting Confirmation' | 'Escalated';
 type TranscriptEntry = { id: string; speaker: 'Customer' | 'Representative'; text: string; time: string };
+type PendingToolConfirmation = {
+  callId: string;
+  toolName: string;
+  arguments: Record<string, unknown>;
+  generation: number;
+};
 
 const statusStyles: Record<CallStatus, string> = {
   Idle: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300',
   Connected: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300',
   'Checking Inventory': 'bg-sky-100 text-sky-800 dark:bg-sky-950/70 dark:text-sky-300',
+  'Awaiting Confirmation': 'bg-amber-100 text-amber-900 dark:bg-amber-950/70 dark:text-amber-300',
   Escalated: 'bg-amber-100 text-amber-900 dark:bg-amber-950/70 dark:text-amber-300',
 };
 
@@ -38,6 +45,7 @@ export const VoiceServiceView: React.FC = () => {
   const [micLevel, setMicLevel] = useState(0);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
+  const [pendingToolConfirmation, setPendingToolConfirmation] = useState<PendingToolConfirmation | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const channelRef = useRef<RTCDataChannel | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -96,6 +104,44 @@ export const VoiceServiceView: React.FC = () => {
     }].slice(-80));
   };
 
+  const sendToolOutput = (callId: string, output: unknown) => {
+    const channel = channelRef.current;
+    if (channel?.readyState !== 'open') return;
+    channel.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(output) },
+    }));
+    channel.send(JSON.stringify({ type: 'response.create' }));
+  };
+
+  const executeRegisteredTool = async (
+    toolName: string,
+    arguments_: Record<string, unknown>,
+    callId: string,
+    generation: number,
+    humanConfirmed = false,
+  ) => {
+    if (generation !== generationRef.current) return;
+    try {
+      const result = await voiceService.executeTool(toolName, arguments_, humanConfirmed);
+      if (generation !== generationRef.current) return;
+      const requiresReview = Boolean((result as { requires_review?: boolean })?.requires_review);
+      escalatedRef.current = requiresReview;
+      setCallStatus(requiresReview ? 'Escalated' : 'Connected');
+      if (requiresReview) {
+        const latest = await voiceService.getDashboard();
+        if (generation === generationRef.current) setDashboard(latest);
+      }
+      sendToolOutput(callId, result);
+    } catch {
+      if (generation !== generationRef.current) return;
+      escalatedRef.current = true;
+      setCallStatus('Escalated');
+      setErrorMessage('The operations lookup failed. The request has not been confirmed.');
+      sendToolOutput(callId, { error: 'Lookup unavailable. Tell the customer an operator will follow up.' });
+    }
+  };
+
   const handleRealtimeEvent = async (eventData: string, generation: number) => {
     let event: Record<string, any>;
     try {
@@ -112,40 +158,22 @@ export const VoiceServiceView: React.FC = () => {
       const toolName = String(event.item.name || '');
       const callId = String(event.item.call_id || '');
       if (!['check_inventory_availability', 'get_order_status', 'log_customer_concern'].includes(toolName) || !callId) return;
-      setCallStatus(toolName === 'log_customer_concern' ? 'Escalated' : 'Checking Inventory');
+      setCallStatus(toolName === 'log_customer_concern' ? 'Awaiting Confirmation' : 'Checking Inventory');
       try {
         const args = JSON.parse(event.item.arguments || '{}') as Record<string, unknown>;
-        const result = await voiceService.executeTool(toolName, args);
         if (generation !== generationRef.current) return;
-        const requiresReview = Boolean((result as { requires_review?: boolean })?.requires_review);
-        if (requiresReview) {
+        if (toolName === 'log_customer_concern') {
           escalatedRef.current = true;
-          setCallStatus('Escalated');
-          const latest = await voiceService.getDashboard();
-          if (generation === generationRef.current) setDashboard(latest);
-        } else {
-          setCallStatus('Connected');
+          setPendingToolConfirmation({ callId, toolName, arguments: args, generation });
+          return;
         }
-        const channel = channelRef.current;
-        if (channel?.readyState === 'open') {
-          channel.send(JSON.stringify({
-            type: 'conversation.item.create',
-            item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(result) },
-          }));
-          channel.send(JSON.stringify({ type: 'response.create' }));
-        }
+        await executeRegisteredTool(toolName, args, callId, generation);
       } catch {
+        if (generation !== generationRef.current) return;
         escalatedRef.current = true;
         setCallStatus('Escalated');
-        setErrorMessage('The operations lookup failed. The request has not been confirmed.');
-        const channel = channelRef.current;
-        if (channel?.readyState === 'open') {
-          channel.send(JSON.stringify({
-            type: 'conversation.item.create',
-            item: { type: 'function_call_output', call_id: callId, output: JSON.stringify({ error: 'Lookup unavailable. Tell the customer an operator will follow up.' }) },
-          }));
-          channel.send(JSON.stringify({ type: 'response.create' }));
-        }
+        setErrorMessage('The operations tool failed. No result was returned.');
+        sendToolOutput(callId, { error: 'Lookup unavailable. Tell the customer an operator will follow up.' });
       }
     } else if (event.type === 'response.done' && !escalatedRef.current) {
       setCallStatus('Connected');
@@ -162,6 +190,7 @@ export const VoiceServiceView: React.FC = () => {
     const generation = ++generationRef.current;
     setErrorMessage('');
     setTranscript([]);
+    setPendingToolConfirmation(null);
     escalatedRef.current = false;
     setCallStatus('Idle');
     setIsConnecting(true);
@@ -245,6 +274,7 @@ export const VoiceServiceView: React.FC = () => {
 
   const endCall = () => {
     releaseCallResources();
+    setPendingToolConfirmation(null);
     escalatedRef.current = false;
     setCallStatus('Idle');
     setIsConnecting(false);
@@ -259,6 +289,29 @@ export const VoiceServiceView: React.FC = () => {
     }
   };
 
+  const confirmPendingTool = () => {
+    const pending = pendingToolConfirmation;
+    if (!pending) return;
+    setPendingToolConfirmation(null);
+    setCallStatus('Escalated');
+    void executeRegisteredTool(
+      pending.toolName,
+      pending.arguments,
+      pending.callId,
+      pending.generation,
+      true,
+    );
+  };
+
+  const declinePendingTool = () => {
+    const pending = pendingToolConfirmation;
+    if (!pending) return;
+    setPendingToolConfirmation(null);
+    escalatedRef.current = false;
+    setCallStatus('Connected');
+    sendToolOutput(pending.callId, { logged: false, cancelled: true });
+  };
+
   return (
     <div className="mx-auto w-full max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8">
       <div className="mb-5 flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 pb-4 dark:border-slate-800">
@@ -269,7 +322,7 @@ export const VoiceServiceView: React.FC = () => {
           <h1 className="text-xl font-bold text-slate-900 dark:text-white">Customer service desk</h1>
         </div>
         <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-          <span className={`h-2 w-2 rounded-full ${callStatus === 'Connected' || callStatus === 'Checking Inventory' ? 'bg-emerald-500' : callStatus === 'Escalated' ? 'bg-amber-500' : 'bg-slate-400'}`} />
+          <span className={`h-2 w-2 rounded-full ${callStatus === 'Connected' || callStatus === 'Checking Inventory' ? 'bg-emerald-500' : callStatus === 'Escalated' || callStatus === 'Awaiting Confirmation' ? 'bg-amber-500' : 'bg-slate-400'}`} />
           Voice channel {callStatus === 'Idle' ? 'ready' : 'active'}
         </div>
       </div>
@@ -280,6 +333,26 @@ export const VoiceServiceView: React.FC = () => {
         </div>
       )}
       {dashboardError && <div role="alert" className="mb-4 border-l-4 border-red-600 bg-red-50 px-3 py-2.5 text-sm text-red-800 dark:bg-red-950/40 dark:text-red-200">{dashboardError}</div>}
+      {pendingToolConfirmation && (
+        <section
+          role="region"
+          aria-labelledby="voice-tool-confirmation-title"
+          aria-live="assertive"
+          className="mb-5 border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
+        >
+          <h2 id="voice-tool-confirmation-title" className="text-sm font-bold">Confirm operator follow-up</h2>
+          <p className="mt-1 text-sm">The assistant wants to record this concern for an operator. Nothing will be recorded unless you confirm.</p>
+          <dl className="mt-3 grid gap-1 text-sm">
+            <div><dt className="inline font-semibold">Concern: </dt><dd className="inline">{String(pendingToolConfirmation.arguments.issue_type ?? 'unspecified')}</dd></div>
+            <div><dt className="inline font-semibold">Part: </dt><dd className="inline">{String(pendingToolConfirmation.arguments.part_number ?? 'not specified')}</dd></div>
+            <div><dt className="inline font-semibold">Details: </dt><dd className="inline break-words">{String(pendingToolConfirmation.arguments.details ?? '')}</dd></div>
+          </dl>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button type="button" onClick={confirmPendingTool} className="min-h-11 bg-amber-800 px-4 text-sm font-semibold text-white hover:bg-amber-900">Confirm and record</button>
+            <button type="button" onClick={declinePendingTool} className="min-h-11 border border-amber-800 px-4 text-sm font-semibold hover:bg-amber-100 dark:hover:bg-amber-900/40">Cancel</button>
+          </div>
+        </section>
+      )}
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,0.88fr)_minmax(0,1.12fr)]">
         <section aria-label="Live call center" className="flex min-h-[650px] flex-col border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">

@@ -15,6 +15,7 @@ const statusTone: Record<string, string> = {
   Connecting: 'bg-sky-100 text-sky-800',
   Connected: 'bg-emerald-100 text-emerald-800',
   'Checking Inventory': 'bg-sky-100 text-sky-800',
+  'Awaiting Confirmation': 'bg-amber-100 text-amber-900',
   Escalated: 'bg-amber-100 text-amber-900',
 };
 
@@ -70,7 +71,7 @@ export const CustomerVoiceContact: React.FC<CustomerVoiceContactProps> = ({ uiLa
           </div>
 
           <div className="flex flex-col items-center border-b border-slate-200 px-5 py-5">
-            <span className={`rounded px-2.5 py-1 text-xs font-semibold ${statusTone[call.callStatus]}`} aria-live="polite">{t(({ Idle: 'idle', Connecting: 'connecting', Connected: 'connected', 'Checking Inventory': 'checkingInventory', Escalated: 'escalated' } as const)[call.callStatus])}</span>
+            <span className={`rounded px-2.5 py-1 text-xs font-semibold ${statusTone[call.callStatus]}`} aria-live="polite">{t(({ Idle: 'idle', Connecting: 'connecting', Connected: 'connected', 'Checking Inventory': 'checkingInventory', 'Awaiting Confirmation': 'escalated', Escalated: 'escalated' } as const)[call.callStatus])}</span>
             <div className="relative my-4 flex h-20 w-20 items-center justify-center rounded-full border border-cyan-200 bg-cyan-50">
               <div className="absolute inset-2 rounded-full border border-cyan-300" style={{ transform: `scale(${1 + call.micLevel * 0.18})`, opacity: 0.35 + call.micLevel * 0.65 }} />
               {call.micLevel > 0.025 ? <Mic className="h-7 w-7 text-cyan-800" /> : <MicOff className="h-7 w-7 text-slate-500" />}
@@ -90,6 +91,27 @@ export const CustomerVoiceContact: React.FC<CustomerVoiceContactProps> = ({ uiLa
           </div>
 
           {(call.errorMessage || reviewNotice) && <div role="status" className="flex items-start gap-2 border-b border-slate-200 bg-amber-50 px-5 py-3 text-sm text-amber-900"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span>{call.errorMessage || reviewNotice}</span></div>}
+
+          {call.pendingToolConfirmation && (
+            <section
+              role="region"
+              aria-labelledby="customer-voice-confirmation-title"
+              aria-live="assertive"
+              className="border-b border-amber-300 bg-amber-50 p-4 text-amber-950"
+            >
+              <h3 id="customer-voice-confirmation-title" className="text-sm font-bold">Confirm operator follow-up</h3>
+              <p className="mt-1 text-sm">The assistant wants to record this concern for an operator. Nothing will be recorded unless you confirm.</p>
+              <dl className="mt-3 grid gap-1 text-sm">
+                <div><dt className="inline font-semibold">Concern: </dt><dd className="inline">{String(call.pendingToolConfirmation.arguments.issue_type ?? 'unspecified')}</dd></div>
+                <div><dt className="inline font-semibold">Part: </dt><dd className="inline">{String(call.pendingToolConfirmation.arguments.part_number ?? 'not specified')}</dd></div>
+                <div><dt className="inline font-semibold">Details: </dt><dd className="inline break-words">{String(call.pendingToolConfirmation.arguments.details ?? '')}</dd></div>
+              </dl>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button type="button" onClick={call.confirmPendingTool} className="min-h-11 bg-amber-800 px-4 text-sm font-semibold text-white hover:bg-amber-900">Confirm and record</button>
+                <button type="button" onClick={call.declinePendingTool} className="min-h-11 border border-amber-800 px-4 text-sm font-semibold hover:bg-amber-100">Cancel</button>
+              </div>
+            </section>
+          )}
 
           <div className="flex min-h-44 flex-1 flex-col">
             <div className="flex items-center justify-between px-5 py-3"><h3 className="text-xs font-bold uppercase text-slate-600">{t('transcript')}</h3><span className="text-[11px] text-slate-500">{t('transcriptLive')}</span></div>

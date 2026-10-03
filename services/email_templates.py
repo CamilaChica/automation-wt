@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+from services.email_context import safe_display_text
 
 
 EmailType = Literal[
@@ -44,6 +48,7 @@ class CustomerQuoteData(BaseModel):
     lead_time: str
     valid_until: str
     attachments: list[str] = Field(default_factory=list)
+    company_name: str | None = None
 
 
 class SupplierRFQData(BaseModel):
@@ -76,6 +81,53 @@ class CustomerFollowupData(BaseModel):
     recipient_email: str
     part_number: str
     quote_number: str
+    company_name: str | None = None
+
+
+def customer_portal_url() -> str:
+    url = os.getenv(
+        "CUSTOMER_PORTAL_URL",
+        "https://portal.wingedtycoons.com/customer-portal",
+    ).strip().rstrip("/")
+    if not url.startswith(("https://", "http://")):
+        raise ValueError("CUSTOMER_PORTAL_URL must be an absolute HTTP(S) URL.")
+    return url
+
+
+def enforce_customer_email_policy(
+    body: str,
+    company_name: str,
+    *,
+    satisfaction_question: str | None = None,
+) -> str:
+    company = safe_display_text(company_name, fallback="")
+    if not company:
+        raise ValueError("Customer company name is required before sending an email.")
+
+    content = str(body or "").strip()
+    content = re.sub(r"^(?:Dear|Hi|Hello)\b[^\n]*\n+", "", content, count=1, flags=re.IGNORECASE)
+    greeting = f"Dear {company}'s team!"
+
+    additions = []
+    if satisfaction_question and satisfaction_question.casefold() not in content.casefold():
+        additions.append(satisfaction_question)
+    portal_url = customer_portal_url()
+    if portal_url not in content:
+        additions.append(
+            f"Please use our customer portal to review your request, quotation, or shipment updates: {portal_url}"
+        )
+
+    if additions:
+        closing = re.search(
+            r"(?im)^(?:best regards|kind regards|warm regards|sincerely|regards)[,!]?\s*$",
+            content,
+        )
+        insert_at = closing.start() if closing else len(content)
+        before, after = content[:insert_at].rstrip(), content[insert_at:].lstrip()
+        addition_text = "\n\n".join(additions)
+        content = f"{before}\n\n{addition_text}" + (f"\n\n{after}" if after else "")
+
+    return f"{greeting}\n\n{content}".rstrip()
 
 
 def customer_quote(data: CustomerQuoteData) -> EmailPayload:
@@ -84,7 +136,7 @@ def customer_quote(data: CustomerQuoteData) -> EmailPayload:
     if data.attachments:
         attachment_text = f"\n- Attachments: {', '.join(str(doc) for doc in data.attachments)}"
 
-    body = (
+    body = enforce_customer_email_policy((
         f"Dear {data.contact_name},\n\n"
         "Thank you for contacting Winged Tycoons. We are pleased to offer the following quotation for your review:\n\n"
         f"- Part Number: {data.part_number}\n"
@@ -99,7 +151,7 @@ def customer_quote(data: CustomerQuoteData) -> EmailPayload:
         "Best regards,\n\n"
         "Winged Tycoons Aviation Team\n"
         "rfq@wingedtycoons.com"
-    )
+    ), data.company_name or data.contact_name, satisfaction_question="Does this quotation meet your needs?")
     return EmailPayload(message_type="CUSTOMER_QUOTE", recipient_email=data.recipient_email, subject=subject, body=body)
 
 
@@ -157,11 +209,11 @@ def supplier_verification(data: SupplierVerificationData) -> EmailPayload:
 
 def customer_followup(data: CustomerFollowupData) -> EmailPayload:
     subject = f"Following up on Quote {data.quote_number} - PN {data.part_number}"
-    body = (
+    body = enforce_customer_email_policy((
         f"Hi {data.contact_name},\n\n"
         f"I wanted to follow up on the quotation ({data.quote_number}) we sent recently for Part Number {data.part_number}.\n\n"
-        "Please let us know if you are still looking to proceed or if you have any questions regarding pricing, lead times, or certification requirements. We are happy to adjust specifications or hold the sourcing information while you confirm.\n\n"
+        "Does this quotation meet your needs? Please let us know if you have any questions about pricing, lead time, or certification.\n\n"
         "Best regards,\n\n"
         "Winged Tycoons Aviation Team"
-    )
+    ), data.company_name or data.contact_name, satisfaction_question="Does this quotation meet your needs?")
     return EmailPayload(message_type="CUSTOMER_FOLLOWUP", recipient_email=data.recipient_email, subject=subject, body=body)

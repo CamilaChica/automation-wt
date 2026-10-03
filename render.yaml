@@ -49,7 +49,7 @@ services:
       - key: OPERATIONAL_POSTGRES_RUNTIME_ENABLED
         value: "false"
       - key: ALLOWED_ORIGINS
-        value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com,http://localhost:5173,http://localhost:3000"
+        value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com"
       - key: GRAPH_TENANT_ID
         sync: false
       - key: GRAPH_CLIENT_ID
@@ -217,7 +217,7 @@ services:
       - key: OPERATIONAL_POSTGRES_RUNTIME_ENABLED
         value: "false"
       - key: ALLOWED_ORIGINS
-        value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com,http://localhost:5173,http://localhost:3000"
+        value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com"
       - key: EMAIL_SEND_ENABLED
         value: "true"
       - key: OPENAI_API_KEY
@@ -284,7 +284,7 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: ALLOWED_ORIGINS
-        value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com,http://localhost:5173,http://localhost:3000"
+        value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com"
       - key: OPERATIONS_DB_PATH
         value: "/var/data/operations.db"
       - key: SUPPLIER_DATABASE_PATH

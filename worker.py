@@ -26,8 +26,8 @@ validate_development_database_target(
 from services.mailbox_service import fetch_inbox_messages, html_to_text
 from services.inbound_email_archive import _received_at, archive_inbound_message
 from services.inbound_message_classifier import classify_inbound_customer_message
+from services.email_intelligence import analyze_communication_sentiment
 from services.communication_service import communication_service
-from services.customer_chase_schedule import chase_task_keys
 from services.supplier_database import supplier_db
 from services.db_service import db_service
 from services.orchestration_service import orchestration_service
@@ -56,6 +56,8 @@ async def queue_due_communication_tasks(engine=None) -> dict[str, int]:
                 try:
                     async with session.begin_nested():
                         result = await communication_service.process_due_task_async(repositories, task)
+                    if result["transmission_status"] == "CANCELLED":
+                        continue
                     queued += result["transmission_status"] == "PENDING"
                 except Exception as exc:
                     await repositories.records.retry_communication_task(
@@ -171,6 +173,37 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
     quote = db_service.get_quote_by_rfq(existing.id) if existing else None
     if quote:
         communication_service.cancel_customer_followups(quote.id)
+
+    communication_sentiment = None
+    if quote:
+        sentiment_source = f"Subject: {message.get('subject', '')}\n\n{body}"
+        sentiment_result = await asyncio.to_thread(
+            analyze_communication_sentiment,
+            sentiment_source,
+        )
+        if sentiment_result:
+            communication_sentiment = sentiment_result.model_dump()
+            message_id = str(
+                message.get("internet_message_id")
+                or message.get("message_id")
+                or f"customer-email-{uuid.uuid4().hex}"
+            )
+            try:
+                operations_store.record_automation_event(
+                    event_type="inbound_communication_sentiment",
+                    entity_type="email",
+                    entity_id=message_id,
+                    status=sentiment_result.label.upper(),
+                    result=json.dumps(communication_sentiment),
+                    idempotency_key=f"communication-sentiment:{message_id}",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "customer_sentiment_persist_failed message_id=%s error=%s",
+                    message_id,
+                    type(exc).__name__,
+                )
+
     classification = classify_inbound_customer_message(message, has_related_quote=bool(quote))
     if classification["category"] == "purchase_order":
         if not existing or not quote:
@@ -188,6 +221,7 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
                 quote_id=quote.id,
                 request_text=body,
                 reply_to=message.get("message_id") or existing.thread_id,
+                communication_sentiment=communication_sentiment,
             )
             db_service.add_audit_log(
                 existing.id,
@@ -195,7 +229,10 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
                 "customer_detail_response",
                 "Sent a customer response using only facts from the approved quote.",
                 "SUCCESS",
-                json.dumps({"communication_id": response.get("communication_id")} ),
+                json.dumps({
+                    "communication_id": response.get("communication_id"),
+                    "communication_sentiment": communication_sentiment,
+                }),
             )
         except Exception as exc:
             _review_inbound_customer_message(message, f"customer_question_needs_review:{type(exc).__name__}", existing.id)
@@ -251,6 +288,9 @@ async def _ingest_existing_sales_message_async(message: dict[str, Any], reposito
                 if payload.get("quote_id") == quote.id
             ]
 
+    if quote is not None:
+        await communication_service.cancel_customer_followups_async(repositories, quote.id)
+
     classification = classify_inbound_customer_message(message, has_related_quote=bool(quote))
     category = classification.get("category")
     if category == "purchase_order":
@@ -260,9 +300,6 @@ async def _ingest_existing_sales_message_async(message: dict[str, Any], reposito
         elif existing.status in {"Pending_PO_Review", "Purchase_Order_Received"}:
             reason = "additional_or_duplicate_po_requires_review"
         else:
-            for task_key in chase_task_keys(quote.id):
-                await repositories.records.cancel_communication_task(task_key)
-
             po_number = classification.get("po_number") or (
                 f"PO-EMAIL-{uuid.uuid5(uuid.NAMESPACE_URL, message_key).hex[:12].upper()}"
             )
@@ -340,8 +377,6 @@ async def _ingest_existing_sales_message_async(message: dict[str, Any], reposito
             reason = "customer_question_has_no_related_quote"
         else:
             try:
-                for task_key in chase_task_keys(quote.id):
-                    await repositories.records.cancel_communication_task(task_key)
                 response = await communication_service.send_customer_information_response_async(
                     repositories,
                     recipient=sender,
@@ -537,6 +572,8 @@ def run() -> None:
             for task in due_tasks:
                 try:
                     result = communication_service.process_due_task(task)
+                    if result["transmission_status"] == "CANCELLED":
+                        continue
                     if result["transmission_status"] == "SENT":
                         if operations_store.storage_engine == "postgresql":
                             operations_store.update_communication_task(task["id"], status="sent")

@@ -150,7 +150,7 @@ class TestSyntaxAndDataAccuracy(SQLiteEmailFixture):
         with patch.object(self.service, "_send", return_value={"transmission_status": "DRY_RUN"}) as send:
             result = self.service.send_customer_quote(
                 recipient=context.recipient_email,
-                customer_name=context.contact_name,
+                customer_name=context.company_name,
                 quote_id="QTE-9921",
                 quote_summary=summary,
             )
@@ -161,6 +161,9 @@ class TestSyntaxAndDataAccuracy(SQLiteEmailFixture):
         self.assertIn(f"${context.unit_price:,.2f}", body)
         self.assertIn(context.certification, body)
         self.assertEqual(result["transmission_status"], "DRY_RUN")
+        self.assertIn(f"Dear {context.company_name}'s team!", body)
+        self.assertIn("Does this quotation meet your needs?", body)
+        self.assertIn("https://portal.wingedtycoons.com/customer-portal", body)
 
     def test_supplier_request_contains_exact_part_and_quantity(self):
         body = self.service._supplier_quote_request("XYZ123", 2)
@@ -226,9 +229,80 @@ class TestToneAndHumanLikeness(SQLiteEmailFixture):
         words = re.findall(r"\b\w+[\w'-]*\b", body)
 
         self.assertLess(len(words), 150)
-        self.assertRegex(body, r"Dear Maria Buyer,")
+        self.assertRegex(body, r"Dear Maria Buyer's team!")
+        self.assertIn("Does this quotation meet your needs?", body)
+        self.assertIn("https://portal.wingedtycoons.com/customer-portal", body)
         self.assertIn("Best regards", body)
         self.assertNotRegex(body, re.compile(r"as an ai language model|here is your email draft|i am pleased to inform you", re.I))
+
+    def test_customer_quote_question_schedules_only_one_final_followup(self):
+        with (
+            patch("services.communication_service.db_service.get_quote", return_value=None),
+            patch("services.communication_service.db_service.get_quote_items", return_value=[]),
+            patch.object(
+                self.service,
+                "_schedule_communication_task",
+                return_value={"task_key": "customer-followup:QTE-9921"},
+            ) as schedule,
+        ):
+            result = self.service.schedule_customer_followup(
+                recipient="buyer@global.example",
+                customer_name="Global Airlines",
+                quote_id="QTE-9921",
+            )
+
+        self.assertEqual(schedule.call_count, 1)
+        self.assertEqual(result["task_key"], "customer-followup:QTE-9921")
+        self.assertIn("Does this quotation meet your needs?", schedule.call_args.kwargs["body"])
+        self.assertIn(
+            "https://portal.wingedtycoons.com/customer-portal",
+            schedule.call_args.kwargs["body"],
+        )
+
+    def test_customer_answer_checks_satisfaction_and_promotes_portal(self):
+        with (
+            patch.object(self.service, "_send", return_value={}) as send,
+            patch(
+                "services.communication_service.db_service.get_quote",
+                return_value=object(),
+            ),
+            patch(
+                "services.communication_service.db_service.get_quote_items",
+                return_value=[],
+            ),
+            patch(
+                "services.communication_service.customer_question_service.answer_from_quote",
+                return_value="Lead time: 5 days",
+            ),
+        ):
+            self.service.send_customer_information_response(
+                recipient="buyer@global.example",
+                customer_name="Global Airlines",
+                quote_id="QTE-9921",
+                request_text="What is the lead time?",
+            )
+
+        body = send.call_args.args[3]
+        self.assertIn("Does this answer your question and provide everything you need?", body)
+        self.assertIn("Dear Global Airlines's team!", body)
+        self.assertIn("https://portal.wingedtycoons.com/customer-portal", body)
+
+    def test_legacy_customer_chase_is_cancelled_instead_of_sent(self):
+        task = {
+            "id": "COM-OLD-CHASE",
+            "task_key": "customer-followup:QTE-OLD",
+            "task_type": "customer_followup",
+            "body": "Hi Buyer,\n\nFollowing up on your quotation.",
+        }
+        with (
+            patch.object(self.service, "_send") as send,
+            patch.object(self.service, "_cancel_communication_task") as cancel,
+        ):
+            result = self.service.process_due_task(task)
+
+        self.assertEqual(result["transmission_status"], "CANCELLED")
+        send.assert_not_called()
+        cancel.assert_called_once_with(task["task_key"])
 
     def test_supplier_discount_request_is_concise_and_natural(self):
         result = self.service.schedule_supplier_discount_request(

@@ -4,7 +4,7 @@ import { Badge } from '../common/Badge';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
 import { useAutomationEvents, useDecideExtractionReview, useExtractionReview, useExtractionReviews, useLlmHealth, useLlmTelemetry, useRFQs, useTraceDecision } from '../../hooks/useApiResources';
-import type { ExtractionReviewResponse } from '../../types/api';
+import type { ExtractionReviewResponse, LlmConnectionTestResponse } from '../../types/api';
 import { 
   ShieldCheck, 
   AlertOctagon, 
@@ -39,6 +39,9 @@ export const TraceVaultView: React.FC = () => {
   const [notice, setNotice] = useState<string | null>(null);
   const [reviewNotice, setReviewNotice] = useState<string | null>(null);
   const [reviewNoticeType, setReviewNoticeType] = useState<'success' | 'error'>('success');
+  const [llmConnectionTest, setLlmConnectionTest] = useState<LlmConnectionTestResponse | null>(null);
+  const [llmConnectionTestError, setLlmConnectionTestError] = useState<string | null>(null);
+  const [llmConnectionTestPending, setLlmConnectionTestPending] = useState(false);
   const [pendingDecision, setPendingDecision] = useState<'certify' | 'reject' | 'rescan' | 'freeze' | null>(null);
   const [reviewDecisionPending, setReviewDecisionPending] = useState<'approve' | 'reject' | null>(null);
   const rfqQuery = useRFQs();
@@ -90,6 +93,20 @@ export const TraceVaultView: React.FC = () => {
   const complianceEvents = automationEvents.filter(event => /compliance|trace/i.test(`${event.event_type} ${event.entity_type}`));
   const flaggedRfqCount = rfqs.filter(rfq => isFailedRfq(rfq)).length;
   const latestComplianceEvent = complianceEvents[0];
+
+  const testLlmConnections = async () => {
+    if (llmConnectionTestPending) return;
+    setLlmConnectionTestPending(true);
+    setLlmConnectionTest(null);
+    setLlmConnectionTestError(null);
+    try {
+      setLlmConnectionTest(await apiService.testLlmConnections());
+    } catch (error) {
+      setLlmConnectionTestError(getApiErrorMessage(error, 'Unable to test live LLM connections.'));
+    } finally {
+      setLlmConnectionTestPending(false);
+    }
+  };
 
   useEffect(() => {
     if (!activeTab && rfqs.length > 0) setActiveTab(rfqs[0].id);
@@ -150,10 +167,24 @@ export const TraceVaultView: React.FC = () => {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 id="llm-operations-title" className="font-display text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100">LLM PROVIDER HEALTH & TELEMETRY</h2>
           <div className="flex gap-2">
+            <button type="button" onClick={() => void testLlmConnections()} disabled={llmConnectionTestPending} className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-aero-blue px-2.5 text-xs font-semibold text-aero-blue hover:bg-blue-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue disabled:cursor-wait disabled:opacity-60 dark:hover:bg-blue-500/10">
+              {llmConnectionTestPending && <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />}
+              {llmConnectionTestPending ? 'Testing live connections...' : 'Test live connections'}
+            </button>
             <button type="button" onClick={() => void llmHealthQuery.refetch()} className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-slate-300 px-2.5 text-xs font-semibold hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:hover:bg-slate-800">Refresh health</button>
             <button type="button" onClick={() => void llmTelemetryQuery.refetch()} className="inline-flex min-h-11 items-center gap-1.5 rounded-md border border-slate-300 px-2.5 text-xs font-semibold hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue dark:border-slate-700 dark:hover:bg-slate-800">Refresh telemetry</button>
           </div>
         </div>
+        <p className="text-xs text-slate-500">Sends one short test prompt to each configured provider. Provider usage charges may apply.</p>
+        {llmConnectionTestError && <div role="alert" className="rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200">{llmConnectionTestError}</div>}
+        {llmConnectionTest && <div role="status" aria-live="polite" className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {llmConnectionTest.results.map(result => <div key={result.provider} className="rounded-md border border-slate-200 p-3 text-xs dark:border-slate-800">
+            <p className="font-bold capitalize">{result.provider}: <span className={result.status === 'connected' ? 'text-emerald-700 dark:text-emerald-300' : result.status === 'failed' ? 'text-red-700 dark:text-red-300' : 'text-slate-500'}>{result.status === 'connected' ? 'Connected' : result.status === 'failed' ? 'Failed' : 'Not configured'}</span></p>
+            {result.model && <p className="mt-1 text-slate-600 dark:text-slate-400">Model: {result.model}</p>}
+            {result.latency_ms !== undefined && <p className="mt-1 text-slate-600 dark:text-slate-400">Response time: {result.latency_ms.toLocaleString()} ms</p>}
+            {result.message && <p className="mt-1 text-slate-600 dark:text-slate-400">{result.message}</p>}
+          </div>)}
+        </div>}
         {llmHealthQuery.error && <div role="alert" className="rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200">{llmHealthQuery.error.message}</div>}
         {llmHealthQuery.isLoading && <p role="status" className="text-xs text-slate-500">Loading provider health...</p>}
         {llmHealthQuery.data && <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">

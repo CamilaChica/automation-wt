@@ -75,7 +75,11 @@ export const voiceService = {
     return apiService.getVoiceDashboard<VoiceDashboard>();
   },
 
-  async executeTool(name: string, arguments_: Record<string, unknown>): Promise<unknown> {
-    return apiService.executeVoiceTool(name, arguments_);
+  async executeTool(
+    name: string,
+    arguments_: Record<string, unknown>,
+    humanConfirmed = false,
+  ): Promise<unknown> {
+    return apiService.executeVoiceTool(name, arguments_, humanConfirmed);
   },
 };

@@ -326,7 +326,7 @@ class OrchestrationService:
                     raise ReviewDecisionConflict("The linked RFQ is not waiting for extraction review.")
                 db_service.update_rfq_customer(
                     rfq.id,
-                    extraction.customer_name or extraction.customer_company or rfq.customer_name,
+                    extraction.customer_company or extraction.customer_name or rfq.customer_name,
                     extraction.customer_email or rfq.customer_email,
                 )
                 db_service.replace_rfq_items(rfq.id, [{
@@ -422,7 +422,13 @@ class OrchestrationService:
                 "raw_text": rfq.raw_text,
                 "customer_name": rfq.customer_name,
                 "customer_email": rfq.customer_email,
+                "communication_sentiment": pipeline_state.get("communication_sentiment"),
             })
+            if isinstance(res.data, dict) and res.data.get("communication_sentiment"):
+                pipeline_state = self._save_pipeline_state(
+                    rfq_id,
+                    communication_sentiment=res.data["communication_sentiment"],
+                )
             
             if not res.success:
                 intake_data = res.data or {}
@@ -435,7 +441,7 @@ class OrchestrationService:
                 if requires_internal_review:
                     db_service.update_rfq_customer(
                         rfq_id,
-                        intake_data.get("customer_name") or intake_data.get("company"),
+                        intake_data.get("company") or intake_data.get("customer_name"),
                         intake_data.get("customer_email"),
                     )
                     for item in intake_data.get("items", []):
@@ -479,7 +485,7 @@ class OrchestrationService:
             items_data = res.data.get("items", [])
             db_service.update_rfq_customer(
                 rfq_id,
-                res.data.get("customer_name") or res.data.get("company"),
+                res.data.get("company") or res.data.get("customer_name"),
                 res.data.get("customer_email"),
             )
             for item in items_data:
@@ -1004,6 +1010,8 @@ class OrchestrationService:
         return await self.comm_agent.execute({
             "customer_email": rfq.customer_email,
             "customer_name": rfq.customer_name,
+            "company_name": rfq.customer_name,
+            "communication_sentiment": self._load_pipeline_state(rfq.id).get("communication_sentiment"),
             "quote_details": {
                 "quote_id": quote.id,
                 "subtotal": quote.subtotal,
@@ -1119,6 +1127,8 @@ class OrchestrationService:
         draft_result = await self.comm_agent.execute({
             "customer_email": rfq.customer_email,
             "customer_name": rfq.customer_name,
+            "company_name": rfq.customer_name,
+            "communication_sentiment": self._load_pipeline_state(rfq.id).get("communication_sentiment"),
             "quote_details": quote_details,
             "reply_to": rfq.thread_id,
         }, context={"draft_only": True})
@@ -1237,6 +1247,8 @@ class OrchestrationService:
         comm_res = await self.comm_agent.execute({
             "customer_email": rfq.customer_email,
             "customer_name": rfq.customer_name,
+            "company_name": rfq.customer_name,
+            "communication_sentiment": self._load_pipeline_state(rfq.id).get("communication_sentiment"),
             "quote_details": {
                 "quote_id": quote_id,
                 "subtotal": quote.subtotal,

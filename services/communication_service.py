@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from services.db_service import db_service
 from services.customer_question_service import CustomerQuestionService
-from services.customer_chase_schedule import chase_days, chase_task_keys
+from services.customer_chase_schedule import chase_task_keys, final_chase_day
 from services.email_context import safe_display_text
 from services.email_templates import (
     CustomerFollowupData,
@@ -24,6 +24,8 @@ from services.email_templates import (
     SupplierVerificationData,
     customer_followup as compose_customer_followup,
     customer_quote as compose_customer_quote,
+    enforce_customer_email_policy,
+    customer_portal_url,
     supplier_discount_request as compose_supplier_discount_request,
     supplier_rfq as compose_supplier_rfq,
     supplier_verification as compose_supplier_verification,
@@ -471,27 +473,31 @@ class CommunicationService:
             "outbox_id": queued["id"],
         }
 
-    def send_shipment_tracking_link(self, recipient: str, shipment_id: str, public_token: str) -> Dict[str, Any]:
-        subject, body = self._shipment_tracking_content(shipment_id, public_token)
+    def send_shipment_tracking_link(
+        self, recipient: str, shipment_id: str, public_token: str, company_name: str
+    ) -> Dict[str, Any]:
+        subject, body = self._shipment_tracking_content(shipment_id, public_token, company_name)
         return self._send("sales", recipient, subject, body, reply_to=None)
 
-    def _shipment_tracking_content(self, shipment_id: str, public_token: str) -> tuple[str, str]:
+    def _shipment_tracking_content(
+        self, shipment_id: str, public_token: str, company_name: str
+    ) -> tuple[str, str]:
         portal_url = os.getenv("PUBLIC_APP_URL", "http://localhost:3000")
         tracking_url = f"{portal_url.rstrip('/')}/track/{public_token}"
-        body = (
+        body = enforce_customer_email_policy((
             "Hello,\n\n"
             f"Your Winged Tycoons shipment {shipment_id} is now being prepared. "
             "You can follow its status using this private tracking link:\n\n"
             f"{tracking_url}\n\n"
             "The tracking page will show carrier updates, latest location, and estimated delivery when available.\n\n"
             "Kind regards,\nWinged Tycoons Logistics Team"
-        )
+        ), company_name)
         return f"Shipment tracking available - {shipment_id}", body
 
     async def send_shipment_tracking_link_async(
-        self, repositories, recipient: str, shipment_id: str, public_token: str
+        self, repositories, recipient: str, shipment_id: str, public_token: str, company_name: str
     ) -> Dict[str, Any]:
-        subject, body = self._shipment_tracking_content(shipment_id, public_token)
+        subject, body = self._shipment_tracking_content(shipment_id, public_token, company_name)
         if not self._is_valid_email(recipient):
             raise ValueError("Recipient email is invalid. Email dispatch aborted.")
         deduplication_key = hashlib.sha256(
@@ -622,6 +628,7 @@ class CommunicationService:
         if quote_details and first_item:
             template = compose_customer_quote(CustomerQuoteData(
                 contact_name=safe_display_text(customer_name),
+                company_name=safe_display_text(customer_name),
                 recipient_email=recipient,
                 quote_number=quote_id,
                 part_number=first_item.part_number,
@@ -649,6 +656,11 @@ class CommunicationService:
             body = body_override.strip()
             if not body:
                 raise ValueError("Generated customer email body is empty. Email dispatch aborted.")
+        body = enforce_customer_email_policy(
+            body,
+            customer_name,
+            satisfaction_question="Does this quotation meet your needs?",
+        )
         if operations_store.storage_engine == "postgresql" and quote_details:
             with operations_store.transaction():
                 result = self._send(
@@ -736,21 +748,20 @@ class CommunicationService:
             recipient_email=recipient,
             part_number=part_number,
             quote_number=quote_id,
+            company_name=safe_display_text(customer_name),
         ))
-        scheduled = []
-        for index, days in enumerate(chase_days(), start=1):
-            due = _next_customer_business_window(local_now + timedelta(days=days))
-            scheduled.append(await repositories.records.schedule_communication_task(
-                task_key=chase_task_keys(quote_id)[index - 1],
-                task_type="customer_followup",
-                mailbox="sales",
-                recipient=recipient,
-                subject=template.subject,
-                body=template.body,
-                due_at=due.astimezone(timezone.utc),
-                reply_to=reply_to,
-            ))
-        return scheduled
+        due = _next_customer_business_window(local_now + timedelta(days=final_chase_day()))
+        task = await repositories.records.schedule_communication_task(
+            task_key=chase_task_keys(quote_id)[0],
+            task_type="customer_followup",
+            mailbox="sales",
+            recipient=recipient,
+            subject=template.subject,
+            body=template.body,
+            due_at=due.astimezone(timezone.utc),
+            reply_to=reply_to,
+        )
+        return [task]
 
     def send_rfq_acknowledgement(
         self,
@@ -769,7 +780,9 @@ class CommunicationService:
         lowered = recipient.lower()
         if "partsbase" in lowered or lowered.endswith("@wingedtycoons.com"):
             return None
-        name = safe_display_text(customer_name or "") or "there"
+        name = safe_display_text(customer_name or "", fallback="")
+        if not name:
+            raise ValueError("Customer company name is required before acknowledging an RFQ.")
         lines: List[str] = []
         to_confirm: List[str] = []
         seen: set[str] = set()
@@ -798,7 +811,7 @@ class CommunicationService:
                 + "\n".join(f"  - {entry}" for entry in dict.fromkeys(to_confirm))
                 + "\n\nWe are already working on your quote while you reply, so nothing is on hold.\n\n"
             )
-        body = (
+        body = enforce_customer_email_policy((
             f"Hello {name},\n\n"
             f"Thank you for your request for quote. We have received it under reference {rfq_id}, "
             "and this is what we understood:\n\n"
@@ -809,7 +822,7 @@ class CommunicationService:
             + confirm_text
             + "Just reply to this email with any changes or details.\n\n"
             "Best regards,\nWinged Tycoons Sales Team"
-        )
+        ), name)
         return self._send(
             "sales",
             recipient,
@@ -835,16 +848,18 @@ class CommunicationService:
         lowered = recipient.lower()
         if "partsbase" in lowered or lowered.endswith("@wingedtycoons.com"):
             return None
-        name = safe_display_text(customer_name or "") or "there"
+        name = safe_display_text(customer_name or "", fallback="")
+        if not name:
+            raise ValueError("Customer company name is required before sending an RFQ update.")
         parts = [safe_display_text(str(p), fallback="").strip() for p in part_numbers]
         parts = [p for p in dict.fromkeys(parts) if p]
         part_text = ", ".join(f"P/N {p}" for p in parts) if parts else "the requested part"
-        body = (
+        body = enforce_customer_email_policy((
             f"Hello {name},\n\n"
             f"Thank you for your request for quote {rfq_id} for {part_text}.\n\n"
             "We weren't able to source this part right now; we'll let you know if it becomes available.\n\n"
             "Best regards,\nWinged Tycoons Sales Team"
-        )
+        ), name)
         return self._send(
             "sales",
             recipient,
@@ -863,6 +878,7 @@ class CommunicationService:
         quote_id: str,
         request_text: str,
         reply_to: Optional[str] = None,
+        communication_sentiment: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """Reply in-thread to a customer asking for quote supporting details."""
         quote = db_service.get_quote(quote_id)
@@ -872,12 +888,19 @@ class CommunicationService:
         grounded_answer = customer_question_service.answer_from_quote(request_text, quote, items)
         if not grounded_answer:
             raise ValueError("The customer question could not be answered from approved quote data.")
-        body = (
+        sentiment_label = self._sentiment_label(communication_sentiment)
+        tone_acknowledgement = {
+            "positive": "Thank you for your kind message.",
+            "negative": "Thank you for sharing your concern. We appreciate the opportunity to clarify.",
+            "mixed": "Thank you for the context. We will keep the details below clear and specific.",
+            "neutral": "Thank you for your question.",
+        }[sentiment_label]
+        body = enforce_customer_email_policy((
             f"Dear {safe_display_text(customer_name)},\n\n"
-            f"Thank you for your question regarding quotation {quote_id}. The approved quote records:\n\n"
+            f"{tone_acknowledgement} Regarding quotation {quote_id}, the approved quote records:\n\n"
             f"{grounded_answer}\n\n"
             "Kind regards,\nWinged Tycoons Aviation Team"
-        )
+        ), customer_name, satisfaction_question="Does this answer your question and provide everything you need?")
         return self._send(
             "sales",
             recipient,
@@ -897,18 +920,26 @@ class CommunicationService:
         quote,
         items: list,
         reply_to: Optional[str] = None,
+        communication_sentiment: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         if not self._is_valid_email(recipient):
             raise ValueError("Customer email is invalid. Email dispatch aborted.")
         grounded_answer = customer_question_service.answer_from_quote(request_text, quote, items)
         if not grounded_answer:
             raise ValueError("The customer question could not be answered from approved quote data.")
-        body = (
+        sentiment_label = self._sentiment_label(communication_sentiment)
+        tone_acknowledgement = {
+            "positive": "Thank you for your kind message.",
+            "negative": "Thank you for sharing your concern. We appreciate the opportunity to clarify.",
+            "mixed": "Thank you for the context. We will keep the details below clear and specific.",
+            "neutral": "Thank you for your question.",
+        }[sentiment_label]
+        body = enforce_customer_email_policy((
             f"Dear {safe_display_text(customer_name)},\n\n"
-            f"Thank you for your question regarding quotation {quote_id}. The approved quote records:\n\n"
+            f"{tone_acknowledgement} Regarding quotation {quote_id}, the approved quote records:\n\n"
             f"{grounded_answer}\n\n"
             "Kind regards,\nWinged Tycoons Aviation Team"
-        )
+        ), customer_name, satisfaction_question="Does this answer your question and provide everything you need?")
         subject = f"Re: Quotation {quote_id} - requested details"
         deduplication_key = hashlib.sha256(
             "\0".join(("sales", recipient.lower(), subject, body, reply_to or "", "", quote_id)).encode("utf-8")
@@ -932,6 +963,19 @@ class CommunicationService:
             "outbox_id": queued["id"],
         }
 
+    @staticmethod
+    def _sentiment_label(sentiment: Dict[str, Any] | None) -> str:
+        if not isinstance(sentiment, dict):
+            return "neutral"
+        label = sentiment.get("label")
+        try:
+            confidence = float(sentiment.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            return "neutral"
+        if label not in {"positive", "neutral", "negative", "mixed"} or confidence < 0.65:
+            return "neutral"
+        return label
+
     def schedule_customer_followup(
         self,
         recipient: str,
@@ -953,32 +997,35 @@ class CommunicationService:
             recipient_email=recipient,
             part_number=part_number,
             quote_number=quote_id,
+            company_name=safe_display_text(customer_name),
         ))
-        scheduled = []
-        for index, days in enumerate(chase_days(), start=1):
-            due = _next_customer_business_window(local_now + timedelta(days=days))
-            scheduled.append(self._schedule_communication_task(
-                task_key=chase_task_keys(quote_id)[index - 1],
-                task_type="customer_followup",
-                mailbox="sales",
-                recipient=recipient,
-                subject=template.subject,
-                body=template.body,
-                due_at=due.astimezone(timezone.utc).isoformat(),
-                reply_to=reply_to,
-            ))
-        return scheduled[0]
+        due = _next_customer_business_window(local_now + timedelta(days=final_chase_day()))
+        return self._schedule_communication_task(
+            task_key=chase_task_keys(quote_id)[0],
+            task_type="customer_followup",
+            mailbox="sales",
+            recipient=recipient,
+            subject=template.subject,
+            body=template.body,
+            due_at=due.astimezone(timezone.utc).isoformat(),
+            reply_to=reply_to,
+        )
 
     def cancel_customer_followups(self, quote_id: str) -> None:
-        for task_key in chase_task_keys(quote_id):
+        for task_key in self._customer_followup_task_keys(quote_id):
             if operations_store.storage_engine == "postgresql":
                 operations_store.cancel_communication_task(task_key)
             else:
                 supplier_db.cancel_communication_task(task_key)
-        if operations_store.storage_engine == "postgresql":
-            operations_store.cancel_communication_task(f"customer-followup:{quote_id}")
-        else:
-            supplier_db.cancel_communication_task(f"customer-followup:{quote_id}")
+
+    @staticmethod
+    def _customer_followup_task_keys(quote_id: str) -> list[str]:
+        keys = chase_task_keys(quote_id)
+        return list(dict.fromkeys([f"customer-followup:{quote_id}", *keys]))
+
+    async def cancel_customer_followups_async(self, repositories, quote_id: str) -> None:
+        for task_key in self._customer_followup_task_keys(quote_id):
+            await repositories.records.cancel_communication_task(task_key)
 
     def schedule_supplier_discount_request(
         self,
@@ -1057,6 +1104,9 @@ class CommunicationService:
         )
 
     def process_due_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        if task.get("task_type") == "customer_followup" and not self._is_current_customer_followup(task):
+            self._cancel_communication_task(str(task["task_key"]))
+            return {"transmission_status": "CANCELLED", "communication_task_id": task.get("id")}
         result = self._send(
             task["mailbox"],
             task["recipient"],
@@ -1068,6 +1118,9 @@ class CommunicationService:
         return result
 
     async def process_due_task_async(self, repositories, task: Dict[str, Any]) -> Dict[str, Any]:
+        if task.get("task_type") == "customer_followup" and not self._is_current_customer_followup(task):
+            await repositories.records.cancel_communication_task(str(task["task_key"]))
+            return {"transmission_status": "CANCELLED", "communication_task_id": task.get("id")}
         mailbox = str(task.get("mailbox") or "sales")
         recipient = str(task.get("recipient") or "")
         if mailbox not in MAILBOXES:
@@ -1097,6 +1150,21 @@ class CommunicationService:
             "communication_id": queued["id"],
             "outbox_id": queued["id"],
         }
+
+    @staticmethod
+    def _is_current_customer_followup(task: Dict[str, Any]) -> bool:
+        body = str(task.get("body") or "").casefold()
+        return (
+            "does this quotation meet your needs?" in body
+            and customer_portal_url().casefold() in body
+        )
+
+    @staticmethod
+    def _cancel_communication_task(task_key: str) -> None:
+        if operations_store.storage_engine == "postgresql":
+            operations_store.cancel_communication_task(task_key)
+        else:
+            supplier_db.cancel_communication_task(task_key)
 
     def send_manual_message(self, *, mailbox: str, recipient: str, subject: str, body: str, reply_to: str | None = None) -> Dict[str, Any]:
         if mailbox not in MAILBOXES:

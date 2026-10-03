@@ -23,3 +23,8 @@ def chase_task_keys(quote_id: str) -> list[str]:
         f"customer-followup:{quote_id}" if index == 1 else f"customer-followup:{quote_id}:{index}"
         for index, _day in enumerate(chase_days(), start=1)
     ]
+
+
+def final_chase_day() -> int:
+    """Return the last configured delay for the single customer follow-up."""
+    return max(chase_days())

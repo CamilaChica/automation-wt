@@ -39,7 +39,7 @@ class EmailTemplateAssertions(unittest.TestCase):
     def assert_professional_layout(self, payload, *, max_words: int | None = None):
         self.assertTrue(payload.subject.strip())
         self.assertTrue(payload.body.strip())
-        self.assertRegex(payload.body, r"^(Dear|Hi) .+,\n\n")
+        self.assertRegex(payload.body, r"^(Dear|Hi) .+[!,]\n\n")
         self.assertTrue(
             "Best regards" in payload.body or "Team | Winged Tycoons" in payload.body,
             "Email does not contain an approved professional signature",
@@ -53,6 +53,7 @@ class TestCustomerQuotationTemplate(EmailTemplateAssertions):
     def test_customer_quote_matches_blueprint_and_database_values(self):
         payload = customer_quote(CustomerQuoteData(
             contact_name="Maria Buyer",
+            company_name="Global Airlines",
             recipient_email="buyer@example.com",
             quote_number="QTE-9921",
             part_number="XYZ123",
@@ -74,6 +75,9 @@ class TestCustomerQuotationTemplate(EmailTemplateAssertions):
         self.assertIn("- Unit Price: $4,600.00 USD", payload.body)
         self.assertIn("- Attachments: FAA-8130-3.pdf, spec-sheet.pdf", payload.body)
         self.assertIn("- Quote Validity: Valid until 2026-10-15", payload.body)
+        self.assertIn("Dear Global Airlines's team!", payload.body)
+        self.assertIn("Does this quotation meet your needs?", payload.body)
+        self.assertIn("https://portal.wingedtycoons.com/customer-portal", payload.body)
         self.assert_professional_layout(payload, max_words=150)
 
 
@@ -147,7 +151,8 @@ class TestCustomerFollowupTemplate(EmailTemplateAssertions):
         self.assertEqual(payload.message_type, "CUSTOMER_FOLLOWUP")
         self.assertEqual(payload.subject, "Following up on Quote QTE-9921 - PN XYZ123")
         self.assertLess(len(re.findall(r"\b\w+[\w'-]*\b", payload.body)), 80)
-        self.assertIn("Please let us know", payload.body)
+        self.assertIn("Does this quotation meet your needs?", payload.body)
+        self.assertIn("https://portal.wingedtycoons.com/customer-portal", payload.body)
         self.assertNotRegex(payload.body, re.compile(r"buy now|act immediately|last chance", re.I))
         self.assert_professional_layout(payload, max_words=80)
 

@@ -44,7 +44,11 @@ from typing import Dict, Any, List, Optional
 
 from agents.base_agent import BaseAgent, AgentMetadata, AgentResponse, EscalationRule
 from models.db_models import RFQIntakeOutput
-from services.email_intelligence import extract_email_intelligence, is_valid_extracted_part_number
+from services.email_intelligence import (
+    analyze_communication_sentiment,
+    extract_email_intelligence,
+    is_valid_extracted_part_number,
+)
 from services.llm_provider import LLMRouter
 from services.operations_store import operations_store
 from services.agents.prompts import RFQ_INTAKE_PROMPT
@@ -546,6 +550,17 @@ class RFQIntakeAgent(BaseAgent):
         except Exception as exc:
             logger.warning("rfq_llm_extraction_fallback error=%s", type(exc).__name__)
 
+        communication_sentiment = inputs.get("communication_sentiment")
+        if not isinstance(communication_sentiment, dict):
+            sentiment_result = await asyncio.to_thread(
+                analyze_communication_sentiment,
+                raw_text,
+                router=self.llm_router,
+            )
+            communication_sentiment = (
+                sentiment_result.model_dump() if sentiment_result else None
+            )
+
         # ── 2. Priority ─────────────────────────────────────────────────
         # Computed before any early return so held responses carry it too.
         priority = _determine_priority(aog_status, raw_text)
@@ -573,6 +588,7 @@ class RFQIntakeAgent(BaseAgent):
                     "priority": priority,
                     "AOG_status": aog_status,
                     "certification_requirements": certifications,
+                    "communication_sentiment": communication_sentiment,
                 },
                 error_message="PartsBase RFQ held: live LLM extraction was unavailable; no outbound supplier email was sent.",
                 escalation_triggered=self.metadata.escalation_rules[0],
@@ -663,6 +679,7 @@ class RFQIntakeAgent(BaseAgent):
         payload["llm_extraction_used"] = llm_extraction_used
         payload["pending_human_review"] = pending_human_review
         payload["extraction_telemetry"] = extraction_telemetry
+        payload["communication_sentiment"] = communication_sentiment
         payload["customer_email"] = customer_email  # legacy key
         payload["items"] = items                    # legacy key
         if pending_human_review and extraction_telemetry.get("review_queue_id"):

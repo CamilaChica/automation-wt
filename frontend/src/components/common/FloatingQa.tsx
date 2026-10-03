@@ -4,7 +4,18 @@ import { CustomerLanguage } from '../../i18n/customerPortal';
 
 type Audience = 'client' | 'internal';
 type QaEntry = { question: string; answer: string };
+type QaResource = { label: string; url: string };
 type ClientQaCopy = { button: string; title: string; intro: string; entries: QaEntry[] };
+
+const qaResources: Record<Audience, QaResource[]> = {
+  client: [
+    { label: 'AI/ML Engineers video', url: 'https://youtu.be/Hz9QMmeJgDc' },
+    { label: 'Clients video', url: 'https://youtu.be/5oX_NpIHq8A' },
+  ],
+  internal: [
+    { label: 'Internal teams video', url: 'https://youtu.be/_obWUFGfTOA' },
+  ],
+};
 
 const clientQa: Record<CustomerLanguage, ClientQaCopy> = {
   en: { button: 'Customer Q&A', title: 'Customer questions', intro: 'Quick answers about parts, requests, and orders.', entries: [
@@ -154,6 +165,23 @@ export const FloatingQa: React.FC<FloatingQaProps> = ({ audience, language = 'en
                 <p className="pb-3 text-sm leading-6 text-slate-600">{entry.answer}</p>
               </details>
             ))}
+            <section aria-labelledby={`${audience}-qa-resources`} className="pt-3">
+              <h3 id={`${audience}-qa-resources`} className="text-sm font-bold text-slate-900">Video resources</h3>
+              <ul className="mt-2 space-y-2">
+                {qaResources[audience].map(resource => (
+                  <li key={resource.url}>
+                    <a
+                      href={resource.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm font-semibold text-cyan-800 underline decoration-cyan-300 underline-offset-2 hover:text-cyan-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-600"
+                    >
+                      {resource.label}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </section>
           </div>
         </section>
       )}

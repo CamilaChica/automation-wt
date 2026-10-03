@@ -177,6 +177,16 @@ export interface LlmHealthResponse {
   gemini_configured: boolean;
   fallback_enabled: boolean;
 }
+export interface LlmConnectionTestResult {
+  provider: 'openai' | 'anthropic' | 'gemini';
+  status: 'connected' | 'failed' | 'not_configured';
+  model: string | null;
+  message?: string;
+  latency_ms?: number;
+}
+export interface LlmConnectionTestResponse {
+  results: LlmConnectionTestResult[];
+}
 export interface LlmTelemetryRecord {
   id: string;
   task: string;

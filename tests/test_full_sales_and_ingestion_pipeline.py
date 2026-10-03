@@ -257,6 +257,8 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
         )
 
         self.assertEqual(followup["task_key"], "customer-followup:QTE-123456")
+        self.assertIn("Does this quotation meet your needs?", followup["body"])
+        self.assertIn("https://portal.wingedtycoons.com/customer-portal", followup["body"])
         self.assertEqual(discount["task_key"], "supplier-discount:EMAIL-123:1")
         tasks = supplier_db.list_due_communication_tasks("9999-12-31T00:00:00+00:00")
         task_types = {task["task_type"] for task in tasks}

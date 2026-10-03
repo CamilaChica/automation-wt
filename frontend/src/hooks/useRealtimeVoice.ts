@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { voiceLanguages, voiceService, VoiceLanguage } from '../services/voice';
 
-export type VoiceCallStatus = 'Idle' | 'Connecting' | 'Connected' | 'Checking Inventory' | 'Escalated';
+export type VoiceCallStatus = 'Idle' | 'Connecting' | 'Connected' | 'Checking Inventory' | 'Awaiting Confirmation' | 'Escalated';
 export type VoiceTranscriptEntry = { id: string; speaker: 'Customer' | 'Representative'; text: string; time: string };
+export type PendingVoiceToolConfirmation = {
+  callId: string;
+  toolName: string;
+  arguments: Record<string, unknown>;
+  generation: number;
+};
 
 interface UseRealtimeVoiceOptions {
   onEscalated?: () => void;
@@ -14,6 +20,7 @@ export function useRealtimeVoice({ onEscalated }: UseRealtimeVoiceOptions = {}) 
   const [micLevel, setMicLevel] = useState(0);
   const [transcript, setTranscript] = useState<VoiceTranscriptEntry[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
+  const [pendingToolConfirmation, setPendingToolConfirmation] = useState<PendingVoiceToolConfirmation | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const channelRef = useRef<RTCDataChannel | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -29,6 +36,7 @@ export function useRealtimeVoice({ onEscalated }: UseRealtimeVoiceOptions = {}) 
 
   const releaseCallResources = () => {
     generationRef.current += 1;
+    setPendingToolConfirmation(null);
     if (animationFrameRef.current !== null) cancelAnimationFrame(animationFrameRef.current);
     animationFrameRef.current = null;
     channelRef.current?.close();
@@ -64,6 +72,44 @@ export function useRealtimeVoice({ onEscalated }: UseRealtimeVoiceOptions = {}) 
     }].slice(-80));
   };
 
+  const sendToolOutput = (callId: string, output: unknown) => {
+    const channel = channelRef.current;
+    if (channel?.readyState !== 'open') return;
+    channel.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(output) },
+    }));
+    channel.send(JSON.stringify({ type: 'response.create' }));
+  };
+
+  const executeVoiceTool = async (
+    toolName: string,
+    args: Record<string, unknown>,
+    callId: string,
+    generation: number,
+    humanConfirmed = false,
+  ) => {
+    try {
+      const result = await voiceService.executeTool(toolName, args, humanConfirmed);
+      if (generation !== generationRef.current) return;
+      const requiresReview = Boolean((result as { requires_review?: boolean })?.requires_review);
+      escalatedRef.current = requiresReview;
+      if (requiresReview) {
+        setCallStatus('Escalated');
+        onEscalatedRef.current?.();
+      } else {
+        setCallStatus('Connected');
+      }
+      sendToolOutput(callId, result);
+    } catch {
+      if (generation !== generationRef.current) return;
+      escalatedRef.current = true;
+      setCallStatus('Escalated');
+      setErrorMessage('The operations lookup failed. Your request was not confirmed.');
+      sendToolOutput(callId, { error: 'Lookup unavailable. Tell the customer an operator will follow up.' });
+    }
+  };
+
   const handleRealtimeEvent = async (eventData: string, generation: number) => {
     let event: Record<string, any>;
     try {
@@ -82,9 +128,14 @@ export function useRealtimeVoice({ onEscalated }: UseRealtimeVoiceOptions = {}) 
       const toolName = String(event.item.name || '');
       const callId = String(event.item.call_id || '');
       if (!['check_inventory_availability', 'get_order_status', 'log_customer_concern'].includes(toolName) || !callId) return;
-      setCallStatus(toolName === 'log_customer_concern' ? 'Escalated' : 'Checking Inventory');
+      setCallStatus(toolName === 'log_customer_concern' ? 'Awaiting Confirmation' : 'Checking Inventory');
       try {
         const args = JSON.parse(event.item.arguments || '{}') as Record<string, unknown>;
+        if (toolName === 'log_customer_concern') {
+          escalatedRef.current = true;
+          setPendingToolConfirmation({ callId, toolName, arguments: args, generation });
+          return;
+        }
         const result = await voiceService.executeTool(toolName, args);
         if (generation !== generationRef.current) return;
         const requiresReview = Boolean((result as { requires_review?: boolean })?.requires_review);
@@ -95,26 +146,12 @@ export function useRealtimeVoice({ onEscalated }: UseRealtimeVoiceOptions = {}) 
         } else {
           setCallStatus('Connected');
         }
-        const channel = channelRef.current;
-        if (channel?.readyState === 'open') {
-          channel.send(JSON.stringify({
-            type: 'conversation.item.create',
-            item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(result) },
-          }));
-          channel.send(JSON.stringify({ type: 'response.create' }));
-        }
+        sendToolOutput(callId, result);
       } catch {
         escalatedRef.current = true;
         setCallStatus('Escalated');
         setErrorMessage('The operations lookup failed. Your request was not confirmed.');
-        const channel = channelRef.current;
-        if (channel?.readyState === 'open') {
-          channel.send(JSON.stringify({
-            type: 'conversation.item.create',
-            item: { type: 'function_call_output', call_id: callId, output: JSON.stringify({ error: 'Lookup unavailable. Tell the customer an operator will follow up.' }) },
-          }));
-          channel.send(JSON.stringify({ type: 'response.create' }));
-        }
+        sendToolOutput(callId, { error: 'Lookup unavailable. Tell the customer an operator will follow up.' });
       }
     } else if (event.type === 'response.done' && !escalatedRef.current) {
       setCallStatus('Connected');
@@ -131,6 +168,7 @@ export function useRealtimeVoice({ onEscalated }: UseRealtimeVoiceOptions = {}) 
     const generation = ++generationRef.current;
     setErrorMessage('');
     setTranscript([]);
+    setPendingToolConfirmation(null);
     escalatedRef.current = false;
     setCallStatus('Connecting');
     setIsConnecting(true);
@@ -226,5 +264,41 @@ export function useRealtimeVoice({ onEscalated }: UseRealtimeVoiceOptions = {}) 
     setIsConnecting(false);
   };
 
-  return { callStatus, isConnecting, micLevel, transcript, errorMessage, setErrorMessage, remoteAudioRef, startCall, endCall };
+  const confirmPendingTool = () => {
+    const pending = pendingToolConfirmation;
+    if (!pending) return;
+    setPendingToolConfirmation(null);
+    setCallStatus('Escalated');
+    void executeVoiceTool(
+      pending.toolName,
+      pending.arguments,
+      pending.callId,
+      pending.generation,
+      true,
+    );
+  };
+
+  const declinePendingTool = () => {
+    const pending = pendingToolConfirmation;
+    if (!pending) return;
+    setPendingToolConfirmation(null);
+    escalatedRef.current = false;
+    setCallStatus('Connected');
+    sendToolOutput(pending.callId, { logged: false, cancelled: true });
+  };
+
+  return {
+    callStatus,
+    isConnecting,
+    micLevel,
+    transcript,
+    errorMessage,
+    pendingToolConfirmation,
+    confirmPendingTool,
+    declinePendingTool,
+    setErrorMessage,
+    remoteAudioRef,
+    startCall,
+    endCall,
+  };
 }
