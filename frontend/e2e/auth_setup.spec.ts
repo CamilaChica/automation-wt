@@ -36,6 +36,10 @@ test('Authenticated user can access internal mailbox status', async ({ page }) =
       });
       return;
     }
+    if (rejectMailbox && path.endsWith('/auth/session')) {
+      await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ detail: 'Invalid session' }) });
+      return;
+    }
     if (path.endsWith('/internal/mailboxes/health')) {
       mailboxAuthorization = request.headers().authorization;
       mailboxCookie = request.headers().cookie;

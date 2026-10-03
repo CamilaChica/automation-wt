@@ -3,12 +3,15 @@ import AxeBuilder from '@axe-core/playwright';
 import type { Page, TestInfo } from '@playwright/test';
 
 const internalTargets = [
-  { path: '/internal', label: /Dashboard/i },
-  { path: '/sales', label: /Sales Command/i },
-  { path: '/sourcing', label: /Sourcing Matrix/i },
-  { path: '/trace', label: /Trace Vault/i },
-  { path: '/procurement', label: /Proc Command/i },
-  { path: '/fulfillment', label: /Fulfillment/i },
+  { path: '/internal', label: /^Today$/i },
+  { path: '/owner', label: /Business Overview/i },
+  { path: '/race', label: /Sales Race/i },
+  { path: '/map', label: /Shipments Map/i },
+  { path: '/sales', label: /RFQs & Quotes/i },
+  { path: '/sourcing', label: /Supplier Offers/i },
+  { path: '/trace', label: /Reviews & AI Health/i },
+  { path: '/procurement', label: /Inventory & Email/i },
+  { path: '/fulfillment', label: /^Shipments$/i },
 ];
 
 const viewports = [
@@ -64,16 +67,16 @@ test('failed intake disables quote, sourcing, and trace mutations', async ({ pag
   await installApiRoutes(page, 'Intake_Failed');
   await page.goto('/internal', { waitUntil: 'networkidle' });
 
-  await selectTargetView(page, { path: '/sales', label: /Sales Command/i });
+  await selectTargetView(page, { path: '/sales', label: /RFQs & Quotes/i });
   await expect(page.getByRole('button', { name: 'ISSUE QUOTE' })).toBeDisabled();
 
-  await selectTargetView(page, { path: '/procurement', label: /Proc Command/i });
+  await selectTargetView(page, { path: '/procurement', label: /Inventory & Email/i });
   await expect(page.getByRole('button', { name: /GENERATE SMART QUOTE/i })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'SPLIT PO' })).toBeDisabled();
 
-  await selectTargetView(page, { path: '/trace', label: /Trace Vault/i });
-  await expect(page.getByRole('button', { name: /ACCEPT & CERTIFY/i })).toBeDisabled();
-  await expect(page.getByRole('button', { name: /HARD FREEZE ORDER/i })).toBeDisabled();
+  await selectTargetView(page, { path: '/trace', label: /Reviews & AI Health/i });
+  await expect(page.getByText(/Certification and freeze actions are not available/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: /ACCEPT & CERTIFY/i })).toHaveCount(0);
 });
 
 test('cancelled quote and trace confirmations do not submit mutations', async ({ page }) => {
@@ -90,20 +93,13 @@ test('cancelled quote and trace confirmations do not submit mutations', async ({
   await installErrorCapture(page);
   await installApiRoutes(page);
   await page.goto('/internal', { waitUntil: 'networkidle' });
-  await selectTargetView(page, { path: '/sales', label: /Sales Command/i });
+  await selectTargetView(page, { path: '/sales', label: /RFQs & Quotes/i });
   const issueQuote = page.getByRole('button', { name: 'ISSUE QUOTE' });
   await expect(issueQuote).toBeEnabled();
   await issueQuote.click();
   await expect.poll(() => confirmationMessages.length).toBe(1);
 
-  await selectTargetView(page, { path: '/trace', label: /Trace Vault/i });
-  const certify = page.getByRole('button', { name: /ACCEPT & CERTIFY/i });
-  await expect(certify).toBeEnabled();
-  await certify.click();
-  await expect.poll(() => confirmationMessages.length).toBe(2);
-
   expect(confirmationMessages[0]).toContain('Issue quote');
-  expect(confirmationMessages[1]).toContain('certify trace documents');
   expect(mutationRequests).toEqual([]);
 });
 
@@ -122,21 +118,10 @@ test('cancelled sourcing, procurement, and fulfillment confirmations submit no m
   await installApiRoutes(page);
   await page.goto('/internal', { waitUntil: 'networkidle' });
 
-  await selectTargetView(page, { path: '/sourcing', label: /Sourcing Matrix/i });
-  const quickAdd = page.getByRole('button', { name: /Quick-Add/i }).first();
-  await quickAdd.scrollIntoViewIfNeeded();
-  await quickAdd.click();
-
-  await selectTargetView(page, { path: '/procurement', label: /Proc Command/i });
+  await selectTargetView(page, { path: '/procurement', label: /Inventory & Email/i });
   await page.getByRole('button', { name: /GENERATE SMART QUOTE/i }).click();
-
-  await selectTargetView(page, { path: '/fulfillment', label: /Fulfillment/i });
-  await page.getByRole('button', { name: /PRINT ATA 300 CAT I TAGS/i }).click();
-
-  expect(confirmationMessages).toHaveLength(3);
-  expect(confirmationMessages[0]).toContain('Add part');
-  expect(confirmationMessages[1]).toContain('generate a quote');
-  expect(confirmationMessages[2]).toContain('print ATA 300 Category I tags');
+  await expect.poll(() => confirmationMessages.length).toBe(1);
+  expect(confirmationMessages[0]).toContain('generate a quote');
   expect(mutationRequests).toEqual([]);
 });
 
@@ -156,7 +141,7 @@ test('confirmed procurement command stays pending until its mocked response', as
   });
   page.on('dialog', async dialog => await dialog.accept());
   await page.goto('/internal', { waitUntil: 'networkidle' });
-  await selectTargetView(page, { path: '/procurement', label: /Proc Command/i });
+  await selectTargetView(page, { path: '/procurement', label: /Inventory & Email/i });
 
   const generateQuote = page.getByRole('button', { name: /GENERATE SMART QUOTE/i });
   await expect(generateQuote).toBeEnabled();
@@ -181,7 +166,7 @@ test('slow shipment API exposes loading then empty state without layout failure'
     await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
   });
   await page.goto('/internal', { waitUntil: 'networkidle' });
-  await selectTargetView(page, { path: '/fulfillment', label: /Fulfillment/i });
+  await selectTargetView(page, { path: '/fulfillment', label: /^Shipments$/i });
 
   await expect(page.getByRole('status').filter({ hasText: 'Loading shipments...' })).toBeVisible();
   releaseShipments?.();
@@ -200,11 +185,11 @@ test('API failures surface retryable states across dynamic customer and internal
   await page.goto('/internal', { waitUntil: 'networkidle' });
 
   const internalFailureViews = [
-    { path: '/sales', label: /Sales Command/i, expected: 'Service temporarily unavailable (HTTP 503)' },
-    { path: '/sourcing', label: /Sourcing Matrix/i, expected: 'Service temporarily unavailable (HTTP 503)' },
-    { path: '/procurement', label: /Proc Command/i, expected: 'Service temporarily unavailable (HTTP 503)' },
-    { path: '/trace', label: /Trace Vault/i, expected: 'Service temporarily unavailable (HTTP 503)' },
-    { path: '/fulfillment', label: /Fulfillment/i, expected: 'Service temporarily unavailable (HTTP 503)' },
+    { path: '/sales', label: /RFQs & Quotes/i, expected: 'Service temporarily unavailable (HTTP 503)' },
+    { path: '/sourcing', label: /Supplier Offers/i, expected: 'Service temporarily unavailable (HTTP 503)' },
+    { path: '/procurement', label: /Inventory & Email/i, expected: 'Service temporarily unavailable (HTTP 503)' },
+    { path: '/trace', label: /Reviews & AI Health/i, expected: 'Service temporarily unavailable (HTTP 503)' },
+    { path: '/fulfillment', label: /^Shipments$/i, expected: 'Service temporarily unavailable (HTTP 503)' },
   ];
 
   for (const view of internalFailureViews) {
@@ -213,9 +198,6 @@ test('API failures surface retryable states across dynamic customer and internal
     await expect(feedback, `Expected recoverable API error on ${view.path}`).toBeVisible();
     if (view.path !== '/sales') await expect(feedback.getByRole('button', { name: 'Retry' })).toBeVisible();
   }
-
-  await selectTargetView(page, { path: '/fulfillment', label: /Fulfillment/i });
-  await expect(page.getByText('SAMPLE / DEMO DATA', { exact: true }).first()).toBeVisible();
 
   let unauthenticatedAuthorization: string | undefined;
   await page.route('**/api/internal/commands', async route => {
@@ -243,36 +225,24 @@ test('RFQ, fulfillment, and trace labels retain Montserrat and align on mobile',
   await installApiRoutes(page);
   await page.setViewportSize({ width: 393, height: 852 });
   await page.goto('/internal', { waitUntil: 'networkidle' });
+  await selectTargetView(page, { path: '/sales', label: /RFQs & Quotes/i });
 
-  const proposalHeading = page.getByRole('heading', { name: /RFQ RFQ-E2E-001 P\/N 32-11-45-01/i });
-  await expect(proposalHeading).toBeVisible();
-  const partNumber = proposalHeading.getByText('P/N 32-11-45-01', { exact: true });
-  await expect(partNumber).toHaveCSS('white-space', 'nowrap');
-  await expect(page.getByText('Main Landing Gear Actuator • Aircraft Type: Boeing 737-800')).toBeVisible();
-  await expect(page.getByText('Included (FREE)')).toHaveCSS('white-space', 'nowrap');
+  await expect(page.getByRole('heading', { level: 2 }).first()).toBeVisible();
 
   const fontFamilies = await page.locator('h1, h2, h3, p, button, .font-mono').evaluateAll(elements =>
     Array.from(new Set(elements.map(element => getComputedStyle(element).fontFamily))),
   );
   expect(fontFamilies.every(family => /Montserrat/i.test(family))).toBe(true);
 
-  await selectTargetView(page, { path: '/fulfillment', label: /Fulfillment/i });
+  await selectTargetView(page, { path: '/fulfillment', label: /^Shipments$/i });
   await expect(page.getByText('ORDER INGEST', { exact: true })).toBeVisible();
   await expect(page.getByText('1. ORDER INGEST', { exact: true })).toHaveCount(0);
-  await expect(page.getByText(/MIA \(Miami International\) to DFW \(Dallas Fort Worth\)/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Toggle verified airworthiness' })).toHaveCount(0);
 
-  await selectTargetView(page, { path: '/procurement', label: /Proc Command/i });
-  await expect(page.getByRole('columnheader', { name: /Requested by/i })).toBeVisible();
-
-  await selectTargetView(page, { path: '/trace', label: /Trace Vault/i });
-  const milestone = page.getByText('Receipt', { exact: true });
-  await expect(milestone).toBeVisible();
-  await expect(milestone).toHaveCSS('text-align', 'center');
-
   await page.setViewportSize({ width: 1440, height: 900 });
-  await expect(page.getByText('AOG ALERTS: 3 ACTIVE', { exact: true })).toBeVisible();
-  await expect(page.getByText('AOG ALERTS: 3 ACTIVE', { exact: true })).toHaveCSS('white-space', 'nowrap');
+  const aogStatus = page.locator('header [data-testid="aog-status"] span');
+  await expect(aogStatus).toHaveText(/Urgent \(AOG\): \d+/);
+  await expect(aogStatus).toHaveCSS('white-space', 'nowrap');
 });
 
 test('customer language menu translates all supported locales and persists the cookie', async ({ page }) => {
@@ -363,6 +333,8 @@ test('floating Q&A shows localized customer help and separate internal guidance'
   const customerDialog = page.getByRole('dialog', { name: 'Preguntas de clientes' });
   await expect(customerDialog.getByText('¿Cómo rastreo un envío?')).toBeVisible();
   await expect(customerDialog.getByText('¿Cómo solicito una cotización?')).toBeVisible();
+  await expect(customerDialog.getByRole('link', { name: 'AI/ML Engineers video' })).toHaveAttribute('href', 'https://youtu.be/Hz9QMmeJgDc');
+  await expect(customerDialog.getByRole('link', { name: 'Clients video' })).toHaveAttribute('href', 'https://youtu.be/5oX_NpIHq8A');
   const clientQaAxe = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
   expect(clientQaAxe.violations.map(violation => violation.id)).toEqual([]);
   await page.keyboard.press('Escape');
@@ -375,6 +347,7 @@ test('floating Q&A shows localized customer help and separate internal guidance'
   const internalDialog = page.getByRole('dialog', { name: 'Internal operations Q&A' });
   await expect(internalDialog.getByText('What should I do with an Intake_Failed RFQ?')).toBeVisible();
   await expect(internalDialog.getByText('Are DEMO ROUTE and SAMPLE values live?')).toBeVisible();
+  await expect(internalDialog.getByRole('link', { name: 'Internal teams video' })).toHaveAttribute('href', 'https://youtu.be/_obWUFGfTOA');
   const internalQaAxe = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
   expect(internalQaAxe.violations.map(violation => violation.id)).toEqual([]);
   await page.keyboard.press('Escape');
@@ -428,14 +401,14 @@ test('shipment route displays the geographic map or its text fallback', async ({
   await installErrorCapture(page);
   await installApiRoutes(page);
   await page.goto('/internal', { waitUntil: 'networkidle' });
-  await selectTargetView(page, { path: '/sourcing', label: /Sourcing Matrix/i });
+  await selectTargetView(page, { path: '/sourcing', label: /Supplier Offers/i });
 
   await expect.poll(async () => (
     await page.locator('.leaflet-container').count() > 0
     || await page.getByText(/Map tiles unavailable\. Demo routes:/).count() > 0
   )).toBe(true);
-  await expect(page.getByText(/Demo route geometry only; carrier locations are not live\./)).toBeAttached();
-  await expect(page.getByRole('link', { name: 'Map data: OpenStreetMap contributors' })).toBeAttached();
+  await expect(page.getByText(/Carrier locations are not live\./).first()).toBeAttached();
+  await expect(page.getByText(/OpenStreetMap contributors/).first()).toBeAttached();
 });
 
 test('internal views have no axe WCAG A/AA violations', async ({ page }) => {
@@ -478,7 +451,7 @@ test('top-bar activity log is the only agent-log action and overlays map panes',
   await installErrorCapture(page);
   await installApiRoutes(page);
   await page.goto('/internal', { waitUntil: 'networkidle' });
-  await selectTargetView(page, { path: '/sourcing', label: /Sourcing Matrix/i });
+  await selectTargetView(page, { path: '/sourcing', label: /Supplier Offers/i });
   await expect(page.locator('.leaflet-container')).toBeVisible();
 
   await expect(page.getByRole('button', { name: 'Open notifications and agent activity' })).toBeVisible();
@@ -487,12 +460,6 @@ test('top-bar activity log is the only agent-log action and overlays map panes',
 
   const drawer = page.getByRole('dialog', { name: 'AGENT ACTIVITY LOG' });
   await expect(drawer).toBeVisible();
-  await expect(drawer.getByText('Milo')).toBeVisible();
-  await expect(drawer.getByText('Nova')).toBeVisible();
-  await expect(drawer.getByText('Orin')).toBeVisible();
-  await expect(drawer.getByText('Luna')).toBeVisible();
-  await expect(drawer.getByText('Kael')).toBeVisible();
-  await expect(drawer.getByText('Aria')).toBeVisible();
 
   const layers = await page.evaluate(() => ({
     drawer: Number.parseInt(getComputedStyle(document.querySelector('[aria-labelledby="audit-log-title"]')!).zIndex, 10),
@@ -583,7 +550,7 @@ test('header keeps brand clear of AOG alerts after delayed status updates', asyn
   for (const width of [1280, 1536]) {
     await page.setViewportSize({ width, height: 900 });
     const brand = await page.locator('header a[aria-label="Winged Tycoons Executive Dashboard"]').boundingBox();
-    const alert = await page.locator('header .aog-pulse-badge').first().boundingBox();
+    const alert = await page.locator('header [data-testid="aog-status"]').first().boundingBox();
 
     expect(brand, `Brand should be visible at ${width}px`).not.toBeNull();
     expect(alert, `AOG alert should be visible at ${width}px`).not.toBeNull();

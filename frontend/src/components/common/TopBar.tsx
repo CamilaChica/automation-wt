@@ -100,7 +100,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       {/* Center Search & AOG Badge */}
       <div className="hidden xl:flex shrink-0 items-center space-x-4">
         {/* AOG Priority Badge */}
-        <div className={`flex shrink-0 items-center space-x-2 whitespace-nowrap border px-3 py-1 rounded-full font-mono text-[11px] font-semibold ${activeAogCount > 0 ? 'bg-red-50 dark:bg-aog-red/10 border-red-200 dark:border-aog-red/40 text-aog-red aog-pulse-badge' : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'}`}>
+        <div data-testid="aog-status" className={`flex shrink-0 items-center space-x-2 whitespace-nowrap border px-3 py-1 rounded-full font-mono text-[11px] font-semibold ${activeAogCount > 0 ? 'bg-red-50 dark:bg-aog-red/10 border-red-200 dark:border-aog-red/40 text-aog-red aog-pulse-badge' : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'}`}>
           <AlertTriangle className="w-3.5 h-3.5 animate-bounce" />
           <span className="whitespace-nowrap">{rfqQuery.isLoading ? 'Urgent (AOG): …' : rfqQuery.error ? 'Urgent (AOG): —' : `Urgent (AOG): ${activeAogCount}`}</span>
         </div>

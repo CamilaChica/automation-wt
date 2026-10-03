@@ -39,6 +39,7 @@ const InternalApp: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (!authenticated) return undefined;
     let active = true;
     const loadAuditFeed = async () => {
       const rfqs = await apiService.getRFQs();
@@ -87,7 +88,7 @@ const InternalApp: React.FC = () => {
       active = false;
       window.clearInterval(refresh);
     };
-  }, []);
+  }, [authenticated]);
 
   // Sync theme with HTML class
   useEffect(() => {
