@@ -1,10 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import axios from 'axios';
 import { AlertTriangle, CheckCircle2, Inbox, Loader2, Package, RefreshCw, Search, Send } from 'lucide-react';
-import { API_BASE } from '../../services/api';
+import { API_BASE, getApiErrorMessage } from '../../services/api';
 import { ViewMode, RFQ } from '../../types';
 import { useProcessRFQ, useRFQs, useShipments } from '../../hooks/useApiResources';
 import { OperationsControlRoom } from './OperationsControlRoom';
+import { describeRfqProcessingResult, type RfqProcessingNotice } from '../../utils/rfqProcessingResult';
 
 const NEEDS_ACTION = ['PENDING_INTERNAL_REVIEW', 'NEEDS_HUMAN_REVIEW', 'INTAKE_FAILED', 'FAILED', 'PENDING_APPROVAL', 'QUOTE_DISPATCH_PENDING', 'INTAKE'];
 const QUOTED = ['QUOTE_SENT', 'QUOTED', 'NEGOTIATING', 'FOLLOW_UP'];
@@ -42,6 +43,7 @@ export const OperationsHomeView: React.FC<{ onSelectView: (view: ViewMode) => vo
   const shipments = useShipments();
   const processRfq = useProcessRFQ();
   const [message, setMessage] = useState('');
+  const [messageType, setMessageType] = useState<RfqProcessingNotice['type']>('info');
   const [busyId, setBusyId] = useState('');
 
   const all = rfqs.data || [];
@@ -55,14 +57,17 @@ export const OperationsHomeView: React.FC<{ onSelectView: (view: ViewMode) => vo
   const activeShipments = (shipments.data || []).length;
 
   const handleProcess = async (rfq: RFQ) => {
+    if (processRfq.isPending) return;
     setBusyId(rfq.id);
     setMessage('');
     try {
-      await processRfq.mutateAsync(rfq.id);
-      setMessage(`${rfq.id} is being processed. Suppliers and the customer will be contacted automatically.`);
-      void rfqs.refetch();
+      const result = await processRfq.mutateAsync(rfq.id);
+      const notice = describeRfqProcessingResult(rfq.id, result);
+      setMessageType(notice.type);
+      setMessage(notice.message);
     } catch (error) {
-      setMessage(`${rfq.id} could not be processed: ${error instanceof Error ? error.message : 'unknown error'}`);
+      setMessageType('error');
+      setMessage(`${rfq.id} could not be processed: ${getApiErrorMessage(error, 'Unable to process this RFQ.')}`);
     } finally {
       setBusyId('');
     }
@@ -72,6 +77,7 @@ export const OperationsHomeView: React.FC<{ onSelectView: (view: ViewMode) => vo
     const entered = window.prompt('Part numbers to request on PartsBase (up to 20, separated by commas):', rfq.part_number || '');
     if (!entered || !entered.trim()) return;
     setBusyId(`pb-${rfq.id}`);
+    setMessageType('info');
     setMessage(`Requesting quotes on PartsBase for ${rfq.id}…`);
     try {
       const { data: job } = await axios.post(`${API_BASE}/internal/rfqs/${encodeURIComponent(rfq.id)}/partsbase-quote`, { part_numbers: entered });
@@ -86,6 +92,7 @@ export const OperationsHomeView: React.FC<{ onSelectView: (view: ViewMode) => vo
         ? `PartsBase RFQ sent for ${job.part_numbers.join(', ')}. Supplier answers will arrive by email.`
         : `PartsBase request for ${rfq.id} is still running. Check again in a few minutes.`);
     } catch (error) {
+      setMessageType('error');
       const detail = axios.isAxiosError(error) ? error.response?.data?.detail : undefined;
       setMessage(`PartsBase request for ${rfq.id} failed: ${detail || (error instanceof Error ? error.message : 'unknown error')}`);
     } finally {
@@ -133,7 +140,7 @@ export const OperationsHomeView: React.FC<{ onSelectView: (view: ViewMode) => vo
         })}
       </section>
 
-      {message && <div role="status" className="rounded-xl border border-sky-300 bg-sky-50 p-3 text-sm text-sky-900 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200">{message}</div>}
+      {message && <div role={messageType === 'error' ? 'alert' : 'status'} aria-live="polite" className={`rounded-xl border p-3 text-sm ${messageType === 'error' ? 'border-red-300 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200' : 'border-sky-300 bg-sky-50 text-sky-900 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200'}`}>{message}</div>}
 
       <section className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-card-dark">
         <div className="flex items-center gap-2 border-b border-slate-200 p-4 dark:border-slate-800">
@@ -165,7 +172,7 @@ export const OperationsHomeView: React.FC<{ onSelectView: (view: ViewMode) => vo
                   {busyId === `pb-${rfq.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />} PartsBase
                 </button>
                 <button type="button" onClick={() => onSelectView('sales')} className="min-h-11 rounded-xl border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Open</button>
-                <button type="button" disabled={busyId === rfq.id} onClick={() => void handleProcess(rfq)} className="flex min-h-11 items-center gap-2 rounded-xl bg-aero-blue px-4 text-sm font-bold text-white hover:opacity-90 disabled:opacity-60">
+                <button type="button" disabled={processRfq.isPending} aria-busy={busyId === rfq.id} onClick={() => void handleProcess(rfq)} className="flex min-h-11 items-center gap-2 rounded-xl bg-aero-blue px-4 text-sm font-bold text-white hover:opacity-90 disabled:opacity-60">
                   {busyId === rfq.id && <Loader2 className="h-4 w-4 animate-spin" />} Process
                 </button>
               </div>

@@ -17,7 +17,7 @@ import {
   Loader2
 } from 'lucide-react';
 
-export const SupplierSourcingView: React.FC = () => {
+export const SupplierSourcingView: React.FC<{ onOpenReviews?: (rfqId: string) => void }> = ({ onOpenReviews }) => {
   const [selectedPn, setSelectedPn] = useState('');
   const [selectedRfqId, setSelectedRfqId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -176,13 +176,12 @@ export const SupplierSourcingView: React.FC = () => {
               {commandPending === 'add_to_quote' ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> : <PlusCircle className="w-3 h-3" />}
               <span>{commandPending === 'add_to_quote' ? 'ADDING...' : 'ADD TO QUOTE'}</span>
             </button>
-            <button type="button" disabled={actionsBlocked} onClick={() => { setNoticeType('info'); setNotice('Purchase orders are submitted by customers through the portal after quote approval.'); }} className="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold py-2 px-2 rounded-xl text-[10px] border border-slate-200 dark:border-slate-700 disabled:cursor-not-allowed disabled:opacity-50">
-              ISSUE PO
-            </button>
-            <button type="button" onClick={() => setNotice(`Document audit opened for ${selectedPn}.`)} className="bg-amber-50 dark:bg-amber-600/20 hover:bg-amber-100 text-amber-700 dark:text-amber-300 font-bold py-2 px-2 rounded-xl text-[10px] border border-amber-200 dark:border-amber-500/40">
-              DOC AUDIT
+            <button type="button" disabled={!selectedRfq || !onOpenReviews || usingFallbackData} onClick={() => selectedRfq && onOpenReviews?.(selectedRfq.id)} className="col-span-2 bg-amber-50 dark:bg-amber-600/20 hover:bg-amber-100 text-amber-700 dark:text-amber-300 font-semibold py-2 px-2 rounded-xl text-xs focus-visible:ring-2 focus-visible:ring-aero-blue disabled:cursor-not-allowed disabled:opacity-50">
+              Open RFQ Reviews
             </button>
           </div>
+          <p className="text-xs text-slate-500 dark:text-slate-400">Customers submit purchase orders through the customer portal after receiving a quote.</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">Open RFQ Reviews shows review records and trace information. Opening it does not run or complete a document audit.</p>
         </div>
 
         {/* Right Column (3 cols): SUPPLIER PERFORMANCE & RATINGS & INVENTORY CHECK */}

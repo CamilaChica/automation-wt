@@ -30,8 +30,8 @@ const formatReviewValue = (value: unknown): string => {
   }
 };
 
-export const TraceVaultView: React.FC = () => {
-  const [activeTab, setActiveTab] = useState('');
+export const TraceVaultView: React.FC<{ initialRfqId?: string }> = ({ initialRfqId = '' }) => {
+  const [activeTab, setActiveTab] = useState(initialRfqId);
   const [selectedReviewId, setSelectedReviewId] = useState('');
   const [reviewComments, setReviewComments] = useState('');
   const [verificationPassed, setVerificationPassed] = useState(false);
@@ -160,6 +160,7 @@ export const TraceVaultView: React.FC = () => {
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto font-sans text-slate-900 dark:text-slate-100">
+      {activeTab && <p role="status" className="text-sm text-slate-600 dark:text-slate-300">Selected RFQ: <strong>{activeTab}</strong>. Review records and trace information are shown below; opening this workspace does not complete an audit.</p>}
       {loadError && <div role="alert" className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700"><span>{loadError}</span><button type="button" aria-label="Retry loading trace records" onClick={() => void rfqQuery.refetch()} className="font-bold underline focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">Retry</button></div>}
       {notice && <div role="status" aria-live="polite" className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-200">{notice}</div>}
       {usingFallbackData && <FallbackDataBanner />}

@@ -7,17 +7,15 @@ import { OperationsHomeView } from './components/views/OperationsHomeView';
 import { SupplierSourcingView } from './components/views/SupplierSourcingView';
 import { AeroProcurementView } from './components/views/AeroProcurementView';
 import { TraceVaultView } from './components/views/TraceVaultView';
-import { FulfillmentHubView } from './components/views/FulfillmentHubView';
+import { ShipmentsWorkspace } from './components/views/ShipmentsWorkspace';
 import { SalesCommandView } from './components/views/SalesCommandView';
 import { CustomerPortal } from './components/views/CustomerPortal';
 import { LandingPage } from './components/views/LandingPage';
 import { InternalTeamPortal } from './components/views/InternalTeamPortal';
 import { OwnerAnalyticsView } from './components/views/OwnerAnalyticsView';
 import { MySalesView } from './components/views/MySalesView';
-import { SalesRaceView } from './components/views/SalesRaceView';
-import { ShipmentsMapView } from './components/views/ShipmentsMapView';
+import { MyWorkWorkspace, type MyWorkSection } from './components/views/MyWorkWorkspace';
 import { AuthScreen } from './components/common/AuthScreen';
-import { EmployeeProfilePanel } from './components/common/EmployeeProfilePanel';
 import { apiService } from './services/api';
 import { getThemePreference, getViewPreference, setThemePreference, setViewPreference } from './services/preferences';
 
@@ -27,7 +25,8 @@ const InternalApp: React.FC = () => {
   const [theme, setThemeState] = useState<ThemeMode>(getThemePreference('dark'));
   const [isAuditLogOpen, setIsAuditLogOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [isEmployeeProfileOpen, setIsEmployeeProfileOpen] = useState(false);
+  const [myWorkSection, setMyWorkSection] = useState<MyWorkSection>('sales');
+  const [reviewRfqId, setReviewRfqId] = useState('');
   const [auditLogs, setAuditLogs] = useState<AgentAuditLog[]>([]);
   const [auditRfqId, setAuditRfqId] = useState('');
   const [isLiveAuditUnavailable, setIsLiveAuditUnavailable] = useState(false);
@@ -110,6 +109,8 @@ const InternalApp: React.FC = () => {
     });
   };
   const setCurrentView = (view: ViewMode) => {
+    if (view === 'my-sales') setMyWorkSection('sales');
+    if (view === 'sales-race') setMyWorkSection('leaderboard');
     setViewPreference(view);
     setCurrentViewState(view);
   };
@@ -119,23 +120,21 @@ const InternalApp: React.FC = () => {
       case 'customer':
         return <OperationsHomeView onSelectView={setCurrentView} />;
       case 'sourcing':
-        return <SupplierSourcingView />;
+        return <SupplierSourcingView onOpenReviews={rfqId => { setReviewRfqId(rfqId); setCurrentView('trace-vault'); }} />;
       case 'aero-procurement':
         return <AeroProcurementView />;
       case 'trace-vault':
-        return <TraceVaultView />;
+        return <TraceVaultView initialRfqId={reviewRfqId} />;
       case 'fulfillment':
-        return <FulfillmentHubView />;
+      case 'shipments-map':
+        return <ShipmentsWorkspace showMap={currentView === 'shipments-map'} onSelectMap={showMap => setCurrentView(showMap ? 'shipments-map' : 'fulfillment')} />;
       case 'sales':
         return <SalesCommandView />;
       case 'owner-analytics':
         return apiService.hasAnyRole(['ROLE_ADMIN']) ? <OwnerAnalyticsView /> : <MySalesView />;
       case 'my-sales':
-        return <MySalesView />;
       case 'sales-race':
-        return <SalesRaceView />;
-      case 'shipments-map':
-        return <ShipmentsMapView />;
+        return <MyWorkWorkspace section={currentView === 'sales-race' ? 'leaderboard' : myWorkSection} onSelectSection={section => { setCurrentView('my-sales'); setMyWorkSection(section); }} />;
       default:
         return <OperationsHomeView onSelectView={setCurrentView} />;
     }
@@ -164,7 +163,7 @@ const InternalApp: React.FC = () => {
         }}
         onOpenAuditLog={() => setIsAuditLogOpen(true)}
         onOpenSidebar={() => setIsSidebarOpen(true)}
-        onOpenProfile={() => setIsEmployeeProfileOpen(true)}
+        onOpenProfile={() => { setCurrentView('my-sales'); setMyWorkSection('profile'); }}
       />
 
       {/* Main Content Layout (Sidebar + Active View) */}
@@ -174,7 +173,6 @@ const InternalApp: React.FC = () => {
           onSelectView={setCurrentView}
           isMobileOpen={isSidebarOpen}
           onCloseMobile={() => setIsSidebarOpen(false)}
-          onOpenProfile={() => setIsEmployeeProfileOpen(true)}
         />
 
         <main className="min-w-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950/60">
@@ -190,7 +188,6 @@ const InternalApp: React.FC = () => {
         rfqId={auditRfqId || 'Live operations'}
         isLiveAuditUnavailable={isLiveAuditUnavailable}
       />
-      {isEmployeeProfileOpen && <EmployeeProfilePanel onClose={() => setIsEmployeeProfileOpen(false)} />}
     </div>
   );
 };

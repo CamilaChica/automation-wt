@@ -14,6 +14,12 @@ Internal users use it to:
 - approve or reject quote proposals
 - monitor agent activity and audit history
 
+Navigation groups related tools in the same workspace:
+
+- **Shipments** contains **Orders & Tracking** and **Map**. Switching sections does not refresh carrier tracking or send notifications.
+- **My Work** contains **My Sales**, **Hours & Profile**, and **Team Leaderboard**. The header profile shortcut opens **Hours & Profile** in this same workspace, not a separate drawer.
+- In supplier sourcing, **Open RFQ Reviews** opens the selected RFQ's review and trace workspace. It does not claim that an audit has run. Purchase-order submission is a customer-portal workflow, not an **Issue PO** action in sourcing.
+
 ## 2. Where do I start?
 
 Open the internal route in the deployed frontend or run the local app:
@@ -41,6 +47,8 @@ The workflow follows this general path:
 8. Quote sent status
 
 If extraction fails, a compliance check fails, or a workflow dependency is unavailable, the RFQ may remain pending or enter a failure/warning state. Check the actual RFQ detail and audit data; do not infer completion from a dashboard count or sample view.
+
+The **Process** and **Process RFQ** controls display the workflow status returned by the API. Supplier sourcing, review, paused automation, and queued quote dispatch do not confirm that a customer quote was sent. Only `Quote_Sent` confirms email dispatch; it does not verify inbox receipt. Workflow failures are displayed as errors even if the API returns HTTP 200. Processing also refreshes the RFQ and automation-event data.
 
 ## 5. What happens when inventory is insufficient?
 

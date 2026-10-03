@@ -5,12 +5,13 @@ import type { EmployeeProfile, EmployeeWorkHours, EmployeeWorkHoursReport } from
 
 interface EmployeeProfilePanelProps {
   onClose: () => void;
+  embedded?: boolean;
 }
 
 const currentMonth = () => new Date().toISOString().slice(0, 7);
 const formatHours = (seconds: number) => `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
 
-export const EmployeeProfilePanel: React.FC<EmployeeProfilePanelProps> = ({ onClose }) => {
+export const EmployeeProfilePanel: React.FC<EmployeeProfilePanelProps> = ({ onClose, embedded = false }) => {
   const [month, setMonth] = useState(currentMonth);
   const [profile, setProfile] = useState<EmployeeProfile | null>(null);
   const [report, setReport] = useState<EmployeeWorkHours | null>(null);
@@ -24,12 +25,13 @@ export const EmployeeProfilePanel: React.FC<EmployeeProfilePanelProps> = ({ onCl
   const isHr = ['ROLE_ADMIN', 'ROLE_MANAGER'].includes(localStorage.getItem('wt_role') || '');
 
   useEffect(() => {
+    if (embedded) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [onClose]);
+  }, [onClose, embedded]);
 
   useEffect(() => {
     let active = true;
@@ -81,8 +83,8 @@ export const EmployeeProfilePanel: React.FC<EmployeeProfilePanelProps> = ({ onCl
   const dailyEntries = Object.entries(report?.daily_seconds || {}).sort(([left], [right]) => right.localeCompare(left));
 
   return (
-    <div className="fixed inset-0 z-[70] flex justify-end bg-slate-950/55" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-      <section role="dialog" aria-modal="true" aria-labelledby="employee-profile-title" className="flex h-full w-full max-w-xl flex-col border-l border-slate-700 bg-white text-slate-900 shadow-2xl dark:bg-slate-950 dark:text-slate-100">
+    <div className={embedded ? '' : 'fixed inset-0 z-[70] flex justify-end bg-slate-950/55'} onMouseDown={event => { if (!embedded && event.target === event.currentTarget) onClose(); }}>
+      <section role={embedded ? 'region' : 'dialog'} aria-modal={embedded ? undefined : true} aria-labelledby="employee-profile-title" className={`flex w-full flex-col bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100 ${embedded ? 'rounded-xl' : 'h-full max-w-xl border-l border-slate-700 shadow-2xl'}`}>
         <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
           <div className="flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-aero-blue dark:bg-blue-950/60"><UserRound className="h-5 w-5" /></span>
@@ -91,7 +93,7 @@ export const EmployeeProfilePanel: React.FC<EmployeeProfilePanelProps> = ({ onCl
               <h2 id="employee-profile-title" className="text-base font-bold">{isBoss ? 'Hey Boss!' : 'Your profile & hours'}</h2>
             </div>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close profile" title="Close profile" className="flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"><X className="h-4 w-4" /></button>
+          {!embedded && <button type="button" onClick={onClose} aria-label="Close profile" title="Close profile" className="flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"><X className="h-4 w-4" /></button>}
         </header>
 
         <div className="flex-1 space-y-6 overflow-y-auto p-5">

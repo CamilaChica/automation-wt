@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { FallbackDataBanner } from '../common/FallbackDataBanner';
 import { isFailedRfq, rfqStatusLabel } from '../../utils/rfqState';
+import { describeRfqProcessingResult, type RfqProcessingNotice } from '../../utils/rfqProcessingResult';
 import { useExecuteInternalCommand, useFreightQuote, useInventoryDirectory, useMailboxInbox, useProcessRFQ, useResetFailedIntake, useRFQs, useSendMailboxMessage, useSetAutomationPause, useSupplierDirectory, useSupplierOffers, useSupplierProfile } from '../../hooks/useApiResources';
 
 export const AeroProcurementView: React.FC = () => {
@@ -46,7 +47,7 @@ export const AeroProcurementView: React.FC = () => {
   const [freightError, setFreightError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [commandPending, setCommandPending] = useState<InternalCommand | null>(null);
-  const [noticeType, setNoticeType] = useState<'success' | 'error'>('success');
+  const [noticeType, setNoticeType] = useState<RfqProcessingNotice['type']>('info');
   const rfqQuery = useRFQs();
   const rfqs = rfqQuery.data || [];
   const loading = rfqQuery.isLoading;
@@ -146,15 +147,9 @@ export const AeroProcurementView: React.FC = () => {
     setNotice(null);
     try {
       const result = await processMutation.mutateAsync(selectedRfq.id);
-      if (!result) return;
-      const errorMessage = typeof result.error === 'string' ? result.error : null;
-      const resultMessage = typeof result.message === 'string'
-        ? result.message
-        : typeof result.status === 'string'
-          ? `RFQ processing returned ${result.status}.`
-          : 'RFQ processing completed.';
-      setNoticeType(errorMessage ? 'error' : 'success');
-      setNotice(errorMessage || resultMessage);
+      const notice = describeRfqProcessingResult(selectedRfq.id, result);
+      setNoticeType(notice.type);
+      setNotice(notice.message);
     } catch (error) {
       setNoticeType('error');
       setNotice(getApiErrorMessage(error, 'Unable to process this RFQ.'));

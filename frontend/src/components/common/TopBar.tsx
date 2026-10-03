@@ -87,7 +87,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <a
           href="/"
           aria-label="Winged Tycoons Executive Dashboard"
-          className="flex shrink-0 items-center space-x-2 bg-slate-100 dark:bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700/80 hover:border-aero-blue transition-colors"
+          className="flex shrink-0 items-center space-x-2 px-2.5 py-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus-visible:ring-2 focus-visible:ring-aero-blue transition-colors"
         >
           <BrandMark compact />
           <span className="hidden font-display font-bold text-sm tracking-wider text-slate-900 dark:text-slate-100 sm:inline">

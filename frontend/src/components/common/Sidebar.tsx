@@ -9,11 +9,8 @@ import {
   Package, 
   TrendingUp, 
   LogOut,
-  Clock3,
   BarChart3,
-  Trophy,
   Wallet,
-  Map as MapIcon,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -21,17 +18,14 @@ interface SidebarProps {
   onSelectView: (view: ViewMode) => void;
   isMobileOpen?: boolean;
   onCloseMobile?: () => void;
-  onOpenProfile?: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView, isMobileOpen = false, onCloseMobile, onOpenProfile }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView, isMobileOpen = false, onCloseMobile }) => {
   const isOwner = apiService.hasAnyRole(['ROLE_ADMIN']);
   const navItems = [
     ...(isOwner ? [{ id: 'owner-analytics' as ViewMode, label: 'Business Overview', icon: BarChart3, badge: null }] : []),
     { id: 'customer' as ViewMode, label: 'Today', icon: LayoutDashboard, badge: null },
-    ...(isOwner ? [] : [{ id: 'my-sales' as ViewMode, label: 'My Sales & Hours', icon: Wallet, badge: null }]),
-    { id: 'sales-race' as ViewMode, label: 'Sales Race', icon: Trophy, badge: null },
-    { id: 'shipments-map' as ViewMode, label: 'Shipments Map', icon: MapIcon, badge: null },
+    { id: 'my-sales' as ViewMode, label: 'My Work', icon: Wallet, badge: null },
     { id: 'sales' as ViewMode, label: 'RFQs & Quotes', icon: TrendingUp, badge: null },
     { id: 'sourcing' as ViewMode, label: 'Supplier Offers', icon: Search, badge: null },
     { id: 'aero-procurement' as ViewMode, label: 'Inventory & Email', icon: FileText, badge: null },
@@ -50,13 +44,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView, isM
         <nav className="space-y-1">
           {navItems.map((item) => {
             const Icon = item.icon;
-            const isActive = currentView === item.id;
+            const isActive = currentView === item.id
+              || (item.id === 'my-sales' && currentView === 'sales-race')
+              || (item.id === 'fulfillment' && currentView === 'shipments-map');
 
             return (
               <button
                 key={item.id}
                 onClick={() => { onSelectView(item.id); onCloseMobile?.(); }}
                 aria-label={item.label}
+                aria-current={isActive ? 'page' : undefined}
                 className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all group ${
                   isActive
                     ? 'bg-aero-blue text-white shadow-md shadow-aero-blue/20 font-bold'
@@ -85,14 +82,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onSelectView, isM
         </nav>
 
         <div className="mt-6 space-y-1 border-t border-slate-200 pt-4 dark:border-slate-800">
-          <button
-            onClick={() => { onOpenProfile?.(); onCloseMobile?.(); }}
-            aria-label="Open work hours and employee profile"
-            className="w-full flex items-center space-x-3 px-3 py-2.5 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded-xl transition-colors"
-          >
-            <Clock3 className="w-4 h-4 text-slate-400" />
-            <span>Work hours &amp; profile</span>
-          </button>
           <button
             onClick={() => {
               void apiService.signOut().finally(() => { window.location.href = window.location.hostname.startsWith('team.') ? '/' : '/team-portal'; });
