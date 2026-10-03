@@ -934,10 +934,12 @@ async def submit_rfq(
     if user["role"] == ROLE_CUSTOMER:
         account_email = str(user["email"]).strip().lower()
         typed_email = (request.customer_email or "").strip().lower()
-        if typed_email and not EMAIL_PATTERN.fullmatch(typed_email):
+        customer_name = (request.customer_name or "").strip()
+        if not customer_name or not typed_email:
+            raise HTTPException(status_code=422, detail="Company name and email are required.")
+        if not EMAIL_PATTERN.fullmatch(typed_email):
             raise HTTPException(status_code=400, detail="Please enter a valid email address.")
-        customer_email = typed_email or account_email
-        customer_name = (request.customer_name or "").strip() or customer_email
+        customer_email = typed_email
         if customer_email != account_email:
             raw_text = f"{raw_text.rstrip()}\n\n{PORTAL_ACCOUNT_MARKER}{account_email}"
     else:

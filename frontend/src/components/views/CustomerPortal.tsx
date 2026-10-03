@@ -90,13 +90,35 @@ export const CustomerPortal: React.FC = () => {
       setNotice(t('agreementRequired'));
       return;
     }
+    if (!customerName.trim() || !customerEmail.trim()) {
+      setNoticeType('error');
+      setNotice('Company name and email are required.');
+      return;
+    }
+    if (!partNumber.trim() && !partsListFile) {
+      setNoticeType('error');
+      setNotice('Enter a part number or upload a parts list.');
+      return;
+    }
     setIsSubmitting(true);
     try {
-      const attachmentIds = partsListFile ? [(await apiService.uploadAttachment(partsListFile)).attachment_id] : [];
+      let attachmentIds: string[] = [];
+      if (partsListFile) {
+        try {
+          attachmentIds = [(await apiService.uploadAttachment(partsListFile)).attachment_id];
+        } catch (error) {
+          setNoticeType('error');
+          setNotice(getApiErrorMessage(error, 'The file could not be uploaded. Please use a CSV or Excel file under 25 MB.'));
+          return;
+        }
+      }
+      const partText = partNumber.trim()
+        ? `Customer request for P/N ${partNumber.trim()}, quantity ${quantity}, condition ${condition || 'any'}.`
+        : `Customer parts list attached (${partsListFile?.name}).${condition ? ` Target condition ${condition}.` : ''}`;
       const response = await createRfqMutation.mutateAsync({
-        raw_text: `Customer request for P/N ${partNumber}, quantity ${quantity}, condition ${condition}. ${details}`,
-        customer_name: customerName,
-        customer_email: customerEmail,
+        raw_text: `${partText} ${details}`.trim(),
+        customer_name: customerName.trim(),
+        customer_email: customerEmail.trim(),
         attachment_ids: attachmentIds,
       });
       if (!response) return;
@@ -265,13 +287,13 @@ export const CustomerPortal: React.FC = () => {
             <h2 className="font-display text-xl font-bold">{t('requestQuote')}</h2>
             <p className="mt-1 text-sm text-slate-700">{t('requestPrompt')}</p>
             <div className="mt-5 space-y-3">
-              <label htmlFor="customer-name" className="sr-only">{t('companyName')}</label>
-              <input id="customer-name" name="customer-name" autoComplete="organization" aria-label={t('companyName')} required value={customerName} onChange={event => setCustomerName(event.target.value)} placeholder="e.g., Global Airlines" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
-              <label htmlFor="customer-email" className="sr-only">{t('workEmail')}</label>
-              <input id="customer-email" name="customer-email" autoComplete="email" aria-label={t('workEmail')} required type="email" value={customerEmail} onChange={event => setCustomerEmail(event.target.value)} placeholder="e.g., buyer@airline.com" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
+              <label htmlFor="customer-name" className="block text-xs font-semibold text-slate-700">{t('companyName')} <span className="text-red-600" aria-hidden="true">*</span></label>
+              <input id="customer-name" name="customer-name" autoComplete="organization" aria-label={t('companyName')} aria-required="true" required value={customerName} onChange={event => setCustomerName(event.target.value)} placeholder="e.g., Global Airlines" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
+              <label htmlFor="customer-email" className="block text-xs font-semibold text-slate-700">{t('workEmail')} <span className="text-red-600" aria-hidden="true">*</span></label>
+              <input id="customer-email" name="customer-email" autoComplete="email" aria-label={t('workEmail')} aria-required="true" required type="email" value={customerEmail} onChange={event => setCustomerEmail(event.target.value)} placeholder="e.g., buyer@airline.com" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
               <div className="flex gap-3">
                 <label htmlFor="rfq-part-number" className="sr-only">{t('partNumber')}</label>
-                  <input id="rfq-part-number" name="part-number" aria-label={t('partNumber')} autoComplete="off" required value={partNumber} onChange={event => setPartNumber(event.target.value)} placeholder="e.g., BACB30LU-4" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
+                  <input id="rfq-part-number" name="part-number" aria-label={t('partNumber')} autoComplete="off" required={!partsListFile} value={partNumber} onChange={event => setPartNumber(event.target.value)} placeholder="e.g., BACB30LU-4" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
                 <label htmlFor="rfq-quantity" className="sr-only">{t('quantity')}</label>
                 <input
                   id="rfq-quantity"
@@ -296,10 +318,21 @@ export const CustomerPortal: React.FC = () => {
                   id="compliance-file"
                   name="parts-list-file"
                   type="file"
-                  accept=".csv,.xlsx,.pdf,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/pdf"
-                  onChange={event => setPartsListFile(event.target.files?.[0] ?? null)}
+                  accept=".csv,.xlsx,.xls,.pdf,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/pdf"
+                  onChange={event => {
+                    const file = event.target.files?.[0] ?? null;
+                    if (file && (!/\.(csv|xlsx|xls|pdf)$/i.test(file.name) || file.size > 25 * 1024 * 1024)) {
+                      setNoticeType('error');
+                      setNotice('Please upload a CSV, Excel (.xlsx/.xls) or PDF file under 25 MB.');
+                      event.target.value = '';
+                      setPartsListFile(null);
+                      return;
+                    }
+                    setPartsListFile(file);
+                  }}
                   className="mt-2 block w-full text-xs text-slate-500"
                 />
+                <span className="mt-1 block text-xs text-slate-500">CSV or Excel (.xlsx, .xls), max 25 MB</span>
                 {partsListFile && <span className="mt-2 block text-xs text-emerald-700">{t('readyUpload', { name: partsListFile.name })}</span>}
               </label>
               <label className="flex items-center gap-2 text-xs text-slate-300">
