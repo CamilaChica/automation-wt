@@ -71,7 +71,7 @@ class AttachmentService:
         if not content:
             return None
         if suffix == ".pdf":
-            return "application/pdf" if content.startswith(b"%PDF-") else None
+            return "application/pdf" if b"%PDF-" in content[:1024] else None
         if suffix == ".png":
             return "image/png" if content.startswith(b"\x89PNG\r\n\x1a\n") else None
         if suffix in {".jpg", ".jpeg"}:

@@ -12,6 +12,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from collections import defaultdict, deque
 from typing import List, Dict, Any, Optional, Literal
+from services.email_context import safe_display_text
 from urllib.parse import urlsplit
 import requests
 from dotenv import load_dotenv
@@ -1071,6 +1072,20 @@ async def submit_rfq(
     
     status = pipeline_res.get("status", rfq.status)
     error = pipeline_res.get("error", "")
+
+    if status not in {"Quote_Sent", "Quote_Dispatch_Pending"}:
+        # Guarantee the customer gets a confirmation even when parsing/review halted the pipeline.
+        try:
+            stored = db_service.get_rfq(rfq.id) or rfq
+            communication_service.send_rfq_acknowledgement(
+                rfq_id=rfq.id,
+                recipient=customer_email,
+                customer_name=customer_name or getattr(stored, "customer_name", None),
+                part_numbers=[item.requested_part_number for item in db_service.get_rfq_items(rfq.id)],
+                reply_to=getattr(stored, "thread_id", None) or request.reply_to,
+            )
+        except Exception as exc:
+            logger.warning("rfq_acknowledgement_fallback_failed rfq_id=%s error=%s", rfq.id, type(exc).__name__)
     
     if status == "Quote_Sent":
         msg = f"Thank you! Your quote for {rfq.id} has been emailed to {customer_email}."
@@ -1718,6 +1733,46 @@ async def reject_quote(
     await session.commit()
     return {"status": "Rejected", "quote_id": quote_id}
 
+def _validate_po_attachments(attachment_ids: List[str]) -> None:
+    if not 1 <= len(attachment_ids) <= 3 or any(not attachment_id.strip() for attachment_id in attachment_ids):
+        raise HTTPException(status_code=400, detail="Attach your purchase order document (export certification and KYC form are optional).")
+    for attachment_id in attachment_ids:
+        document_path = attachment_service.get_stored_path(attachment_id)
+        if document_path is None or document_path.suffix.lower() not in attachment_service.document_extensions:
+            raise HTTPException(status_code=400, detail="Upload accepted documents (PDF, Word, JPG or PNG) before submitting the purchase order.")
+
+
+def _accept_prequote_purchase_order(request: "PurchaseOrderRequest", rfq: Any, rfq_reference: str) -> Dict[str, Any]:
+    """Accept a PO sent before the quote email; the sales team reviews it manually."""
+    _validate_po_attachments(request.attachment_ids)
+    customer_email = getattr(rfq, "customer_email", None) or (rfq.get("customer_email") if isinstance(rfq, dict) else "")
+    customer_name = getattr(rfq, "customer_name", None) or (rfq.get("customer_name") if isinstance(rfq, dict) else "") or customer_email
+    recipient = os.getenv("CAMILA_NOTIFICATION_EMAIL", os.getenv("PURCHASE_ORDER_NOTIFICATION_EMAIL", "camila@wingedtycoons.com"))
+    po_number = request.po_number.strip()
+    body = (
+        f"Purchase order received before the quote was sent: {po_number}\n\n"
+        f"RFQ: {rfq_reference}\nCustomer: {safe_display_text(customer_name)}\nCustomer email: {customer_email}\n"
+        f"Attachments: {', '.join(request.attachment_ids)}\n\n"
+        "Please review the PO and confirm pricing with the customer."
+    )
+    notification: Dict[str, Any] = {}
+    try:
+        notification = communication_service._send(
+            "sales", recipient, f"PO {po_number} received for {rfq_reference} (pending review)", body,
+            reply_to=None, entity_id=rfq_reference,
+            deduplication_key=f"po-prequote:{rfq_reference}:{po_number.upper()}",
+        )
+    except Exception:
+        logger.exception("Could not queue the pre-quote purchase order notification for %s", rfq_reference)
+    return {
+        "status": "Pending_PO_Review",
+        "po_number": po_number,
+        "quote_id": rfq_reference,
+        "internal_notification": notification,
+        "supplier_confirmation_count": 0,
+    }
+
+
 @app.post("/api/purchase-orders")
 async def submit_purchase_order(
     request: PurchaseOrderRequest,
@@ -1751,10 +1806,7 @@ async def submit_purchase_order(
         if reference_rfq and user["role"] == ROLE_CUSTOMER and not _customer_owns_rfq(reference_rfq, user["email"]):
             raise HTTPException(status_code=403, detail="You can only submit a purchase order for your own quote.")
         if reference_rfq and not quote:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Your quote for {rfq_reference} is still being prepared. You can send the purchase order once we email it to you.",
-            )
+            return _accept_prequote_purchase_order(request, reference_rfq, rfq_reference)
         if not quote:
             raise HTTPException(status_code=404, detail="Quote not found. Enter the quote or RFQ number from your email.")
         request.quote_id = quote.id if hasattr(quote, "id") else quote.get("id")
@@ -1769,10 +1821,10 @@ async def submit_purchase_order(
     if user["role"] == ROLE_CUSTOMER and not _customer_owns_rfq(rfq, user["email"]):
         raise HTTPException(status_code=403, detail="You can only submit a purchase order for your own quote.")
     quote_status = quote.status if hasattr(quote, "status") else quote.get("status")
-    if quote_status != "Sent":
-        raise HTTPException(status_code=409, detail="This quote is not available for acceptance.")
     if rfq.status in {"Purchase_Order_Received", "Pending_PO_Review"}:
         raise HTTPException(status_code=409, detail="Purchase order already received for this RFQ.")
+    if quote_status != "Sent":
+        return _accept_prequote_purchase_order(request, rfq, rfq.id)
 
     customer_email = (
         rfq.customer_email

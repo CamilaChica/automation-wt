@@ -73,14 +73,14 @@ class TestRfqPoWorkflow(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         notify.assert_not_called()
 
-    def test_purchase_order_with_rfq_number_explains_quote_is_pending(self):
+    def test_purchase_order_before_quote_still_validates_attachments(self):
         rfq = db_service.create_rfq("Buyer", "buyer@example.com", "P/N 060-1234-00 qty 1")
         response = TestClient(app).post(
             "/api/purchase-orders",
             json={"quote_id": rfq.id, "po_number": "PO-1003", "attachment_ids": ["ATT-0000000000000001"]},
         )
-        self.assertEqual(response.status_code, 409)
-        self.assertIn("still being prepared", response.json()["detail"])
+        # POs sent before the quote are accepted for review, but unknown attachments are still rejected.
+        self.assertEqual(response.status_code, 400)
 
     def test_purchase_order_accepts_rfq_number_with_sent_quote(self):
         rfq = db_service.create_rfq("Buyer", "buyer@example.com", "P/N 060-1234-00 qty 1")

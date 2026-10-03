@@ -483,10 +483,14 @@ class OrchestrationService:
                 
             # Populate DB with extracted items
             items_data = res.data.get("items", [])
+            existing_rfq = db_service.get_rfq(rfq_id)
+            # Portal-provided identity is authoritative; parsed values only fill gaps.
             db_service.update_rfq_customer(
                 rfq_id,
-                res.data.get("company") or res.data.get("customer_name"),
-                res.data.get("customer_email"),
+                (lambda n: n if n and "@" not in n else "")((getattr(existing_rfq, "customer_name", None) or "").strip())
+                or res.data.get("company") or res.data.get("customer_name"),
+                (getattr(existing_rfq, "customer_email", None) or "").strip()
+                or res.data.get("customer_email"),
             )
             for item in items_data:
                 db_service.add_rfq_item(
