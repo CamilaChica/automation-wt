@@ -7,7 +7,7 @@ import time
 import asyncio
 import uuid
 from contextlib import nullcontext
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parseaddr
 from typing import Any
 
@@ -26,7 +26,12 @@ validate_development_database_target(
 from services.mailbox_service import fetch_inbox_messages, html_to_text
 from services.inbound_email_archive import _received_at, archive_inbound_message
 from services.inbound_message_classifier import classify_inbound_customer_message
-from services.customer_reply_routing import company_name_for_sender, find_rfq_for_reply
+from services.customer_reply_routing import (
+    build_resurfaced_quote_text,
+    company_name_for_sender,
+    find_recent_valid_quote,
+    find_rfq_for_reply,
+)
 from services.email_intelligence import analyze_communication_sentiment
 from services.communication_service import communication_service
 from services.supplier_database import supplier_db
@@ -272,6 +277,8 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
             _reply_to_rfq_update(message, existing, sender, body)
         _review_inbound_customer_message(message, "inbound_message_not_identified_as_an_rfq", existing.id if existing else None)
         return True
+    if _resend_existing_quote_sync(message, all_rfqs, (parseaddr(sender)[1] or sender).lower(), body):
+        return True
     rfq = db_service.create_rfq(
         customer_name=company_name_for_sender(all_rfqs, sender_email),
         customer_email=sender,
@@ -288,6 +295,41 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
         pipeline_result.get("error", ""),
     )
     return True
+
+
+def _resend_existing_quote_sync(message: dict[str, Any], all_rfqs, sender: str, body: str) -> bool:
+    try:
+        quotes, items = [], []
+        for rfq in all_rfqs:
+            quote = db_service.get_quote_by_rfq(rfq.id)
+            if quote is not None:
+                quotes.append(quote)
+                items.extend(db_service.get_quote_items(quote.id))
+        text = f"{message.get('subject') or ''}\n{body}"
+        match = find_recent_valid_quote(all_rfqs, quotes, items, sender, text, window=_duplicate_window())
+        if match is None:
+            return False
+        rfq, quote, matched, qty_changed = match
+        inbound_id = str(message.get("internet_message_id") or message.get("message_id") or uuid.uuid4().hex)
+        db_service.add_audit_log(
+            rfq.id, "CustomerCommunicationAgent", "duplicate_request_shield",
+            f"Repeat request matched valid quote {quote.id}; re-sent instead of opening a new RFQ.",
+            "SUCCESS", json.dumps({"inbound_message_id": inbound_id, "quote_id": quote.id, "qty_changed": qty_changed}),
+        )
+        communication_service.send_rfq_update_reply(
+            recipient=sender,
+            customer_name=company_name_for_sender(all_rfqs, sender),
+            rfq_id=rfq.id,
+            customer_text=body,
+            original_subject=str(message.get("subject") or ""),
+            reply_to=str(message.get("message_id") or "") or rfq.thread_id,
+            inbound_message_id=inbound_id,
+            quote_answer=build_resurfaced_quote_text(quote, matched, qty_changed),
+        )
+        return True
+    except Exception as exc:
+        logger.warning("duplicate_request_shield_sync_failed error=%s", type(exc).__name__)
+        return False
 
 
 async def _reply_to_rfq_update_async(message: dict[str, Any], rfq, sender: str, body: str, rfqs, repositories) -> None:
@@ -481,6 +523,66 @@ async def _ingest_existing_sales_message_async(message: dict[str, Any], reposito
     return None
 
 
+def _duplicate_window() -> timedelta:
+    try:
+        return timedelta(days=max(0, int(os.getenv("DUPLICATE_REQUEST_WINDOW_DAYS", "30"))))
+    except ValueError:
+        return timedelta(days=30)
+
+
+def _validated(model, payloads) -> list:
+    records = []
+    for payload in payloads:
+        try:
+            records.append(model.model_validate(payload))
+        except Exception:
+            continue
+    return records
+
+
+async def _resend_existing_quote_async(message: dict[str, Any], repositories) -> bool:
+    """Duplicate Request Shield: re-send a still-valid quote instead of opening a new RFQ."""
+    from models.db_models import Quote, QuoteItem
+
+    sender_header = str(message.get("from") or "").strip()
+    sender = (parseaddr(sender_header)[1] or sender_header).lower()
+    body = html_to_text(str(message.get("body") or ""))
+    text = f"{message.get('subject') or ''}\n{body}"
+    try:
+        rfqs = await db_service.list_rfqs_async(repositories)
+        quotes = _validated(Quote, (await repositories.quote.list_operational_records("quotes")).values())
+        items = _validated(QuoteItem, (await repositories.quote.list_operational_records("quote_items")).values())
+        match = find_recent_valid_quote(rfqs, quotes, items, sender, text, window=_duplicate_window())
+    except Exception as exc:
+        logger.warning("duplicate_request_shield_lookup_failed error=%s", type(exc).__name__)
+        return False
+    if match is None:
+        return False
+    rfq, quote, matched, qty_changed = match
+    inbound_id = str(message.get("internet_message_id") or message.get("message_id") or uuid.uuid4().hex)
+    await repositories.rfq.add_audit_log(
+        rfq_id=rfq.id,
+        agent_name="CustomerCommunicationAgent",
+        action_type="duplicate_request_shield",
+        message=f"Repeat request matched valid quote {quote.id}; re-sent instead of opening a new RFQ.",
+        status="SUCCESS",
+        payload_json=json.dumps({"inbound_message_id": inbound_id, "quote_id": quote.id, "qty_changed": qty_changed}),
+    )
+    await communication_service.send_rfq_update_reply_async(
+        repositories,
+        recipient=sender,
+        customer_name=company_name_for_sender(rfqs, sender),
+        rfq_id=rfq.id,
+        customer_text=body,
+        original_subject=str(message.get("subject") or ""),
+        reply_to=str(message.get("message_id") or "") or rfq.thread_id,
+        inbound_message_id=inbound_id,
+        quote_answer=build_resurfaced_quote_text(quote, matched, qty_changed),
+    )
+    logger.info("duplicate_request_shield rfq=%s quote=%s", rfq.id, quote.id)
+    return True
+
+
 async def _ingest_new_sales_message_async(message: dict[str, Any], repositories) -> Any:
     sender_header = str(message.get("from") or "").strip()
     sender = (parseaddr(sender_header)[1] or sender_header).lower()
@@ -555,6 +657,15 @@ async def _process_sales_message_async(
                         mailbox, provider_message_id, "processed"
                     )
                 return processed
+            if await _resend_existing_quote_async(message, repositories):
+                if message_id:
+                    await repositories.records.mark_inbound_message_processed(
+                        message_id, internet_message_id
+                    )
+                await repositories.records.set_raw_email_processing_status(
+                    mailbox, provider_message_id, "processed"
+                )
+                return True
             rfq = await _ingest_new_sales_message_async(message, repositories)
             stable_message_key = inbound_dedupe_key(internet_message_id) or message_id or rfq.id
             await repositories.records.record_automation_event(

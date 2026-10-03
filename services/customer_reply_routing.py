@@ -81,6 +81,86 @@ def policy_answers(text: str) -> list[str]:
     return answers
 
 
+DUPLICATE_REQUEST_WINDOW = timedelta(days=30)
+_PN_TOKEN = re.compile(r"\b[A-Z0-9]+(?:-[A-Z0-9]+)+\b", re.IGNORECASE)
+_QTY = re.compile(r"\b(?:qty|quantity|qnty)\b\s*[:=#]?\s*(\d{1,6})", re.IGNORECASE)
+_NOT_PART_PREFIXES = ("RFQ-", "QTE", "QUOTE", "PO-", "ORDER-", "UTF-", "ISO-")
+
+
+def normalize_pn(value: str) -> str:
+    return re.sub(r"[\s\-]", "", str(value or "")).upper()
+
+
+def _requested_part_numbers(text: str) -> set[str]:
+    found = set()
+    for token in _PN_TOKEN.findall(text or ""):
+        upper = token.upper()
+        if re.search(r"\d", upper) and not upper.startswith(_NOT_PART_PREFIXES) and len(upper) <= 40:
+            found.add(normalize_pn(upper))
+    return found
+
+
+def _valid_until(quote) -> Optional[datetime]:
+    raw = str(getattr(quote, "valid_until", "") or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def find_recent_valid_quote(rfqs: Iterable, quotes: Iterable, items: Iterable, sender: str, text: str,
+                            now: Optional[datetime] = None, window: timedelta = DUPLICATE_REQUEST_WINDOW):
+    """Return (rfq, quote, matched_items, qty_changed) when every requested P/N already has a valid quote."""
+    now = now or datetime.now(timezone.utc)
+    sender = (sender or "").lower()
+    requested = _requested_part_numbers(text)
+    if not sender or not requested:
+        return None
+    quotes_by_rfq = {getattr(q, "rfq_id", None): q for q in quotes}
+    items_by_quote: dict = {}
+    for item in items:
+        items_by_quote.setdefault(getattr(item, "quote_id", None), []).append(item)
+    candidates = [
+        r for r in rfqs
+        if (getattr(r, "customer_email", "") or "").lower() == sender
+        and getattr(r, "status", "") in QUOTED_STATUSES
+        and _created(r) >= now - window
+    ]
+    for rfq in sorted(candidates, key=_created, reverse=True):
+        quote = quotes_by_rfq.get(rfq.id)
+        valid_until = _valid_until(quote) if quote else None
+        if quote is None or valid_until is None or valid_until.date() < now.date():
+            continue
+        quoted = items_by_quote.get(quote.id, [])
+        matched = [i for i in quoted if normalize_pn(i.part_number) in requested]
+        if matched and requested <= {normalize_pn(i.part_number) for i in quoted}:
+            asked = [int(q) for q in _QTY.findall(text or "")]
+            qty_changed = bool(asked) and any(q not in {i.quantity for i in matched} for q in asked)
+            return rfq, quote, matched, qty_changed
+    return None
+
+
+def build_resurfaced_quote_text(quote, matched_items, qty_changed: bool) -> str:
+    lines = [f"You already have a valid quotation {quote.id} for this request (valid until {quote.valid_until}):"]
+    for item in matched_items:
+        details = ", ".join(filter(None, [
+            f"qty {item.quantity}",
+            f"condition {item.condition}" if item.condition else "",
+            f"USD {item.unit_price:,.2f} each",
+            f"cert {item.certificate_type}" if item.certificate_type else "",
+            f"lead time {item.lead_time_days} days" if item.lead_time_days is not None else "",
+        ]))
+        lines.append(f"- P/N {item.part_number}: {details}")
+    if qty_changed:
+        lines.append("We have noted the updated quantity and will confirm the revised quotation in this thread.")
+    else:
+        lines.append("To proceed, simply reply with your purchase order in this thread.")
+    return "\n".join(lines)
+
+
 def build_rfq_update_reply(rfq_id: str, customer_text: str, quote_answer: str | None = None) -> str:
     """Body (without greeting) acknowledging extra details/questions on an existing RFQ."""
     answers = policy_answers(customer_text)
