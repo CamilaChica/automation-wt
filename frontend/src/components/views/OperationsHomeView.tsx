@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, Inbox, Loader2, Package, RefreshCw, Search
 import { API_BASE } from '../../services/api';
 import { ViewMode, RFQ } from '../../types';
 import { useProcessRFQ, useRFQs, useShipments } from '../../hooks/useApiResources';
+import { OperationsControlRoom } from './OperationsControlRoom';
 
 const NEEDS_ACTION = ['PENDING_INTERNAL_REVIEW', 'NEEDS_HUMAN_REVIEW', 'INTAKE_FAILED', 'FAILED', 'PENDING_APPROVAL', 'QUOTE_DISPATCH_PENDING', 'INTAKE'];
 const QUOTED = ['QUOTE_SENT', 'QUOTED', 'NEGOTIATING', 'FOLLOW_UP'];
@@ -100,10 +101,17 @@ export const OperationsHomeView: React.FC<{ onSelectView: (view: ViewMode) => vo
   ];
 
   return (
+    <>
+    <OperationsControlRoom
+      rfqs={all}
+      rfqLoading={rfqs.isLoading}
+      rfqError={rfqs.error}
+      onRefreshRfqs={rfqs.refetch}
+    />
     <div className="mx-auto max-w-6xl space-y-6 p-4 md:p-8">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Today</h1>
+          <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Today</h2>
           <p className="text-sm text-slate-500 dark:text-slate-400">Customer requests that need a person, and where everything stands.</p>
         </div>
         <button type="button" onClick={() => { void rfqs.refetch(); void shipments.refetch(); }} className="flex min-h-11 items-center gap-2 rounded-xl border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
@@ -166,5 +174,6 @@ export const OperationsHomeView: React.FC<{ onSelectView: (view: ViewMode) => vo
         </ul>
       </section>
     </div>
+    </>
   );
 };

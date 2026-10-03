@@ -104,11 +104,17 @@ class CustomerCommunicationAgent(BaseAgent):
         quote_id = details.get("quote_id", "")
         summary = self._format_quote_summary(details)
         supplied_sentiment = inputs.get("communication_sentiment")
+        try:
+            sentiment_confidence = float(
+                supplied_sentiment.get("confidence", 0.0) or 0.0
+            ) if isinstance(supplied_sentiment, dict) else 0.0
+        except (TypeError, ValueError):
+            sentiment_confidence = 0.0
         sentiment_label = (
             supplied_sentiment.get("label")
             if isinstance(supplied_sentiment, dict)
             and supplied_sentiment.get("label") in {"positive", "neutral", "negative", "mixed"}
-            and float(supplied_sentiment.get("confidence", 0.0) or 0.0) >= 0.65
+            and sentiment_confidence >= 65
             else "neutral"
         )
         tone_guidance = {
@@ -132,11 +138,7 @@ class CustomerCommunicationAgent(BaseAgent):
                 "company_name_from_portal_or_verified_communication": company_name,
                 "communication_sentiment": {
                     "label": sentiment_label,
-                    "confidence": (
-                        float(supplied_sentiment.get("confidence", 0.0) or 0.0)
-                        if isinstance(supplied_sentiment, dict)
-                        else 0.0
-                    ),
+                    "confidence": sentiment_confidence,
                 },
                 "quote_details": details,
                 "approved_quote_summary": summary,

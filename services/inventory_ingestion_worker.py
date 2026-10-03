@@ -443,6 +443,7 @@ class InventoryIngestionWorker:
                 unit_cost=float(item.get("unit_cost") or item.get("unit_price") or 0),
                 source_email_id=str(item.get("source_email_id") or result.get("source_email_id") or message_id),
                 reply_to=message_id or None,
+                supplier_sentiment=result.get("communication_sentiment"),
             )
 
     def _process_message(self, message: dict[str, Any]) -> dict[str, Any]:
@@ -558,6 +559,7 @@ class InventoryIngestionWorker:
                         unit_cost=float(unit_cost),
                         source_email_id=str(item.get("source_email_id") or result.get("source_email_id") or message_id),
                         reply_to=message_id or None,
+                        supplier_sentiment=result.get("communication_sentiment"),
                     )
                     logger.info("Supplier negotiation %s part=%s state=%s", negotiation.get("session_id", "none"), part_number, negotiation.get("status"))
             for part_number in result.get("part_numbers") or [result.get("part_number")]:

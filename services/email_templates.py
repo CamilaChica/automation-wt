@@ -66,6 +66,7 @@ class SupplierDiscountData(BaseModel):
     part_number: str
     quantity: int = Field(..., gt=0)
     quoted_price: float = Field(..., ge=0)
+    supplier_sentiment: Literal["positive", "neutral", "negative", "mixed"] | None = None
 
 
 class SupplierVerificationData(BaseModel):
@@ -178,9 +179,15 @@ def supplier_rfq(data: SupplierRFQData) -> EmailPayload:
 
 def supplier_discount_request(data: SupplierDiscountData) -> EmailPayload:
     subject = f"Commercial Request - PN {data.part_number} (Qty: {data.quantity})"
+    acknowledgement = {
+        "positive": "Thank you for your helpful quotation.",
+        "neutral": "Thank you for providing the initial quotation.",
+        "negative": "Thank you for clarifying your position. We appreciate your time.",
+        "mixed": "Thank you for the quotation and for sharing the relevant context.",
+    }.get(data.supplier_sentiment, "Thank you for providing the initial quotation.")
     body = (
         f"Dear {data.supplier_contact},\n\n"
-        f"Thank you for providing the initial quotation for PN {data.part_number} at ${data.quoted_price:,.2f} per unit.\n\n"
+        f"{acknowledgement} The initial quotation for PN {data.part_number} is ${data.quoted_price:,.2f} per unit.\n\n"
         "We are actively working to secure this order for our customer. Could you please confirm if you can offer your best commercial price, best possible net price, or any volume discount for this requirement?\n\n"
         "We appreciate your support and look forward to finalizing this purchase.\n\n"
         "Best regards,\n\n"

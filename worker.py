@@ -199,9 +199,10 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
                 )
             except Exception as exc:
                 logger.warning(
-                    "customer_sentiment_persist_failed message_id=%s error=%s",
+                    "customer_sentiment_persist_failed message_id=%s error=%s detail=%s",
                     message_id,
                     type(exc).__name__,
+                    exc,
                 )
 
     classification = classify_inbound_customer_message(message, has_related_quote=bool(quote))

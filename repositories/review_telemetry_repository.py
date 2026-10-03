@@ -1097,7 +1097,30 @@ class PostgresReviewTelemetryRepository:
                     results.extend(dict(row) for row in rows)
                 except Exception:
                     continue
+            if not results:
+                results.extend(self._search_archived_supplier_emails(connection, query))
         return results
+
+    @staticmethod
+    def _search_archived_supplier_emails(connection, query: str) -> list[dict[str, Any]]:
+        """Fallback: supplier quotes that reached purchasing@ but were never structured."""
+        part = str(query or "").strip().upper()
+        if len(re.sub(r"[^A-Z0-9]", "", part)) < 4:
+            return []
+        params = {"pattern": r"(^|[^A-Z0-9])" + re.escape(part) + r"([^A-Z0-9]|$)"}
+        for table in ("raw_emails", "inbound_emails"):
+            sql = (
+                f"SELECT 1 FROM {table} WHERE LOWER(COALESCE(mailbox, '')) NOT LIKE 'sales%' "
+                "AND (UPPER(COALESCE(subject, '')) ~ :pattern OR UPPER(COALESCE(body, '')) ~ :pattern) LIMIT 1"
+            )
+            try:
+                with connection.begin_nested():
+                    if connection.execute(text(sql), params).first():
+                        return [{"part_number": part, "quantity_available": 0, "certificate_type": None,
+                                 "condition_code": "AR", "quoted_history": True}]
+            except Exception:
+                continue
+        return []
 
     def list_inventory_catalog(self, limit: int = 500) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []

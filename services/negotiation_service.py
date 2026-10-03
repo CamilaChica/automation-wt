@@ -84,7 +84,7 @@ class SupplierNegotiationService:
     def __init__(self, schedule_request: Callable[..., Any] | None = None):
         self.schedule_request = schedule_request
 
-    def _schedule(self, *, recipient: str, supplier_name: str, part_number: str, unit_cost: float, session_id: str, round_number: int, quantity: int, reply_to: str | None) -> Any:
+    def _schedule(self, *, recipient: str, supplier_name: str, part_number: str, unit_cost: float, session_id: str, round_number: int, quantity: int, reply_to: str | None, supplier_sentiment: dict[str, Any] | None) -> Any:
         schedule = self.schedule_request
         if schedule is None:
             from services.communication_service import communication_service
@@ -98,6 +98,7 @@ class SupplierNegotiationService:
             reply_to=reply_to,
             round_number=round_number,
             quantity=quantity,
+            supplier_sentiment=supplier_sentiment,
         )
 
     def record_supplier_quote(
@@ -110,6 +111,7 @@ class SupplierNegotiationService:
         unit_cost: float,
         source_email_id: str,
         reply_to: str | None = None,
+        supplier_sentiment: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         email = supplier_email.strip().lower()
         part = part_number.strip().upper()
@@ -139,6 +141,7 @@ class SupplierNegotiationService:
                 "quantity": quantity,
                 "reply_to": reply_to,
                 "source_email_id": source_email_id,
+                "supplier_sentiment": supplier_sentiment,
             }
             operations_store.save_negotiation_session(
                 session_id=session_id, supplier_email=email, part_number=part, payload=session_payload,
@@ -147,6 +150,7 @@ class SupplierNegotiationService:
                 recipient=email, supplier_name=supplier_name, part_number=part,
                 unit_cost=round_data.requested_unit_cost, session_id=session_id,
                 round_number=round_data.number, quantity=quantity, reply_to=reply_to,
+                supplier_sentiment=supplier_sentiment,
             )
             return {"status": "COUNTEROFFER_SENT", "round": round_data.number, "session_id": session_id}
 
@@ -179,6 +183,7 @@ class SupplierNegotiationService:
 
         session_payload["session"] = session.model_dump(mode="json")
         session_payload["source_email_id"] = source_email_id
+        session_payload["supplier_sentiment"] = supplier_sentiment
         operations_store.save_negotiation_session(
             session_id=session.session_id, supplier_email=email, part_number=part, payload=session_payload,
         )
@@ -192,6 +197,7 @@ class SupplierNegotiationService:
                 round_number=next_round.number,
                 quantity=int(session_payload.get("quantity") or quantity),
                 reply_to=reply_to or session_payload.get("reply_to"),
+                supplier_sentiment=supplier_sentiment,
             )
         return {"status": session.state.value, "round": len(session.rounds), "session_id": session.session_id}
 
@@ -206,6 +212,7 @@ class SupplierNegotiationService:
         unit_cost: float,
         source_email_id: str,
         reply_to: str | None = None,
+        supplier_sentiment: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         email = supplier_email.strip().lower()
         part = part_number.strip().upper()
@@ -238,6 +245,7 @@ class SupplierNegotiationService:
                 "quantity": quantity,
                 "reply_to": reply_to,
                 "source_email_id": source_email_id,
+                "supplier_sentiment": supplier_sentiment,
             }
             await repositories.records.save_negotiation_session(
                 session_id=session_id, supplier_email=email, part_number=part, payload=session_payload,
@@ -246,6 +254,7 @@ class SupplierNegotiationService:
                 repositories, recipient=email, supplier_name=supplier_name, part_number=part,
                 unit_cost=round_data.requested_unit_cost, session_id=session_id,
                 round_number=round_data.number, quantity=quantity, reply_to=reply_to,
+                supplier_sentiment=supplier_sentiment,
             )
             return {"status": "COUNTEROFFER_SENT", "round": round_data.number, "session_id": session_id}
 
@@ -278,6 +287,7 @@ class SupplierNegotiationService:
 
         session_payload["session"] = negotiation.model_dump(mode="json")
         session_payload["source_email_id"] = source_email_id
+        session_payload["supplier_sentiment"] = supplier_sentiment
         await repositories.records.save_negotiation_session(
             session_id=negotiation.session_id, supplier_email=email, part_number=part, payload=session_payload,
         )
@@ -292,6 +302,7 @@ class SupplierNegotiationService:
                 round_number=next_round.number,
                 quantity=int(session_payload.get("quantity") or quantity),
                 reply_to=reply_to or session_payload.get("reply_to"),
+                supplier_sentiment=supplier_sentiment,
             )
         return {"status": negotiation.state.value, "round": len(negotiation.rounds), "session_id": negotiation.session_id}
 
@@ -307,6 +318,7 @@ class SupplierNegotiationService:
         round_number: int,
         quantity: int,
         reply_to: str | None,
+        supplier_sentiment: dict[str, Any] | None,
     ) -> Any:
         from services.communication_service import communication_service
 
@@ -320,4 +332,5 @@ class SupplierNegotiationService:
             reply_to=reply_to,
             round_number=round_number,
             quantity=quantity,
+            supplier_sentiment=supplier_sentiment,
         )

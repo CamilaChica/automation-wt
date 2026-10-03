@@ -972,7 +972,7 @@ class CommunicationService:
             confidence = float(sentiment.get("confidence", 0.0))
         except (TypeError, ValueError):
             return "neutral"
-        if label not in {"positive", "neutral", "negative", "mixed"} or confidence < 0.65:
+        if label not in {"positive", "neutral", "negative", "mixed"} or confidence < 65:
             return "neutral"
         return label
 
@@ -1037,6 +1037,7 @@ class CommunicationService:
         reply_to: Optional[str] = None,
         round_number: int = 1,
         quantity: int = 1,
+        supplier_sentiment: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         max_rounds = min(5, max(1, int(os.getenv("SUPPLIER_DISCOUNT_MAX_ROUNDS", "3"))))
         if round_number > max_rounds:
@@ -1047,6 +1048,7 @@ class CommunicationService:
             part_number=part_number.upper(),
             quantity=quantity,
             quoted_price=unit_cost,
+            supplier_sentiment=self._sentiment_label(supplier_sentiment),
         ))
         return self._schedule_communication_task(
             task_key=f"supplier-discount:{source_email_id}:{round_number}",
@@ -1071,6 +1073,7 @@ class CommunicationService:
         reply_to: Optional[str] = None,
         round_number: int = 1,
         quantity: int = 1,
+        supplier_sentiment: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         max_rounds = min(5, max(1, int(os.getenv("SUPPLIER_DISCOUNT_MAX_ROUNDS", "3"))))
         if round_number > max_rounds:
@@ -1081,6 +1084,7 @@ class CommunicationService:
             part_number=part_number.upper(),
             quantity=quantity,
             quoted_price=unit_cost,
+            supplier_sentiment=self._sentiment_label(supplier_sentiment),
         ))
         return await repositories.records.schedule_communication_task(
             task_key=f"supplier-discount:{source_email_id}:{round_number}",

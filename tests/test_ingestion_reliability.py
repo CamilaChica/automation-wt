@@ -1,7 +1,11 @@
 import unittest
 from unittest.mock import patch
 
-from services.email_intelligence import EmailIntelligenceExtraction, ExtractedEmailItem
+from services.email_intelligence import (
+    CommunicationSentiment,
+    EmailIntelligenceExtraction,
+    ExtractedEmailItem,
+)
 from schemas.extraction import ExtractedField
 from services.supplier_database import supplier_db
 from services.supplier_ingestion_service import SupplierEmailIngestionService
@@ -38,13 +42,24 @@ class TestIngestionReliability(unittest.TestCase):
             ],
         )
         service = SupplierEmailIngestionService()
-        with patch("services.supplier_ingestion_service.extract_email_intelligence", return_value=extraction):
+        sentiment = CommunicationSentiment(
+            label="positive",
+            confidence=92,
+            evidence=["Two-line quote"],
+        )
+        with (
+            patch("services.supplier_ingestion_service.extract_email_intelligence", return_value=extraction),
+            patch("services.supplier_ingestion_service.analyze_communication_sentiment", return_value=sentiment),
+            patch("services.supplier_ingestion_service.operations_store.record_automation_event") as record_sentiment,
+        ):
             result = service.ingest_email(
                 "From: quotes@multi.example\nSubject: Two-line quote\n\nPart Number: MS20470AD4-6\nQuantity: 50\n$0.12\nPart Number: AN960-416\nQuantity: 12\n$0.08",
                 message_id="multi-line-reliability",
             )
 
         self.assertTrue(result["success"], result)
+        self.assertEqual(result["communication_sentiment"]["label"], "positive")
+        record_sentiment.assert_called_once()
         self.assertEqual({item["part_number"] for item in result["items"]}, {"MS20470AD4-6", "AN960-416"})
         offers = supplier_db.find_supplier_offers("AN960-416", quantity_needed=12)
         self.assertTrue(any(row["supplier_email"] == "quotes@multi.example" for row in offers))
