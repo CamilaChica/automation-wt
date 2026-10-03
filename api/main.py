@@ -52,6 +52,16 @@ from repositories.rfq_repository import RFQRepository
 from services.export_control_service import export_control_service
 from services.attachment_service import AttachmentService
 from services.swarm_runtime import swarm_runtime
+from services.llm_provider import (
+    AnthropicProvider,
+    ConfigurationError,
+    GeminiProvider,
+    LLMRequest,
+    LLMResponse,
+    OpenAIProvider,
+    ProviderTimeoutError,
+    ProviderUnavailableError,
+)
 from services.voice_service import (
     check_inventory_availability,
     get_customer_order_status,
@@ -244,6 +254,19 @@ app.add_middleware(
 )
 
 # API Schemas
+EMAIL_PATTERN = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+PORTAL_ACCOUNT_MARKER = "Submitted via customer portal account: "
+
+
+def _customer_owns_rfq(rfq, email: str) -> bool:
+    email = str(email or "").strip().lower()
+    if not email:
+        return False
+    if str(getattr(rfq, "customer_email", "") or "").strip().lower() == email:
+        return True
+    return f"{PORTAL_ACCOUNT_MARKER}{email}".lower() in str(getattr(rfq, "raw_text", "") or "").lower()
+
+
 class IntakeRequest(BaseModel):
     raw_text: str = Field(..., description="Raw email or RFQ text submitted by customer")
     customer_name: Optional[str] = Field(None, description="Customer company or contact name")
@@ -734,8 +757,8 @@ async def create_realtime_session(
         "model": os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2").strip(),
         "output_modalities": ["audio"],
         "instructions": (
-            "You are Camila, Winged Tycoons' AI voice customer-service assistant, not a human. At the start, "
-            f"briefly disclose that you are Camila, an AI assistant, and greet the customer in {language_name}. "
+            "You are Claire, Winged Tycoons' AI voice customer-service assistant, not a human. At the start, "
+            f"briefly disclose that you are Claire, an AI assistant, and greet the customer in {language_name}. "
             f"Continue speaking in {language_name} unless the customer asks to switch languages. Be "
             "concise, professional, and precise. Use the inventory and order tools before stating "
             "availability, prices, lead times, or status. Prices are USD. Never promise stock or issue "
@@ -905,22 +928,27 @@ async def submit_rfq(
     if not request.raw_text.strip():
         raise HTTPException(status_code=400, detail="Raw RFQ text cannot be empty.")
         
-    # Standard mock customer resolution (simulating a database record lookup)
+    # Customers may route replies to a different contact email; the portal
+    # account stays recorded as the owner so the RFQ remains visible to them.
+    raw_text = request.raw_text
     if user["role"] == ROLE_CUSTOMER:
-        customer_name = request.customer_name or user["email"]
-        customer_email = user["email"]
+        account_email = str(user["email"]).strip().lower()
+        typed_email = (request.customer_email or "").strip().lower()
+        if typed_email and not EMAIL_PATTERN.fullmatch(typed_email):
+            raise HTTPException(status_code=400, detail="Please enter a valid email address.")
+        customer_email = typed_email or account_email
+        customer_name = (request.customer_name or "").strip() or customer_email
+        if customer_email != account_email:
+            raw_text = f"{raw_text.rstrip()}\n\n{PORTAL_ACCOUNT_MARKER}{account_email}"
     else:
         customer_name = request.customer_name or "Delta MRO Services"
         customer_email = request.customer_email or "procurement@deltamro.com"
-    if not request.customer_name and "united" in request.raw_text.lower():
-        customer_name = "United Aerospace"
-        customer_email = "parts@unitedaero.com"
         
     if session is None:
         rfq = db_service.create_rfq(
             customer_name=customer_name,
             customer_email=customer_email,
-            raw_text=request.raw_text,
+            raw_text=raw_text,
             thread_id=request.reply_to,
         )
     else:
@@ -929,7 +957,7 @@ async def submit_rfq(
             customer_name=customer_name,
             customer_email=customer_email,
             status="Intake",
-            raw_text=request.raw_text,
+            raw_text=raw_text,
             thread_id=request.reply_to,
         )
         await RFQRepository(session).create_from_payload(rfq.model_dump(mode="json"))
@@ -1221,11 +1249,92 @@ async def llm_health(
     return {
         "default_provider": os.getenv("LLM_DEFAULT_PROVIDER", "openai"),
         "customer_communication_provider": os.getenv("LLM_TASK_PROVIDERS", ""),
-        "openai_configured": bool(os.getenv("OPENAI_API_KEY")),
-        "anthropic_configured": bool(os.getenv("ANTHROPIC_API_KEY")),
-        "gemini_configured": bool(os.getenv("GEMINI_API_KEY")),
+        "openai_configured": bool(os.getenv("OPENAI_API_KEY", "").strip()),
+        "anthropic_configured": bool(os.getenv("ANTHROPIC_API_KEY", "").strip()),
+        "gemini_configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
         "fallback_enabled": os.getenv("LLM_ALLOW_TEMPLATE_FALLBACK", "true").strip().lower() in {"1", "true", "yes", "on"},
     }
+
+
+@app.post("/api/internal/llm/test-connections")
+async def test_llm_connections(
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER")),
+):
+    """Make one small live model request per configured provider without exposing secrets."""
+    providers = [
+        ("openai", "OPENAI_API_KEY", "OPENAI_MODEL", "gpt-4o-mini", OpenAIProvider),
+        ("anthropic", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "claude-3-5-haiku-latest", AnthropicProvider),
+        ("gemini", "GEMINI_API_KEY", "GEMINI_MODEL", "gemini-3.8-flash", GeminiProvider),
+    ]
+
+    async def probe(provider_name: str, key_name: str, model_env: str, default_model: str, provider_type):
+        if not os.getenv(key_name, "").strip():
+            return {"provider": provider_name, "status": "not_configured", "model": None}
+
+        model = os.getenv(model_env, "").strip() or default_model
+        started_at = time.monotonic()
+        try:
+            response = await asyncio.to_thread(
+                provider_type().complete,
+                LLMRequest(
+                    task="connectivity_test",
+                    system_prompt="Reply only with OK. Do not perform any other task.",
+                    user_prompt="Reply OK.",
+                    model=model,
+                    max_tokens=8,
+                    timeout_seconds=8,
+                    response_format="text",
+                ),
+            )
+            if not response.text.strip():
+                return {
+                    "provider": provider_name,
+                    "status": "failed",
+                    "model": model,
+                    "message": "The provider returned an empty response.",
+                    "latency_ms": round((time.monotonic() - started_at) * 1000),
+                }
+            return {
+                "provider": provider_name,
+                "status": "connected",
+                "model": response.model,
+                "latency_ms": round((time.monotonic() - started_at) * 1000),
+            }
+        except ConfigurationError:
+            status, message = "not_configured", "Provider credentials are not configured."
+        except ProviderTimeoutError:
+            status, message = "failed", "The provider request timed out."
+        except ProviderUnavailableError:
+            status, message = "failed", "The provider is rate-limited or temporarily unavailable."
+        except requests.HTTPError as exc:
+            response = exc.response
+            status_code = response.status_code if response is not None else None
+            if status_code in {401, 403}:
+                message = "The provider rejected the credentials or model access."
+            elif status_code == 404:
+                message = "The configured model was not found or is not available to this account."
+            elif status_code == 429:
+                message = "The provider reported a rate limit or quota issue."
+            elif status_code is not None and status_code >= 500:
+                message = "The provider is temporarily unavailable."
+            else:
+                message = "The provider request was rejected."
+            status = "failed"
+        except requests.RequestException:
+            status, message = "failed", "Could not reach the provider."
+        except (KeyError, IndexError, TypeError, ValueError):
+            status, message = "failed", "The provider request failed. Check model access and provider configuration."
+
+        return {
+            "provider": provider_name,
+            "status": status,
+            "model": model,
+            "message": message,
+            "latency_ms": round((time.monotonic() - started_at) * 1000),
+        }
+
+    results = await asyncio.gather(*(probe(name, key, model_env, model, provider) for name, key, model_env, model, provider in providers))
+    return {"results": results}
 
 @app.get("/api/internal/mailboxes/health")
 async def mailbox_health(
@@ -1252,7 +1361,7 @@ async def list_rfqs(
     else:
         rfqs = await db_service.list_rfqs_async(create_operational_repositories(session))
     if user["role"] == "ROLE_CUSTOMER":
-        return [rfq for rfq in rfqs if rfq.customer_email.lower() == user["email"].lower()]
+        return [rfq for rfq in rfqs if _customer_owns_rfq(rfq, user["email"])]
     if user["role"] not in ("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"):
         raise HTTPException(status_code=403, detail="Insufficient permissions.")
     return rfqs
@@ -1285,7 +1394,7 @@ async def get_rfq_detail(
         )
     if not rfq:
         raise HTTPException(status_code=404, detail="RFQ not found.")
-    if user["role"] == "ROLE_CUSTOMER" and rfq.customer_email.lower() != user["email"].lower():
+    if user["role"] == "ROLE_CUSTOMER" and not _customer_owns_rfq(rfq, user["email"]):
         raise HTTPException(status_code=403, detail="You can only access your own requests.")
         
     if async_repositories is None:
@@ -1400,7 +1509,7 @@ async def get_customer_quote(
 
     if quote is None or rfq is None:
         raise HTTPException(status_code=404, detail="Quote not found.")
-    if rfq.customer_email.lower() != user["email"].lower():
+    if not _customer_owns_rfq(rfq, user["email"]):
         raise HTTPException(status_code=403, detail="You can only access your own quotes.")
     if quote.status != "Sent":
         raise HTTPException(status_code=404, detail="Quote not found.")
@@ -1550,7 +1659,7 @@ async def submit_purchase_order(
     )
     if not rfq:
         raise HTTPException(status_code=404, detail="RFQ not found.")
-    if user["role"] == ROLE_CUSTOMER and rfq.customer_email.lower() != user["email"].lower():
+    if user["role"] == ROLE_CUSTOMER and not _customer_owns_rfq(rfq, user["email"]):
         raise HTTPException(status_code=403, detail="You can only submit a purchase order for your own quote.")
     quote_status = quote.status if hasattr(quote, "status") else quote.get("status")
     if quote_status != "Sent":
@@ -1968,7 +2077,7 @@ async def search_catalog(query: str = "", condition: Optional[str] = None, _user
 
     Deliberately omits internal costs, serial numbers, and warehouse locations.
     """
-    normalized_query = query.strip().lower()
+    normalized_query = re.sub(r"[^a-z0-9]", "", query.lower())
     if not normalized_query:
         return []
     normalized_condition = (condition or "").strip().upper()
@@ -1978,7 +2087,7 @@ async def search_catalog(query: str = "", condition: Optional[str] = None, _user
     results = []
     seen_parts: set[tuple[str, str]] = set()
     for item in db_service.inventory.values():
-        if normalized_query and normalized_query not in item.part_number.lower():
+        if normalized_query not in re.sub(r"[^a-z0-9]", "", item.part_number.lower()):
             continue
         if normalized_condition and item.condition_code.upper() != normalized_condition:
             continue
@@ -2013,15 +2122,20 @@ async def search_catalog(query: str = "", condition: Optional[str] = None, _user
                 ))
         except Exception:
             logger.exception("postgres_catalog_search_failed")
-    supplier_offers = (
-        operations_store.search_supplier_offers(query, normalized_condition or None)
-        if operations_store.storage_engine == "postgresql"
-        else supplier_db.search_supplier_offers(query, normalized_condition or None)
-    )
+    try:
+        supplier_offers = (
+            operations_store.search_supplier_offers(query, normalized_condition or None)
+            if operations_store.storage_engine == "postgresql"
+            else supplier_db.search_supplier_offers(query, normalized_condition or None)
+        )
+    except Exception:
+        logger.exception("supplier_offer_catalog_search_failed")
+        supplier_offers = []
     for offer in supplier_offers:
         key = (str(offer.get("part_number", "")).upper(), str(offer.get("condition_code") or "NE").upper())
-        if key in seen_parts:
+        if not key[0] or key in seen_parts:
             continue
+        seen_parts.add(key)
         results.append(CatalogItem(
             part_number=key[0],
             condition_code=key[1],

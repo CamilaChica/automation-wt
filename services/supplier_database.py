@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import uuid
 import logging
@@ -284,11 +285,13 @@ class SupplierDatabase:
         return [dict(row) for row in rows]
 
     def search_supplier_offers(self, query: str, condition: str | None = None) -> List[Dict[str, Any]]:
-        normalized_query = str(query or "").strip().upper()
+        normalized_query = re.sub(r"[^A-Z0-9]", "", str(query or "").upper())
         normalized_condition = str(condition or "").strip().upper()
         if not normalized_query:
             return []
-        clauses = ["sp.part_number LIKE ?"]
+        clauses = [
+            "REPLACE(REPLACE(REPLACE(REPLACE(UPPER(sp.part_number), '-', ''), ' ', ''), '/', ''), '.', '') LIKE ?"
+        ]
         params: list[Any] = [f"%{normalized_query}%"]
         if normalized_condition:
             clauses.append("UPPER(COALESCE(sp.condition_code, '')) = ?")
@@ -303,7 +306,6 @@ class SupplierDatabase:
                 FROM supplier_parts sp
                 JOIN suppliers s ON s.id = sp.supplier_id
                 WHERE {' AND '.join(clauses)}
-                  AND (sp.approval_status = 'Approved' OR s.approval_status = 'Approved')
                 ORDER BY sp.updated_at DESC, sp.unit_cost ASC
                 LIMIT 50
                 """,

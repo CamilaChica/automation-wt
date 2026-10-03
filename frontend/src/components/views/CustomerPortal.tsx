@@ -36,6 +36,8 @@ export const CustomerPortal: React.FC = () => {
   const [trackingToken, setTrackingToken] = useState('');
   const [requestedTrackingToken, setRequestedTrackingToken] = useState('');
   const [isSearching, setIsSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [requestFormKey, setRequestFormKey] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [noticeType, setNoticeType] = useState<'success' | 'error' | 'info'>('info');
@@ -60,6 +62,7 @@ export const CustomerPortal: React.FC = () => {
       return;
     }
     setIsSearching(true);
+    setHasSearched(true);
     try {
       const result = await apiService.searchCatalogWithSource(value, condition || undefined);
       setResults(result.results);
@@ -100,6 +103,15 @@ export const CustomerPortal: React.FC = () => {
       setNotice(response.message || `Request ${response.rfq_id} received.`);
       setNoticeType('success');
       setTrackingStatus(t('processingFulfillment'));
+      setPartNumber('');
+      setQuantity(1);
+      setCondition('');
+      setDetails('');
+      setPartsListFile(null);
+      setCustomerName('');
+      setCustomerEmail('');
+      setAgreementSigned(false);
+      setRequestFormKey(key => key + 1);
     } catch (error) {
       setNoticeType('error');
       setNotice(getApiErrorMessage(error, t('rfqSubmissionFailed')));
@@ -239,7 +251,7 @@ export const CustomerPortal: React.FC = () => {
             {usingFallbackCatalog && <div role="status" className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900"><Badge variant="outline">SAMPLE / DEMO DATA</Badge><span>Catalog results are local samples and are not confirmed availability.</span></div>}
             <div className="mt-5 space-y-3">
               {isSearching && <p className="text-sm text-slate-600">{t('searching')}</p>}
-              {!isSearching && results.length === 0 && <p className="text-sm text-slate-600">{t('noMatches')}</p>}
+              {!isSearching && results.length === 0 && <p className="text-sm text-slate-600">{hasSearched ? t('noMatches') : t('welcomeSearch')}</p>}
               {results.map((item, index) => (
                 <button key={`${item.part_number}-${item.condition_code}-${index}`} onClick={() => setPartNumber(item.part_number)} className="w-full rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left hover:border-cyan-400/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">
                   <div className="flex items-center justify-between gap-2"><span className="font-mono font-bold">{item.part_number}</span><span className="text-xs text-emerald-700">{item.quantity_available} {t('available')}</span></div>
@@ -280,6 +292,7 @@ export const CustomerPortal: React.FC = () => {
               <label className="block rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700">
                 {t('partsList')}
                 <input
+                  key={requestFormKey}
                   id="compliance-file"
                   name="parts-list-file"
                   type="file"

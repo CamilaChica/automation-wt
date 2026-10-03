@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import socket
 import threading
 import uuid
@@ -1062,21 +1063,41 @@ class PostgresReviewTelemetryRepository:
             return [dict(row) for row in rows]
 
     def search_supplier_offers(self, query: str, condition: str | None = None) -> list[dict[str, Any]]:
-        normalized = str(query or "").strip().upper()
+        normalized = re.sub(r"[^A-Z0-9]", "", str(query or "").upper())
         if not normalized:
             return []
-        condition_sql = "AND UPPER(COALESCE(p.condition_code, '')) = :condition" if condition else ""
+        params = {"query": f"%{normalized}%", "condition": str(condition or "").upper()}
+
+        def part_match(column: str) -> str:
+            return f"REGEXP_REPLACE(UPPER(COALESCE({column}, '')), '[^A-Z0-9]', '', 'g') LIKE :query"
+
+        def condition_match(column: str) -> str:
+            return f"AND UPPER(COALESCE({column}, '')) = :condition" if condition else ""
+
+        # Every place supplier quotes are stored; customer-facing callers only expose safe fields.
+        queries = (
+            "SELECT p.id AS supplier_part_id, p.part_number, p.quantity_available, p.certificate_type, p.condition_code "
+            "FROM supplier_parts p WHERE " + part_match("p.part_number") + " " + condition_match("p.condition_code") + " "
+            "ORDER BY p.updated_at DESC NULLS LAST LIMIT 50",
+            "SELECT o.part_number, o.quantity_available, o.certificate_type, o.condition_code "
+            "FROM supplier_offers o WHERE " + part_match("o.part_number") + " " + condition_match("o.condition_code") + " "
+            "ORDER BY o.created_at DESC NULLS LAST LIMIT 50",
+            "SELECT a.part_number, q.quantity_available, q.certificate_type, COALESCE(q.condition_code, a.condition_code) AS condition_code "
+            "FROM supplier_quotes q JOIN aviation_parts a ON a.id = q.part_id WHERE " + part_match("a.part_number") + " "
+            + condition_match("COALESCE(q.condition_code, a.condition_code)") + " ORDER BY q.created_at DESC NULLS LAST LIMIT 50",
+            "SELECT r.part_number, r.quantity_available, r.certificate_type, r.condition_code "
+            "FROM supplier_inventory_rows r WHERE " + part_match("r.part_number") + " " + condition_match("r.condition_code") + " LIMIT 50",
+        )
+        results: list[dict[str, Any]] = []
         with self._read() as connection:
-            rows = connection.execute(text(
-                "SELECT p.id AS supplier_part_id, p.supplier_id, p.part_number, p.quantity_available, p.unit_cost, "
-                "p.certificate_type, p.lead_time_days, p.condition_code, p.approval_status, p.confidence, "
-                "p.updated_at, p.source_email_id, s.company_name AS supplier_name, s.email AS supplier_email "
-                "FROM supplier_parts p JOIN suppliers s ON s.id = p.supplier_id "
-                "WHERE p.part_number LIKE :query " + condition_sql + " "
-                "AND (p.approval_status = 'Approved' OR s.approval_status = 'Approved') "
-                "ORDER BY p.updated_at DESC, p.unit_cost ASC LIMIT 50"
-            ), {"query": f"%{normalized}%", "condition": str(condition or "").upper()}).mappings().all()
-            return [dict(row) for row in rows]
+            for sql in queries:
+                try:
+                    with connection.begin_nested():
+                        rows = connection.execute(text(sql), params).mappings().all()
+                    results.extend(dict(row) for row in rows)
+                except Exception:
+                    continue
+        return results
 
     def list_inventory_catalog(self, limit: int = 500) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
