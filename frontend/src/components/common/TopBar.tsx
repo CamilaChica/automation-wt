@@ -94,7 +94,6 @@ export const TopBar: React.FC<TopBarProps> = ({
             WINGED TYCOONS
           </span>
         </a>
-        <div className="h-4 w-px shrink-0 bg-slate-300 dark:bg-slate-700" />
       </div>
 
       {/* Center Search & AOG Badge */}
