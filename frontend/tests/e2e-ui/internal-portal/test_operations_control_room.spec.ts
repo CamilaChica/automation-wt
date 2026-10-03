@@ -241,6 +241,7 @@ test('shows unavailable operations data instead of zero counts when APIs fail', 
     body: JSON.stringify({ detail: 'Service unavailable' }),
   });
   await page.route('**/api/rfqs', unavailable);
+  await page.route('**/api/internal/shipments', unavailable);
   await page.route('**/api/internal/automation-events**', unavailable);
   await page.route('**/api/internal/extraction-reviews**', unavailable);
   await page.route('**/api/internal/mailboxes/**', unavailable);
@@ -256,4 +257,9 @@ test('shows unavailable operations data instead of zero counts when APIs fail', 
   await expect(page.getByText('Supplier inbox unavailable.')).toBeVisible();
   await expect(page.getByText('Review queue unavailable.')).toBeVisible();
   await expect(page.getByText('Purchase-order data unavailable.').first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Need your action: Unavailable' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Quotes sent: Unavailable' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Purchase orders: Unavailable' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Shipments: Unavailable' })).toBeVisible();
+  await expect(page.getByText(/Could not load shipments/)).toBeVisible();
 });

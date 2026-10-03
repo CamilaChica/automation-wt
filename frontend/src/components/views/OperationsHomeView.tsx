@@ -101,10 +101,10 @@ export const OperationsHomeView: React.FC<{ onSelectView: (view: ViewMode) => vo
   };
 
   const cards = [
-    { label: 'Need your action', value: needsAction.length, icon: AlertTriangle, tone: needsAction.length ? 'text-amber-500' : 'text-emerald-500', view: null },
-    { label: 'Quotes sent', value: quoted, icon: Send, tone: 'text-sky-500', view: 'sales' as ViewMode },
-    { label: 'Purchase orders', value: won, icon: CheckCircle2, tone: 'text-emerald-500', view: 'sales' as ViewMode },
-    { label: 'Shipments', value: activeShipments, icon: Package, tone: 'text-violet-500', view: 'fulfillment' as ViewMode },
+    { label: 'Need your action', value: needsAction.length, unavailable: Boolean(rfqs.error), loading: rfqs.isLoading, icon: AlertTriangle, tone: needsAction.length ? 'text-amber-500' : 'text-emerald-500', view: null },
+    { label: 'Quotes sent', value: quoted, unavailable: Boolean(rfqs.error), loading: rfqs.isLoading, icon: Send, tone: 'text-sky-500', view: 'sales' as ViewMode },
+    { label: 'Purchase orders', value: won, unavailable: Boolean(rfqs.error), loading: rfqs.isLoading, icon: CheckCircle2, tone: 'text-emerald-500', view: 'sales' as ViewMode },
+    { label: 'Shipments', value: activeShipments, unavailable: Boolean(shipments.error), loading: shipments.isLoading, icon: Package, tone: 'text-violet-500', view: 'fulfillment' as ViewMode },
   ];
 
   return (
@@ -122,23 +122,27 @@ export const OperationsHomeView: React.FC<{ onSelectView: (view: ViewMode) => vo
           <p className="text-sm text-slate-500 dark:text-slate-400">Customer requests that need a person, and where everything stands.</p>
         </div>
         <button type="button" onClick={() => { void rfqs.refetch(); void shipments.refetch(); }} className="flex min-h-11 items-center gap-2 rounded-xl border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
-          <RefreshCw className={`h-4 w-4 ${rfqs.isLoading ? 'animate-spin' : ''}`} /> Refresh
+          <RefreshCw className={`h-4 w-4 ${rfqs.isLoading || shipments.isLoading ? 'animate-spin' : ''}`} /> Refresh
         </button>
       </header>
 
       <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {cards.map(card => {
           const Icon = card.icon;
+          const value = card.loading ? '…' : card.unavailable ? '—' : card.value;
+          const accessibleValue = card.loading ? 'Loading' : card.unavailable ? 'Unavailable' : String(card.value);
           return (
-            <button key={card.label} type="button" disabled={!card.view} onClick={() => card.view && onSelectView(card.view)}
+            <button key={card.label} type="button" aria-label={`${card.label}: ${accessibleValue}`} disabled={!card.view} onClick={() => card.view && onSelectView(card.view)}
               className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm enabled:hover:border-aero-blue dark:border-slate-800 dark:bg-card-dark">
               <Icon className={`h-5 w-5 ${card.tone}`} />
-              <div className="mt-3 text-3xl font-bold text-slate-900 dark:text-white">{rfqs.isLoading ? '…' : card.value}</div>
+              <div className="mt-3 text-3xl font-bold text-slate-900 dark:text-white">{value}</div>
               <div className="text-sm text-slate-500 dark:text-slate-400">{card.label}</div>
             </button>
           );
         })}
       </section>
+
+      {shipments.error && <p role="alert" className="text-sm text-red-500">Could not load shipments: {shipments.error.message}. Press Refresh.</p>}
 
       {message && <div role={messageType === 'error' ? 'alert' : 'status'} aria-live="polite" className={`rounded-xl border p-3 text-sm ${messageType === 'error' ? 'border-red-300 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200' : 'border-sky-300 bg-sky-50 text-sky-900 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200'}`}>{message}</div>}
 
