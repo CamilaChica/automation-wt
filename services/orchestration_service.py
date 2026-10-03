@@ -508,7 +508,7 @@ class OrchestrationService:
                     recipient=rfq.customer_email,
                     customer_name=rfq.customer_name,
                     part_numbers=[item.get("requested_part_number") for item in items_data],
-                    reply_to=None if _is_partsbase_rfq(rfq) else rfq.thread_id,
+                    reply_to=rfq.thread_id,
                     items=items_data,
                     certifications=res.data.get("certification_requirements") or [],
                 )
@@ -999,10 +999,8 @@ class OrchestrationService:
             lead_time_days=quote.lead_time_days,
             communication_status="READY",
         )
-        # PartsBase's message belongs to PartsBase, not the embedded requester.
-        # Send a new message to the embedded customer instead of Graph-replying
-        # to the PartsBase source message.
-        reply_to = None if _is_partsbase_rfq(rfq) else rfq.thread_id
+        # Outlook-native reply in the original thread, addressed to the client.
+        reply_to = rfq.thread_id
         return await self.comm_agent.execute({
             "customer_email": rfq.customer_email,
             "customer_name": rfq.customer_name,

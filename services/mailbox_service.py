@@ -350,7 +350,13 @@ def health_check_mailboxes(mailboxes: Optional[list[str]] = None, limit: int = 5
     return results
 
 
-def send_message(mailbox: str, recipient: str, subject: str, body: str, reply_to: Optional[str] = None) -> None:
+def _reply_subject(subject: str) -> str:
+    clean = str(subject or "").strip()
+    return clean if clean.lower().startswith("re:") else f"Re: {clean}"
+
+
+def send_message(mailbox: str, recipient: str, subject: str, body: str, reply_to: Optional[str] = None) -> bool:
+    """Send an email. Returns False when a reply was requested but the original thread was not found."""
     if _use_legacy_graph_client():
         config = MAILBOXES.get(mailbox)
         if not config:
@@ -363,45 +369,85 @@ def send_message(mailbox: str, recipient: str, subject: str, body: str, reply_to
         if reply_to:
             message_body["replyTo"] = [{"emailAddress": {"address": reply_to}}]
         _client().request("POST", f"/users/{config.address}/sendMail", {"message": message_body, "saveToSentItems": True})
-        return
+        return True
     if all(os.getenv(name) for name in ("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET")):
-        _send_graph_message(mailbox, recipient, subject, body, reply_to=reply_to)
-        return
+        return _send_graph_message(mailbox, recipient, subject, body, reply_to=reply_to)
 
     username, password = _credentials(mailbox)
     message = EmailMessage()
     message["From"] = MAILBOXES[mailbox].address
     message["To"] = recipient
-    message["Subject"] = subject
+    message["Subject"] = _reply_subject(subject) if reply_to else subject
     if reply_to:
-        message["In-Reply-To"] = reply_to
-        message["References"] = reply_to
+        reference = reply_to if reply_to.startswith("<") else f"<{reply_to}>"
+        message["In-Reply-To"] = reference
+        message["References"] = reference
     message.set_content(body)
     with smtplib.SMTP("smtp.office365.com", 587, timeout=30) as client:
         client.starttls()
         client.login(username, password)
         client.send_message(message)
+    return True
 
 
-def _send_graph_message(mailbox: str, recipient: str, subject: str, body: str, reply_to: Optional[str] = None) -> None:
+def _resolve_graph_message_id(mailbox_user: str, headers: dict, reply_to: str) -> Optional[str]:
+    """Accept either a Graph message id or an Internet Message-ID (<...@...>)."""
+    if not (reply_to.startswith("<") or "@" in reply_to):
+        return reply_to
+    escaped = reply_to.replace("'", "''")
+    response = requests.get(
+        f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/messages",
+        headers=headers,
+        params={"$filter": f"internetMessageId eq '{escaped}'", "$select": "id", "$top": "1"},
+        timeout=30,
+    )
+    if response.status_code >= 400:
+        return None
+    found = (response.json() or {}).get("value") or []
+    return found[0].get("id") if found else None
+
+
+def _send_graph_message(mailbox: str, recipient: str, subject: str, body: str, reply_to: Optional[str] = None) -> bool:
     mailbox_user = _mailbox_user_for_graph(mailbox)
     token = _graph_access_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     if reply_to:
-        url = f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/messages/{reply_to}/reply"
-        payload = {"message": {"body": {"contentType": "Text", "content": body}}}
-    else:
-        url = f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/sendMail"
-        payload = {
+        graph_id = _resolve_graph_message_id(mailbox_user, headers, reply_to)
+        if graph_id:
+            # Outlook's native reply keeps "RE: <original subject>" and the conversation thread.
+            response = requests.post(
+                f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/messages/{graph_id}/reply",
+                headers=headers,
+                json={
+                    "message": {"toRecipients": [{"emailAddress": {"address": recipient}}]},
+                    "comment": body,
+                },
+                timeout=30,
+            )
+            if response.status_code < 400:
+                return True
+            if response.status_code == 429 or response.status_code >= 500:
+                response.raise_for_status()
+        logger.warning(
+            "email_reply_thread_not_found mailbox=%s recipient=%s; sent as new email for team review",
+            mailbox,
+            recipient,
+        )
+    response = requests.post(
+        f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/sendMail",
+        headers=headers,
+        json={
             "message": {
-                "subject": subject,
+                "subject": _reply_subject(subject) if reply_to else subject,
                 "body": {"contentType": "Text", "content": body},
                 "toRecipients": [{"emailAddress": {"address": recipient}}],
             },
             "saveToSentItems": True,
-        }
-    response = requests.post(url, headers=headers, json=payload, timeout=30)
+        },
+        timeout=30,
+    )
     response.raise_for_status()
+    return not reply_to
 
 
 def send_otp_email(recipient: str, code: str) -> None:

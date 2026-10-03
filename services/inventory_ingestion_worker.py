@@ -32,6 +32,8 @@ from services.operations_store import operations_store
 
 logger = logging.getLogger("winged-tycoons-inventory-ingestion")
 
+WAITING_STATUSES = ("Supplier_Sourcing", "No_Quote")
+
 
 class _NullSavepoint:
     def commit(self):
@@ -123,19 +125,8 @@ class InventoryIngestionWorker:
         try:
             async with session_scope(engine) as session:
                 repositories = create_operational_repositories(session)
-                rfq_records = await repositories.records.list_by_payload_value(
-                    "rfqs", "status", "Supplier_Sourcing"
-                )
-                rfqs = [
-                    (str(payload.get("id") or record_id), str(payload.get("status") or ""))
-                    for record_id, payload in rfq_records.items()
-                ]
-                if not rfq_records and not await repositories.records.has_domain("rfqs"):
-                    rfqs = [
-                        (record.id, record.status)
-                        for record in await repositories.rfq.list_by_status("Supplier_Sourcing")
-                    ]
-                for rfq_id, _status in rfqs:
+                rfqs = await self._waiting_rfqs(repositories)
+                for rfq_id, status in rfqs:
                     item_records = await repositories.records.list_by_payload_value(
                         "rfq_items", "rfq_id", rfq_id
                     )
@@ -145,13 +136,15 @@ class InventoryIngestionWorker:
                         for item in item_records.values()
                     ):
                         continue
+                    if status == "No_Quote":
+                        self._reopen_no_quote(rfq_id)
                     await repositories.records.record_automation_event(
                         event_type="resume_waiting_rfq",
                         entity_type="rfq",
                         entity_id=rfq_id,
                         status="QUEUED",
                         result=json.dumps({"part_number": part_number.upper()}),
-                        idempotency_key=f"rfq-resume:{rfq_id}:{part_number.upper()}",
+                        idempotency_key=self._resume_key(rfq_id, part_number, status),
                         max_attempts=3,
                     )
         finally:
@@ -160,19 +153,8 @@ class InventoryIngestionWorker:
     async def _enqueue_waiting_rfqs_async(self, repositories, part_number: str) -> None:
         if not part_number:
             return
-        rfq_records = await repositories.records.list_by_payload_value(
-            "rfqs", "status", "Supplier_Sourcing"
-        )
-        rfqs = [
-            (str(payload.get("id") or record_id), str(payload.get("status") or ""))
-            for record_id, payload in rfq_records.items()
-        ]
-        if not rfq_records and not await repositories.records.has_domain("rfqs"):
-            rfqs = [
-                (record.id, record.status)
-                for record in await repositories.rfq.list_by_status("Supplier_Sourcing")
-            ]
-        for rfq_id, _status in rfqs:
+        rfqs = await self._waiting_rfqs(repositories)
+        for rfq_id, status in rfqs:
             item_records = await repositories.records.list_by_payload_value(
                 "rfq_items", "rfq_id", rfq_id
             )
@@ -182,13 +164,15 @@ class InventoryIngestionWorker:
                 for item in item_records.values()
             ):
                 continue
+            if status == "No_Quote":
+                self._reopen_no_quote(rfq_id)
             await repositories.records.record_automation_event(
                 event_type="resume_waiting_rfq",
                 entity_type="rfq",
                 entity_id=rfq_id,
                 status="QUEUED",
                 result=json.dumps({"part_number": part_number.upper()}),
-                idempotency_key=f"rfq-resume:{rfq_id}:{part_number.upper()}",
+                idempotency_key=self._resume_key(rfq_id, part_number, status),
                 max_attempts=3,
             )
 
@@ -196,24 +180,60 @@ class InventoryIngestionWorker:
         from services.db_service import db_service
 
         for rfq in db_service.list_rfqs():
-            if rfq.status != "Supplier_Sourcing":
+            if rfq.status not in WAITING_STATUSES:
                 continue
             if not any(
                 (item.resolved_part_number or item.requested_part_number).upper() == part_number.upper()
                 for item in db_service.get_rfq_items(rfq.id)
             ):
                 continue
-            self._record_resume_event(rfq.id, part_number)
+            status = rfq.status
+            if status == "No_Quote":
+                self._reopen_no_quote(rfq.id)
+            self._record_resume_event(rfq.id, part_number, status)
 
     @staticmethod
-    def _record_resume_event(rfq_id: str, part_number: str) -> None:
+    def _resume_key(rfq_id: str, part_number: str, status: str = "") -> str:
+        suffix = ":reopen" if status == "No_Quote" else ""
+        return f"rfq-resume:{rfq_id}:{part_number.upper()}{suffix}"
+
+    @staticmethod
+    def _reopen_no_quote(rfq_id: str) -> None:
+        from services.db_service import db_service
+        from services.no_quote_service import reopen_if_no_quote
+
+        try:
+            reopen_if_no_quote(db_service, rfq_id)
+        except Exception:
+            logger.exception("Late-offer reopen failed rfq=%s", rfq_id)
+
+    @staticmethod
+    async def _waiting_rfqs(repositories) -> list[tuple[str, str]]:
+        rfqs: list[tuple[str, str]] = []
+        found_records = False
+        for wanted in WAITING_STATUSES:
+            rfq_records = await repositories.records.list_by_payload_value("rfqs", "status", wanted)
+            found_records = found_records or bool(rfq_records)
+            rfqs.extend(
+                (str(payload.get("id") or record_id), str(payload.get("status") or wanted))
+                for record_id, payload in rfq_records.items()
+            )
+        if not found_records and not await repositories.records.has_domain("rfqs"):
+            for wanted in WAITING_STATUSES:
+                rfqs.extend(
+                    (record.id, record.status) for record in await repositories.rfq.list_by_status(wanted)
+                )
+        return rfqs
+
+    @classmethod
+    def _record_resume_event(cls, rfq_id: str, part_number: str, status: str = "") -> None:
         event_id = operations_store.record_automation_event(
             event_type="resume_waiting_rfq",
             entity_type="rfq",
             entity_id=rfq_id,
             status="QUEUED",
             result=json.dumps({"part_number": part_number.upper()}),
-            idempotency_key=f"rfq-resume:{rfq_id}:{part_number.upper()}",
+            idempotency_key=cls._resume_key(rfq_id, part_number, status),
             max_attempts=3,
         )
         logger.info("Queued RFQ resume event=%s rfq=%s part=%s", event_id, rfq_id, part_number)

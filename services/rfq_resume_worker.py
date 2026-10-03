@@ -45,6 +45,8 @@ def dispatch_once(limit: int = 10) -> dict[str, int]:
 
 def run() -> None:
     interval = max(1, int(os.getenv("RFQ_RESUME_POLL_INTERVAL_SECONDS", "15")))
+    sweep_interval = max(60, int(os.getenv("NO_QUOTE_SWEEP_INTERVAL_SECONDS", "300")))
+    last_sweep = 0.0
     while True:
         try:
             result = dispatch_once()
@@ -52,6 +54,16 @@ def run() -> None:
                 logger.info("RFQ resume batch succeeded=%d failed=%d", result["succeeded"], result["failed"])
         except Exception:
             logger.exception("RFQ resume queue poll failed")
+        if time.monotonic() - last_sweep >= sweep_interval:
+            last_sweep = time.monotonic()
+            try:
+                from services.no_quote_service import sweep_no_quote
+
+                closed = sweep_no_quote()
+                if closed:
+                    logger.info("No-quote rule closed rfqs=%s", ",".join(closed))
+            except Exception:
+                logger.exception("No-quote sweep failed")
         time.sleep(interval)
 
 

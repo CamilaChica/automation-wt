@@ -22,6 +22,7 @@ const statusLabel = (status: string) => {
     VALIDATING: 'Reading request',
     INTAKE: 'New',
     REJECTED: 'Declined',
+    NO_QUOTE: 'No Quote',
   };
   return labels[key] || status.replace(/_/g, ' ').toLowerCase().replace(/^\w/, c => c.toUpperCase());
 };

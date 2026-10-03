@@ -1,6 +1,7 @@
 """Natural-language supplier and customer email workflows."""
 
 import asyncio
+import logging
 import os
 import re
 import json
@@ -30,6 +31,8 @@ from services.email_templates import (
 from services.mailbox_service import MAILBOXES, send_message
 from services.operations_store import operations_store
 from services.supplier_database import supplier_db
+
+logger = logging.getLogger(__name__)
 
 customer_question_service = CustomerQuestionService()
 
@@ -817,6 +820,41 @@ class CommunicationService:
             deduplication_key=f"rfq-ack:{rfq_id}",
         )
 
+    def send_rfq_no_quote(
+        self,
+        *,
+        rfq_id: str,
+        recipient: str,
+        customer_name: str | None,
+        part_numbers: List[str],
+        reply_to: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Politely tell the customer, in the original thread and once per RFQ, that we could not source the part."""
+        if not recipient or not self._is_valid_email(recipient):
+            return None
+        lowered = recipient.lower()
+        if "partsbase" in lowered or lowered.endswith("@wingedtycoons.com"):
+            return None
+        name = safe_display_text(customer_name or "") or "there"
+        parts = [safe_display_text(str(p), fallback="").strip() for p in part_numbers]
+        parts = [p for p in dict.fromkeys(parts) if p]
+        part_text = ", ".join(f"P/N {p}" for p in parts) if parts else "the requested part"
+        body = (
+            f"Hello {name},\n\n"
+            f"Thank you for your request for quote {rfq_id} for {part_text}.\n\n"
+            "We weren't able to source this part right now; we'll let you know if it becomes available.\n\n"
+            "Best regards,\nWinged Tycoons Sales Team"
+        )
+        return self._send(
+            "sales",
+            recipient,
+            f"Re: Your request for quote {rfq_id}",
+            body,
+            reply_to=reply_to,
+            entity_id=rfq_id,
+            deduplication_key=f"rfq-noquote:{rfq_id}",
+        )
+
     def send_customer_information_response(
         self,
         *,
@@ -1114,8 +1152,11 @@ class CommunicationService:
         if not self._is_valid_email(recipient):
             raise ValueError("Recipient email is invalid. Email dispatch aborted.")
         if self._sending_enabled():
-            send_message(mailbox, recipient, subject, body, reply_to=reply_to)
+            threaded = send_message(mailbox, recipient, subject, body, reply_to=reply_to)
             result["transmission_status"] = "SENT"
+            result["threaded"] = threaded is not False
+            if reply_to and threaded is False:
+                self._flag_unthreaded_reply(reply_to, recipient, subject, reply_to)
         communication_id = operations_store.record_communication(
             entity_type="email",
             entity_id=reply_to or subject,
@@ -1137,6 +1178,24 @@ class CommunicationService:
         result["communication_id"] = communication_id
         return result
 
+    @staticmethod
+    def _unthreaded_review_values(key: str, recipient: str, subject: str, entity_id: Any) -> dict[str, Any]:
+        return {
+            "idempotency_key": f"unthreaded:{key}",
+            "task": "email_thread_check",
+            "source_text": subject or "",
+            "extraction": {"recipient": recipient, "subject": subject},
+            "reason": "Original email thread not found; reply was sent as a new email. Please check with the client.",
+            "entity_id": str(entity_id) if entity_id else None,
+        }
+
+    def _flag_unthreaded_reply(self, key: str, recipient: str, subject: str, entity_id: Any) -> None:
+        logger.warning("email_sent_unthreaded recipient=%s subject=%s", recipient, subject)
+        try:
+            operations_store.enqueue_operator_review(**self._unthreaded_review_values(key, recipient, subject, entity_id))
+        except Exception:
+            logger.exception("Could not flag unthreaded reply key=%s", key)
+
     def dispatch_outbox_once(self, *, limit: int = 25) -> dict[str, int]:
         if operations_store.storage_engine != "postgresql":
             return {"sent": 0, "failed": 0}
@@ -1147,13 +1206,17 @@ class CommunicationService:
             payload = message.get("payload") or {}
             body = payload.get("body", "") if isinstance(payload, dict) else str(payload)
             try:
-                send_message(
+                threaded = send_message(
                     message["mailbox"],
                     message["recipient"],
                     message["subject"],
                     body,
                     reply_to=message.get("reply_to"),
                 )
+                if message.get("reply_to") and threaded is False:
+                    self._flag_unthreaded_reply(
+                        str(message["id"]), message["recipient"], message["subject"], message.get("entity_id")
+                    )
             except Exception as exc:
                 response = getattr(exc, "response", None)
                 status_code = getattr(response, "status_code", None) or getattr(exc, "status_code", None) or getattr(exc, "smtp_code", None)
@@ -1231,8 +1294,9 @@ class CommunicationService:
             body = payload.get("body", "") if isinstance(payload, dict) else str(payload)
             error = None
             retryable = False
+            threaded = True
             try:
-                await asyncio.to_thread(
+                threaded = await asyncio.to_thread(
                     send_message,
                     message["mailbox"],
                     message["recipient"],
@@ -1276,6 +1340,12 @@ class CommunicationService:
                         status="SENT",
                     )
                     await repositories.records.mark_outbox_sent(message["id"])
+                    if message.get("reply_to") and threaded is False:
+                        await repositories.records.enqueue_operator_review(
+                            **self._unthreaded_review_values(
+                                str(message["id"]), message["recipient"], message["subject"], message.get("entity_id")
+                            )
+                        )
                     if message.get("entity_id"):
                         await repositories.quote.finalize_outbox_delivery(
                             str(message["entity_id"]), delivered=True

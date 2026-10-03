@@ -21,6 +21,7 @@ class WorkflowState(StrEnum):
     COMPLIANCE_REVIEW_BLOCKED = "Blocked_Compliance_Review"
     VERIFICATION_HALTED = "Verification_Halted"
     SUPPLIER_SOURCING_FAILED = "Sourcing_Failed"
+    NO_QUOTE = "No_Quote"
     COMPLIANCE_CHECK = "Compliance_Check"
     COMPLIANCE_BLOCKED = "Compliance_Blocked"
     COMPLIANCE_WARNING = "Compliance_Warning"
@@ -65,7 +66,9 @@ LEGACY_TRANSITIONS = {
     "Intake_Failed": {"Intake"},
     "Validating": {"Inventory_Lookup", "Supplier_Sourcing", "Verification_Halted"},
     "Inventory_Lookup": {"Supplier_Sourcing", "Compliance_Check"},
-    "Supplier_Sourcing": {"Sourcing_Failed", "Compliance_Check", "Supplier_Sourcing"},
+    "Supplier_Sourcing": {"Sourcing_Failed", "Compliance_Check", "Supplier_Sourcing", "No_Quote"},
+    "Sourcing_Failed": {"No_Quote", "Supplier_Sourcing"},
+    "No_Quote": {"Supplier_Sourcing"},
     "Compliance_Check": {"Compliance_Blocked", "Compliance_Warning", "Pricing"},
     "Pricing": {"Quote_Generation"},
     "Quote_Generation": {"Pending_Approval", "Quote_Sent", "Quote_Dispatch_Pending", "Quote_Dispatch_Failed", "Pending_Internal_Review"},

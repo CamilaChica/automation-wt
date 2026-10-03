@@ -524,7 +524,10 @@ class MockDatabaseService:
     @staticmethod
     def _attach_part_numbers(rfqs: List[RFQ], items) -> List[RFQ]:
         parts_by_rfq: dict[str, list[str]] = {}
-        for item in items:
+        flat = []
+        for entry in items:
+            flat.extend(entry if isinstance(entry, (list, tuple)) else [entry])
+        for item in flat:
             if not isinstance(item, dict):
                 item = item.model_dump() if hasattr(item, "model_dump") else vars(item)
             part = str(

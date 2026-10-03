@@ -15,7 +15,7 @@ export type ISODateTime = string;
 export type RFQStatus =
   | 'Intake' | 'Validating' | 'Supplier_Sourcing' | 'Compliance_Check' | 'Pricing'
   | 'Pending_Approval' | 'Quote_Sent' | 'Quote_Dispatch_Pending' | 'Rejected'
-  | 'FAILED' | 'NEEDS_HUMAN_REVIEW' | 'Intake_Failed' | (string & {});
+  | 'FAILED' | 'NEEDS_HUMAN_REVIEW' | 'Intake_Failed' | 'No_Quote' | (string & {});
 
 export interface RFQItem {
   id: string;
