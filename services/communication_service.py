@@ -991,7 +991,7 @@ class CommunicationService:
         round_number: int = 1,
         quantity: int = 1,
     ) -> Dict[str, Any]:
-        max_rounds = int(os.getenv("SUPPLIER_DISCOUNT_MAX_ROUNDS", "2"))
+        max_rounds = min(5, max(1, int(os.getenv("SUPPLIER_DISCOUNT_MAX_ROUNDS", "3"))))
         if round_number > max_rounds:
             return {"status": "LIMIT_REACHED", "round": round_number}
         template = compose_supplier_discount_request(SupplierDiscountData(
@@ -1025,7 +1025,7 @@ class CommunicationService:
         round_number: int = 1,
         quantity: int = 1,
     ) -> Dict[str, Any]:
-        max_rounds = int(os.getenv("SUPPLIER_DISCOUNT_MAX_ROUNDS", "2"))
+        max_rounds = min(5, max(1, int(os.getenv("SUPPLIER_DISCOUNT_MAX_ROUNDS", "3"))))
         if round_number > max_rounds:
             return {"status": "LIMIT_REACHED", "round": round_number}
         template = compose_supplier_discount_request(SupplierDiscountData(
