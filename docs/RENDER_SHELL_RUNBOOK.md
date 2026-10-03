@@ -34,4 +34,4 @@ curl --silent --show-error --write-out '\nHTTP %{http_code}\n' "${API_BASE_URL}/
 curl --silent --show-error --write-out '\nHTTP %{http_code}\n' "${API_BASE_URL}/ready"
 ```
 
-`/ready` currently returns HTTP 503 because the full PostgreSQL runtime cutover is not complete. Preserve that gate; do not enable `OPERATIONAL_POSTGRES_RUNTIME_ENABLED` or resume workers until every pending item in the canonical release plan is approved and evidenced.
+`OPERATIONAL_POSTGRES_RUNTIME_ENABLED` is `true` on all services in `render.yaml`; `/ready` reports `full_operational_persistence_ready: true` once the PostgreSQL schema checks pass.

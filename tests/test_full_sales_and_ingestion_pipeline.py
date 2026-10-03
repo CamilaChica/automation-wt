@@ -125,14 +125,14 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
     def test_postgres_inventory_resume_uses_scoped_async_repository_reads(self):
         events = []
         records = SimpleNamespace(
-            list_by_payload_value=AsyncMock(side_effect=[
-            {
-                "RFQ-MATCH": {"id": "RFQ-MATCH", "status": "Supplier_Sourcing"},
-                "RFQ-NO-MATCH": {"id": "RFQ-NO-MATCH", "status": "Supplier_Sourcing"},
-            },
-            {"ITEM-MATCH": {"resolved_part_number": "PN-1"}},
-            {"ITEM-OTHER": {"requested_part_number": "PN-2"}},
-            ]),
+            list_by_payload_value=AsyncMock(side_effect=lambda domain, _field, value: {
+                ("rfqs", "Supplier_Sourcing"): {
+                    "RFQ-MATCH": {"id": "RFQ-MATCH", "status": "Supplier_Sourcing"},
+                    "RFQ-NO-MATCH": {"id": "RFQ-NO-MATCH", "status": "Supplier_Sourcing"},
+                },
+                ("rfq_items", "RFQ-MATCH"): {"ITEM-MATCH": {"resolved_part_number": "PN-1"}},
+                ("rfq_items", "RFQ-NO-MATCH"): {"ITEM-OTHER": {"requested_part_number": "PN-2"}},
+            }.get((domain, value), {})),
             has_domain=AsyncMock(return_value=True),
             record_automation_event=AsyncMock(side_effect=lambda **values: events.append(values) or "EVENT-1"),
         )
@@ -172,6 +172,7 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
             records.list_by_payload_value.await_args_list,
             [
                 unittest.mock.call("rfqs", "status", "Supplier_Sourcing"),
+                unittest.mock.call("rfqs", "status", "No_Quote"),
                 unittest.mock.call("rfq_items", "rfq_id", "RFQ-MATCH"),
                 unittest.mock.call("rfq_items", "rfq_id", "RFQ-NO-MATCH"),
             ],
@@ -187,11 +188,13 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
         engine.disposed = False
         records.list_by_payload_value = AsyncMock(side_effect=[
             {},
+            {},
             {"ITEM-RELATIONAL": {"requested_part_number": "PN-1"}},
         ])
         records.has_domain = AsyncMock(return_value=False)
-        rfq_repository.list_by_status = AsyncMock(return_value=[
-            SimpleNamespace(id="RFQ-RELATIONAL", status="Supplier_Sourcing"),
+        rfq_repository.list_by_status = AsyncMock(side_effect=[
+            [SimpleNamespace(id="RFQ-RELATIONAL", status="Supplier_Sourcing")],
+            [],
         ])
         with (
             patch("services.inventory_ingestion_worker.operations_store", StoreStub()),
@@ -201,7 +204,10 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
         ):
             worker._enqueue_waiting_rfqs("PN-1")
 
-        rfq_repository.list_by_status.assert_awaited_once_with("Supplier_Sourcing")
+        self.assertEqual(
+            rfq_repository.list_by_status.await_args_list,
+            [unittest.mock.call("Supplier_Sourcing"), unittest.mock.call("No_Quote")],
+        )
         records.has_domain.assert_awaited_once_with("rfqs")
         self.assertEqual(events[0]["entity_id"], "RFQ-RELATIONAL")
         self.assertTrue(engine.disposed)

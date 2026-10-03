@@ -47,7 +47,9 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: OPERATIONAL_POSTGRES_RUNTIME_ENABLED
-        value: "false"
+        value: "true"
+      - key: TRUST_PROXY_HEADERS
+        value: "true"
       - key: ALLOWED_ORIGINS
         value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com"
       - key: GRAPH_TENANT_ID
@@ -215,7 +217,7 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: OPERATIONAL_POSTGRES_RUNTIME_ENABLED
-        value: "false"
+        value: "true"
       - key: ALLOWED_ORIGINS
         value: "https://winged-tycoons-frontend.onrender.com,https://wingedtycoons.com"
       - key: EMAIL_SEND_ENABLED
@@ -305,7 +307,7 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: OPERATIONAL_POSTGRES_RUNTIME_ENABLED
-        value: "false"
+        value: "true"
       - key: EMAIL_SEND_ENABLED
         value: "true"
       - key: SALES_EMAIL_USERNAME
@@ -342,7 +344,7 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: OPERATIONAL_POSTGRES_RUNTIME_ENABLED
-        value: "false"
+        value: "true"
       - key: OPENAI_API_KEY
         sync: false
       - key: LLM_DEFAULT_PROVIDER

@@ -187,7 +187,7 @@ def supplier_discount_request(data: SupplierDiscountData) -> EmailPayload:
     }.get(data.supplier_sentiment, "Thank you for providing the initial quotation.")
     body = (
         f"Dear {data.supplier_contact},\n\n"
-        f"{acknowledgement} The initial quotation for PN {data.part_number} is ${data.quoted_price:,.2f} per unit.\n\n"
+        f"{acknowledgement} Your initial quotation was PN {data.part_number} at ${data.quoted_price:,.2f} per unit.\n\n"
         "We are actively working to secure this order for our customer. Could you please confirm if you can offer your best commercial price, best possible net price, or any volume discount for this requirement?\n\n"
         "We appreciate your support and look forward to finalizing this purchase.\n\n"
         "Best regards,\n\n"

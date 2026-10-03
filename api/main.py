@@ -145,10 +145,11 @@ _rate_limit_events: dict[tuple[str, str], deque[float]] = defaultdict(deque)
 
 
 def _client_key(request: Request) -> str:
-    # Render's proxy terminates TLS; the real client IP is the first X-Forwarded-For entry.
-    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-    if forwarded:
-        return forwarded
+    # Only trust X-Forwarded-For behind our own proxy (Render); use the entry the proxy appended.
+    if os.getenv("TRUST_PROXY_HEADERS", "").strip().lower() in {"1", "true", "yes", "on"}:
+        forwarded = request.headers.get("x-forwarded-for", "").split(",")[-1].strip()
+        if forwarded:
+            return forwarded
     return request.client.host if request.client else "unknown"
 
 
@@ -966,20 +967,13 @@ async def submit_rfq(
     if not request.raw_text.strip():
         raise HTTPException(status_code=400, detail="Raw RFQ text cannot be empty.")
         
-    # Customers may route replies to a different contact email; the portal
-    # account stays recorded as the owner so the RFQ remains visible to them.
+    # Signed-in customers always submit under the email they logged in with.
     raw_text = request.raw_text
     if user["role"] == ROLE_CUSTOMER:
-        account_email = str(user["email"]).strip().lower()
-        typed_email = (request.customer_email or "").strip().lower()
+        customer_email = str(user["email"]).strip().lower()
         customer_name = (request.customer_name or "").strip()
-        if not customer_name or not typed_email:
+        if not customer_name:
             raise HTTPException(status_code=422, detail="Company name and email are required.")
-        if not EMAIL_PATTERN.fullmatch(typed_email):
-            raise HTTPException(status_code=400, detail="Please enter a valid email address.")
-        customer_email = typed_email
-        if customer_email != account_email:
-            raw_text = f"{raw_text.rstrip()}\n\n{PORTAL_ACCOUNT_MARKER}{account_email}"
     else:
         customer_name = request.customer_name or "Delta MRO Services"
         customer_email = request.customer_email or "procurement@deltamro.com"

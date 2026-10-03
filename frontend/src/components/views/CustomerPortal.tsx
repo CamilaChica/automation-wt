@@ -23,7 +23,8 @@ export const CustomerPortal: React.FC = () => {
   const [results, setResults] = useState<CatalogResult[]>([]);
   const [usingFallbackCatalog, setUsingFallbackCatalog] = useState(false);
   const [customerName, setCustomerName] = useState('');
-  const [customerEmail, setCustomerEmail] = useState('');
+  const [loginEmail, setLoginEmail] = useState(() => apiService.getUserEmail() || '');
+  const [customerEmail, setCustomerEmail] = useState(loginEmail);
   const [partNumber, setPartNumber] = useState('');
   const [condition, setCondition] = useState('');
   const [quantity, setQuantity] = useState(1);
@@ -54,6 +55,18 @@ export const CustomerPortal: React.FC = () => {
   const shipment = shipmentTraceQuery.data;
   const isTracking = shipmentTraceQuery.isLoading;
   const t = (phrase: Parameters<typeof translateCustomerPortal>[1], values?: Record<string, string | number>) => translateCustomerPortal(language, phrase, values);
+
+  useEffect(() => {
+    let active = true;
+    apiService.validateSession().then(() => {
+      const email = apiService.getUserEmail() || '';
+      if (active && email) {
+        setLoginEmail(email);
+        setCustomerEmail(email);
+      }
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     document.documentElement.lang = language;
@@ -138,7 +151,7 @@ export const CustomerPortal: React.FC = () => {
       setDetails('');
       setPartsListFile(null);
       setCustomerName('');
-      setCustomerEmail('');
+      setCustomerEmail(loginEmail);
       setAgreementSigned(false);
       setRequestFormKey(key => key + 1);
     } catch (error) {
@@ -327,7 +340,7 @@ export const CustomerPortal: React.FC = () => {
               <label htmlFor="customer-name" className="block text-xs font-semibold text-slate-700">{t('companyName')} <span className="text-red-600" aria-hidden="true">*</span></label>
               <input id="customer-name" name="customer-name" autoComplete="organization" aria-label={t('companyName')} aria-required="true" required value={customerName} onChange={event => setCustomerName(event.target.value)} placeholder="e.g., Global Airlines" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
               <label htmlFor="customer-email" className="block text-xs font-semibold text-slate-700">{t('workEmail')} <span className="text-red-600" aria-hidden="true">*</span></label>
-              <input id="customer-email" name="customer-email" autoComplete="email" aria-label={t('workEmail')} aria-required="true" required type="email" value={customerEmail} onChange={event => setCustomerEmail(event.target.value)} placeholder="e.g., buyer@airline.com" className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
+              <input id="customer-email" name="customer-email" autoComplete="email" aria-label={t('workEmail')} aria-required="true" required type="email" value={customerEmail} readOnly={Boolean(loginEmail)} title={loginEmail ? 'Signed-in email' : undefined} onChange={event => { if (!loginEmail) setCustomerEmail(event.target.value); }} placeholder="e.g., buyer@airline.com" className={`w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none ${loginEmail ? 'cursor-not-allowed text-slate-400' : ''}`} />
               <div className="flex gap-3">
                 <label htmlFor="rfq-part-number" className="sr-only">{t('partNumber')}</label>
                   <input id="rfq-part-number" name="part-number" aria-label={t('partNumber')} autoComplete="off" required={!partsListFile} value={partNumber} onChange={event => setPartNumber(event.target.value)} placeholder="e.g., BACB30LU-4" className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-cyan-400 focus:outline-none" />
@@ -402,7 +415,7 @@ export const CustomerPortal: React.FC = () => {
               <label htmlFor="po-number" className="sr-only">{t('poNumber')}</label>
               <input id="po-number" name="po-number" autoComplete="off" required disabled={isSubmittingPo} value={poNumber} onChange={event => setPoNumber(event.target.value)} placeholder="e.g., PO-1001" className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none disabled:opacity-60" />
               <label htmlFor="po-email" className="sr-only">{t('poEmail')}</label>
-              <input id="po-email" name="po-email" autoComplete="email" required disabled={isSubmittingPo} type="email" value={customerEmail} onChange={event => setCustomerEmail(event.target.value)} placeholder="e.g., buyer@airline.com" className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none disabled:opacity-60" />
+              <input id="po-email" name="po-email" autoComplete="email" required disabled={isSubmittingPo} type="email" value={customerEmail} readOnly={Boolean(loginEmail)} title={loginEmail ? 'Signed-in email' : undefined} onChange={event => { if (!loginEmail) setCustomerEmail(event.target.value); }} placeholder="e.g., buyer@airline.com" className={`w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:outline-none disabled:opacity-60 ${loginEmail ? 'cursor-not-allowed text-slate-500' : ''}`} />
               <div className="rounded-xl border border-slate-300 bg-white p-3 text-xs text-slate-700"><p className="font-semibold">{t('requiredDocuments')}</p><div className="mt-2 flex flex-wrap gap-3"><a className="text-emerald-800 underline" href="/documents/WingedTycoons-Export-Compliance-Certification.pdf" download>{t('downloadExport')}</a><a className="text-emerald-800 underline" href="/documents/WingedTycoons-KYC-Form.pdf" download>{t('downloadKyc')}</a></div></div>
               <div key={poFormKey} className="space-y-3">
                 <label htmlFor="po-document" className="block text-xs font-semibold text-slate-700">{t('poDocument')} <span className="text-red-600" aria-hidden="true">*</span><input id="po-document" name="po-document" disabled={isSubmittingPo} type="file" accept={PO_FILE_ACCEPT} onChange={event => pickPoFile(event, setPoDocument)} className="mt-1 block w-full text-xs disabled:opacity-60" />{poDocument && <span className="mt-1 block text-emerald-800">✓ {poDocument.name}</span>}</label>

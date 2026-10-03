@@ -46,7 +46,8 @@ export const CustomerDashboard: React.FC = () => {
 
   // Form State for RFQ
   const [customerName, setCustomerName] = useState('');
-  const [customerEmail, setCustomerEmail] = useState('');
+  const [loginEmail, setLoginEmail] = useState(() => (apiService.getRole() === 'customer' ? apiService.getUserEmail() || '' : ''));
+  const [customerEmail, setCustomerEmail] = useState(loginEmail);
   const [partNumber, setPartNumber] = useState('');
   const [partName, setPartName] = useState('');
   const [ataChapter, setAtaChapter] = useState('');
@@ -106,6 +107,19 @@ export const CustomerDashboard: React.FC = () => {
     ['quoted', 'quote_ready', 'pending_approval', 'pending_internal_review'].includes(rfq.status.trim().toLowerCase().replace(/[\s-]+/g, '_')),
   ).length;
   const inTransitShipmentCount = shipments.filter(shipment => /transit|shipped|out_for_delivery/i.test(shipment.status)).length;
+
+  useEffect(() => {
+    if (apiService.getRole() !== 'customer') return;
+    let active = true;
+    apiService.validateSession().then(() => {
+      const email = apiService.getUserEmail() || '';
+      if (active && email) {
+        setLoginEmail(email);
+        setCustomerEmail(email);
+      }
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     if (!selectedRfqId && activeRfqs.length > 0) setSelectedRfqId(activeRfqs[0].id);
@@ -451,7 +465,7 @@ export const CustomerDashboard: React.FC = () => {
                 </label>
                 <label className="space-y-1.5 font-mono font-semibold text-slate-700 dark:text-slate-300">
                   <span>Customer email</span>
-                  <input type="email" autoComplete="email" required maxLength={320} value={customerEmail} onChange={event => setCustomerEmail(event.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm font-normal text-slate-800 focus:border-aero-blue focus:outline-none focus:ring-2 focus:ring-aero-blue/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200" />
+                  <input type="email" autoComplete="email" required maxLength={320} value={customerEmail} readOnly={Boolean(loginEmail)} title={loginEmail ? 'Signed-in email' : undefined} onChange={event => { if (!loginEmail) setCustomerEmail(event.target.value); }} className={`w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm font-normal text-slate-800 focus:border-aero-blue focus:outline-none focus:ring-2 focus:ring-aero-blue/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 ${loginEmail ? 'cursor-not-allowed opacity-75' : ''}`} />
                 </label>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

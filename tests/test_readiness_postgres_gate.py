@@ -33,6 +33,7 @@ async def test_production_startup_skips_postgres_ping_while_runtime_is_disabled(
 
     preflight = AsyncMock(side_effect=AssertionError("startup must not ping postgres while runtime is off"))
     monkeypatch.setenv("WT_ENV", "production")
+    monkeypatch.setenv("WT_AUTH_ENV", "production")
     monkeypatch.setenv("OPERATIONAL_POSTGRES_RUNTIME_ENABLED", "false")
     monkeypatch.setattr(main, "preflight_database", preflight)
     monkeypatch.setattr(main, "initialize_voice_media", Mock())
@@ -47,6 +48,7 @@ async def test_production_startup_checks_postgres_when_runtime_is_enabled(monkey
 
     preflight = AsyncMock(return_value=None)
     monkeypatch.setenv("WT_ENV", "production")
+    monkeypatch.setenv("WT_AUTH_ENV", "production")
     monkeypatch.setenv("OPERATIONAL_POSTGRES_RUNTIME_ENABLED", "true")
     monkeypatch.setattr(main, "preflight_database", preflight)
     monkeypatch.setattr(main, "initialize_voice_media", Mock())
