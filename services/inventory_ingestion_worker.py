@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from email.utils import parseaddr
 from typing import Any, Callable
 
@@ -32,7 +33,11 @@ from services.operations_store import operations_store
 
 logger = logging.getLogger("winged-tycoons-inventory-ingestion")
 
-WAITING_STATUSES = ("Supplier_Sourcing", "No_Quote")
+WAITING_STATUSES = (
+    "Supplier_Sourcing",
+    "No_Quote",
+    "Supplier_Confirmation_Requested",
+)
 
 
 class _NullSavepoint:
@@ -64,6 +69,10 @@ class InventoryIngestionWorker:
         self.backfill_days = int(os.getenv("INVENTORY_INGESTION_BACKFILL_DAYS", "3650"))
         self.backfill_page_size = int(os.getenv("INVENTORY_INGESTION_BACKFILL_PAGE_SIZE", "25"))
         self.backfill_offset = 0
+        self.backfill_stats: dict[str, Any] | None = None
+        self.backfill_progress_loaded = False
+        self.backfill_complete = False
+        self.backfill_force = os.getenv("INVENTORY_INGESTION_BACKFILL_FORCE", "false").strip().lower() in {"1", "true", "yes", "on"}
         explicit_postgres = os.getenv("INVENTORY_INGESTION_POSTGRES_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
         self.postgres_enabled = bool(os.getenv("DATABASE_URL", "").strip()) and explicit_postgres
 
@@ -373,6 +382,7 @@ class InventoryIngestionWorker:
                     repositories,
                     mailbox=self.mailbox,
                     message_id=message_id or None,
+                    source_received_at=_received_at(message.get("date")),
                 )
                 if not result.get("success") and "no part number" in str(result.get("error", "")).lower():
                     pdf_attachments = [
@@ -409,7 +419,11 @@ class InventoryIngestionWorker:
                 if message_id:
                     # Always advance: unparseable supplier mail must not be re-ingested every poll.
                     await repositories.records.mark_inbound_message_processed(message_id)
-                    if not (successful or held_for_review):
+                    if held_for_review:
+                        await repositories.records.set_raw_email_processing_status(
+                            self.mailbox, message_id, "pending_human_review"
+                        )
+                    elif not successful:
                         await repositories.records.set_raw_email_processing_status(
                             self.mailbox, message_id, "no_inventory_data"
                         )
@@ -469,6 +483,7 @@ class InventoryIngestionWorker:
                             mailbox=self.mailbox,
                             message_id=message_id,
                             attachments=message.get("attachments") or [],
+                            source_received_at=_received_at(message.get("date")),
                         )
                 except Exception:
                     savepoint.rollback()
@@ -495,9 +510,14 @@ class InventoryIngestionWorker:
                     mailbox=self.mailbox,
                     message_id=message_id or None,
                     attachments=message.get("attachments") or [],
+                    source_received_at=_received_at(message.get("date")),
                 )
             if message_id:
                 operations_store.mark_inbound_message_processed(message_id, internet_message_id)
+        if postgres_mode and message_id and result.get("status") == "Pending_Human_Review":
+            operations_store.set_raw_email_processing_status(
+                self.mailbox, message_id, "pending_human_review"
+            )
         if not result.get("success") and "No part number detected" in str(result.get("error")):
             pdf_attachments = [
                 attachment for attachment in message.get("attachments") or []
@@ -578,29 +598,141 @@ class InventoryIngestionWorker:
 
     def backfill_once(self, max_pages: int = 20) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
+        if not self.backfill_progress_loaded:
+            self._load_backfill_progress()
+        if self.backfill_complete and not self.backfill_force:
+            return results
+        if self.backfill_stats is None:
+            self.backfill_stats = {
+                "pages_fetched": 0,
+                "messages_fetched": 0,
+                "messages_processed": 0,
+                "offers_extracted": 0,
+                "messages_needing_review": 0,
+                "messages_without_offer": 0,
+                "processing_failures": 0,
+                "oldest_received_at": None,
+            }
         for _ in range(max_pages):
             try:
-                messages = self.fetch_messages(
-                    self.mailbox,
-                    limit=self.backfill_page_size,
-                    skip=self.backfill_offset,
-                    max_age_days=self.backfill_days,
-                )
+                fetch_options = {
+                    "limit": self.backfill_page_size,
+                    "skip": self.backfill_offset,
+                    "max_age_days": self.backfill_days,
+                }
+                if self.fetch_messages is fetch_inbox_messages:
+                    fetch_options["oldest_first"] = True
+                messages = self.fetch_messages(self.mailbox, **fetch_options)
             except Exception:
-                logger.exception("Inventory backfill fetch failed at offset %s", self.backfill_offset)
+                self._persist_backfill_progress("incomplete")
+                logger.exception(
+                    "inventory_backfill_incomplete offset=%s stats=%s",
+                    self.backfill_offset,
+                    json.dumps(self.backfill_stats, sort_keys=True),
+                )
                 return results
             if not messages:
-                logger.info("Inventory backfill reached end of mailbox at offset %s; restarting", self.backfill_offset)
+                self._persist_backfill_progress("complete", offset=0)
+                logger.info(
+                    "inventory_backfill_complete mailbox=%s age_days=%s stats=%s",
+                    self.mailbox,
+                    self.backfill_days,
+                    json.dumps(self.backfill_stats, sort_keys=True),
+                )
                 self.backfill_offset = 0
+                self.backfill_stats = None
+                self.backfill_complete = True
                 return results
             logger.info("Inventory backfill offset=%s messages=%s", self.backfill_offset, len(messages))
             self.backfill_offset += len(messages)
             page = self._process_batch(messages)
+            self._record_backfill_page(messages, page)
+            self._persist_backfill_progress("running")
             results.extend(page)
             # Keep paging only while the page held nothing new (already ingested after a restart).
             if not all(item.get("skipped") or (item.get("result") or {}).get("skipped") for item in page):
                 return results
         return results
+
+    def _load_backfill_progress(self) -> None:
+        self.backfill_progress_loaded = True
+        if operations_store.storage_engine != "postgresql":
+            return
+        state = operations_store.get_operational_record(
+            "ingestion_state", f"supplier-backfill:{self.mailbox}"
+        )
+        if self.backfill_force or not state or int(state.get("age_days") or 0) != self.backfill_days:
+            return
+        if state.get("status") == "complete":
+            self.backfill_complete = True
+        elif state.get("status") in {"running", "incomplete"}:
+            self.backfill_offset = max(0, int(state.get("offset") or 0))
+            self.backfill_stats = dict(state.get("stats") or {})
+            logger.info(
+                "inventory_backfill_resuming mailbox=%s offset=%s",
+                self.mailbox,
+                self.backfill_offset,
+            )
+
+    def _persist_backfill_progress(self, status: str, *, offset: int | None = None) -> None:
+        if operations_store.storage_engine != "postgresql":
+            return
+        operations_store.save_operational_record(
+            "ingestion_state",
+            f"supplier-backfill:{self.mailbox}",
+            {
+                "mailbox": self.mailbox,
+                "folder": "Inbox",
+                "age_days": self.backfill_days,
+                "status": status,
+                "offset": self.backfill_offset if offset is None else offset,
+                "stats": self.backfill_stats or {},
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+    def _record_backfill_page(
+        self, messages: list[dict[str, Any]], results: list[dict[str, Any]]
+    ) -> None:
+        stats = self.backfill_stats
+        if stats is None:
+            return
+        stats["pages_fetched"] += 1
+        stats["messages_fetched"] += len(messages)
+        received_dates = [
+            received_at
+            for message in messages
+            if (received_at := _received_at(message.get("date"))) is not None
+        ]
+        if received_dates:
+            oldest = min(received_dates).isoformat()
+            current_oldest = stats["oldest_received_at"]
+            if current_oldest is None or oldest < current_oldest:
+                stats["oldest_received_at"] = oldest
+
+        for result in results:
+            detail = result.get("result") or {}
+            if result.get("skipped") or detail.get("skipped"):
+                continue
+            stats["messages_processed"] += 1
+            if result.get("failed") or result.get("error"):
+                stats["processing_failures"] += 1
+                continue
+            if detail.get("pending_human_review") or detail.get("status") == "Pending_Human_Review":
+                stats["messages_needing_review"] += 1
+            elif detail.get("success"):
+                imports = detail.get("imports") or []
+                imported_rows = sum(int(item.get("rows_imported") or 0) for item in imports)
+                offers = detail.get("items") or ([detail] if detail.get("part_number") else [])
+                stats["offers_extracted"] += imported_rows or len(offers)
+            else:
+                stats["messages_without_offer"] += 1
+
+        logger.info(
+            "inventory_backfill_progress offset=%s stats=%s",
+            self.backfill_offset,
+            json.dumps(stats, sort_keys=True),
+        )
 
     def _process_batch(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         results = []

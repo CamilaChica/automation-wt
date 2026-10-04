@@ -71,7 +71,8 @@ class AutonomousSalesAndPoTests(unittest.TestCase):
         self.assertIn("untrusted_quote_data", provider.requests[0].user_prompt)
         self.assertNotIn("buyer@example.com", provider.requests[0].user_prompt)
         send_quote.assert_called_once()
-        self.assertEqual(send_quote.call_args.kwargs["subject_override"], "Quotation QTE-1001")
+        self.assertNotIn("subject_override", send_quote.call_args.kwargs)
+        self.assertNotIn("body_override", send_quote.call_args.kwargs)
 
     def test_customer_quote_draft_only_returns_draft_without_storage_or_send(self):
         provider = FakeCommunicationProvider()

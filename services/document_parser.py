@@ -29,6 +29,20 @@ def extract_attachment_text(filename: str, content_type: str, content: bytes) ->
             return "\n".join(rows)
         except Exception:
             return ""
+    if suffix == "xls":
+        try:
+            import xlrd
+
+            workbook = xlrd.open_workbook(file_contents=content, on_demand=True)
+            rows = []
+            for sheet in workbook.sheets():
+                for row_index in range(sheet.nrows):
+                    values = [str(value).strip() for value in sheet.row_values(row_index) if str(value).strip()]
+                    if values:
+                        rows.append(" | ".join(values))
+            return "\n".join(rows)
+        except Exception:
+            return ""
     if content_type.startswith("text/") or suffix in {"csv", "txt"}:
         return content.decode("utf-8", errors="replace")
     if content_type.startswith("image/"):

@@ -34,11 +34,17 @@ class CustomerReplyRoutingTests(unittest.TestCase):
         rfqs = [rfq("RFQ-AAAAAA", name="Acme MRO"), rfq("RFQ-BBBBBB", name="Buyer")]
         self.assertEqual(company_name_for_sender(rfqs, "buyer@mro.it"), "Acme MRO")
 
-    def test_reply_answers_shipping_certificate_and_warranty(self):
-        body = build_rfq_update_reply("RFQ-AAAAAA", "Do you ship to Italy? Will FAA 8130 be provided? Warranty 12 months.")
-        self.assertIn("ship worldwide", body)
-        self.assertIn("8130-3", body)
-        self.assertIn("Warranty", body)
+    def test_reply_does_not_invent_quote_or_policy_details(self):
+        body = build_rfq_update_reply(
+            "RFQ-AAAAAA",
+            "Do you ship to Italy? Will FAA 8130 be provided? Warranty 12 months?",
+        )
+        self.assertNotIn("ship worldwide", body)
+        self.assertNotIn("8130-3", body)
+        self.assertNotIn("Warranty:", body)
+        self.assertNotIn("quotation is being prepared", body)
+        self.assertIn("checking the details against your request", body)
+        self.assertIn("follow up in this email thread", body)
         self.assertIn("There is no need to submit a new request", body)
 
     def test_greeting_never_uses_an_email_address(self):

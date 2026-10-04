@@ -1,4 +1,5 @@
 import unittest
+import base64
 from unittest.mock import Mock, patch
 
 from services.mailbox_service import _send_graph_message, fetch_inbox_headers, send_message
@@ -67,6 +68,41 @@ class MailboxServiceTests(unittest.TestCase):
         with token, user, patch("services.mailbox_service.requests.post", return_value=failing):
             with self.assertRaises(RuntimeError):
                 _send_graph_message("sales", "buyer@example.com", "RFQ 123", "Thanks", reply_to="graph-id-1")
+
+    def test_graph_draft_sends_a_real_attachment_and_html_body(self):
+        token, user = self._graph_patches()
+        draft = Mock(status_code=201)
+        draft.json.return_value = {"id": "draft-1"}
+        attached = Mock(status_code=201)
+        sent = Mock(status_code=202)
+        with token, user, patch(
+            "services.mailbox_service.requests.post",
+            side_effect=[draft, attached, sent],
+        ) as post:
+            result = _send_graph_message(
+                "sales",
+                "buyer@example.com",
+                "Quote",
+                "Plain quote",
+                html_body="<p>Structured quote</p>",
+                attachments=[{
+                    "filename": "PO-1.pdf",
+                    "content_type": "application/pdf",
+                    "content": b"verified-pdf",
+                }],
+            )
+        self.assertTrue(result)
+        self.assertEqual(3, post.call_count)
+        self.assertIn("/messages/draft-1/attachments", post.call_args_list[1].args[0])
+        self.assertEqual(
+            base64.b64encode(b"verified-pdf").decode("ascii"),
+            post.call_args_list[1].kwargs["json"]["contentBytes"],
+        )
+        self.assertIn("/messages/draft-1/send", post.call_args_list[2].args[0])
+        self.assertEqual(
+            "HTML",
+            post.call_args_list[0].kwargs["json"]["body"]["contentType"],
+        )
 
     def test_rejects_unknown_mailbox(self):
         with self.assertRaisesRegex(ValueError, "Unknown mailbox"):

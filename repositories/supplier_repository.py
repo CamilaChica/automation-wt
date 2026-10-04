@@ -80,6 +80,9 @@ class SupplierRepository:
                 SupplierPartRecord.confidence,
                 SupplierPartRecord.updated_at,
                 SupplierPartRecord.source_email_id,
+                SupplierPartRecord.source_received_at,
+                SupplierPartRecord.warranty_terms,
+                SupplierPartRecord.trace_documents,
                 SupplierRecord.company_name.label("supplier_name"),
                 SupplierRecord.email.label("supplier_email"),
                 SupplierRecord.approval_status.label("supplier_approval_status"),
@@ -90,7 +93,11 @@ class SupplierRepository:
                 or_(SupplierPartRecord.quantity_available.is_(None), SupplierPartRecord.quantity_available >= quantity),
                 or_(SupplierPartRecord.approval_status == "Approved", SupplierRecord.approval_status == "Approved"),
             )
-            .order_by(SupplierPartRecord.updated_at.desc(), SupplierPartRecord.unit_cost.asc())
+            .order_by(
+                SupplierPartRecord.source_received_at.desc().nulls_last(),
+                SupplierPartRecord.updated_at.desc(),
+                SupplierPartRecord.unit_cost.asc(),
+            )
             .limit(50)
         )
         result = await self.session.execute(statement)
@@ -161,6 +168,7 @@ class SupplierRepository:
         warranty_terms: str | None = None,
         trace_documents: list[str] | None = None,
         currency: str = "USD",
+        source_received_at=None,
         confidence: float = 1.0,
         approval_status: str = "Pending",
     ) -> dict:
@@ -202,6 +210,7 @@ class SupplierRepository:
             "warranty_terms": warranty_terms,
             "trace_documents": json.dumps(trace_documents or []),
             "source_email_id": source_email_id,
+            "source_received_at": source_received_at,
             "confidence": confidence,
             "approval_status": approval_status,
         }
@@ -209,8 +218,14 @@ class SupplierRepository:
             index_elements=[SupplierPartRecord.source_email_id],
             set_={
                 key: value for key, value in values.items()
-                if key not in {"id", "source_email_id"}
-            } | {"updated_at": func.now()},
+                if key not in {"id", "source_email_id", "source_received_at"}
+            } | {
+                "source_received_at": func.coalesce(
+                    SupplierPartRecord.source_received_at,
+                    source_received_at,
+                ),
+                "updated_at": func.now(),
+            },
         ).returning(SupplierPartRecord.id)
         saved_id = await self.session.scalar(statement)
         await self.session.flush()

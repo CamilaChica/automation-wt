@@ -325,6 +325,8 @@ class MockDatabaseService:
                 lead_time_days=offer["lead_time_days"],
                 approval_status=offer["approval_status"],
                 condition_code=offer["condition_code"],
+                trace_documents=[offer["certificate_type"]],
+                source_received_at=datetime.now(timezone.utc),
             )
 
     def reset_supplier_data(self):
@@ -595,6 +597,7 @@ class MockDatabaseService:
         condition_code: Optional[str] = None,
         source_email_id: Optional[str] = None,
         confidence: float = 1.0,
+        source_received_at: Optional[datetime] = None,
     ) -> dict:
         if self._production:
             return operations_store.save_supplier_offer(
@@ -604,6 +607,7 @@ class MockDatabaseService:
                 lead_time_days=lead_time_days, approval_status=approval_status,
                 condition_code=condition_code, source_email_id=source_email_id,
                 confidence=confidence,
+                source_received_at=source_received_at,
             )
         return supplier_db.save_supplier_offer(
             supplier_name=supplier_name,
@@ -617,6 +621,7 @@ class MockDatabaseService:
             condition_code=condition_code,
             source_email_id=source_email_id,
             confidence=confidence,
+            source_received_at=source_received_at,
         )
 
     def get_supplier_offers_for_part(self, part_number: str) -> List[dict]:
@@ -821,7 +826,7 @@ class MockDatabaseService:
         self._persist_state()
         return quote
 
-    def add_quote_item(self, quote_id: str, rfq_item_id: str, part_number: str, qty: int, source: str, unit_cost: float, unit_price: float, margin: float, cert: str, comp_status: str, uom: str = "EA", attachments: Optional[List[str]] = None, description: str = "", condition: Optional[str] = None, lead_time_days: Optional[int] = None) -> QuoteItem:
+    def add_quote_item(self, quote_id: str, rfq_item_id: str, part_number: str, qty: int, source: str, unit_cost: float, unit_price: float, margin: float, cert: str, comp_status: str, uom: str = "EA", attachments: Optional[List[str]] = None, description: str = "", condition: Optional[str] = None, lead_time_days: Optional[int] = None, source_email_id: Optional[str] = None, warranty_terms: Optional[str] = None, trace_documents: Optional[List[str]] = None) -> QuoteItem:
         qi_id = f"QITM-{uuid.uuid4().hex[:6].upper()}"
         item = QuoteItem(
             id=qi_id,
@@ -839,7 +844,10 @@ class MockDatabaseService:
             condition=condition,
             lead_time_days=lead_time_days,
             compliance_status=comp_status,
-            attachments=list(attachments or [])
+            attachments=list(attachments or []),
+            source_email_id=source_email_id,
+            warranty_terms=warranty_terms,
+            trace_documents=list(trace_documents or []),
         )
         if self._production:
             quote = self.get_quote(quote_id)

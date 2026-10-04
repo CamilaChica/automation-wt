@@ -100,6 +100,7 @@ class OrchestratorAgent(BaseAgent):
                 "query_rfq",
                 "query_supplier_offers",
                 "search_knowledge",
+                "request_supplier_discount",
             ],
             permissions=[
                 "read_catalog",
@@ -108,6 +109,7 @@ class OrchestratorAgent(BaseAgent):
                 "calculate_prices",
                 "read_business_records",
                 "search_knowledge",
+                "negotiate_supplier_discounts",
             ],
             escalation_rules=[],
             prompt_templates={
@@ -117,6 +119,7 @@ class OrchestratorAgent(BaseAgent):
         )
         super().__init__(metadata)
         self.tool_orchestrator = tool_orchestrator or create_default_agent_tool_orchestrator()
+        self.metadata.available_tool_contracts = self.tool_orchestrator.registry.descriptions()
 
     async def execute(self, inputs: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> AgentResponse:
         rfq_id = inputs.get("rfq_id", "")
@@ -136,6 +139,12 @@ class OrchestratorAgent(BaseAgent):
                     query,
                     role=role,
                     permissions=set(permissions),
+                    actor_id=str(
+                        auth_context.get("actor_id")
+                        or auth_context.get("user_id")
+                        or auth_context.get("sub")
+                        or ""
+                    ),
                     human_confirmed=bool(auth_context.get("human_confirmed", False)),
                     response_mode=response_mode,
                 )

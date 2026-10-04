@@ -114,10 +114,25 @@ class TestSupplierDiscountTemplate(EmailTemplateAssertions):
 
         self.assertEqual(payload.message_type, "SUPPLIER_DISCOUNT_REQUEST")
         self.assertEqual(payload.subject, "Commercial Request - PN XYZ123 (Qty: 2)")
-        self.assertIn("PN XYZ123 at $3,750.00 per unit", payload.body)
+        self.assertIn("PN XYZ123 at $3,750.00 USD per unit", payload.body)
         self.assertIn("best commercial price", payload.body.lower())
         self.assert_professional_layout(payload)
 
+    def test_discount_request_states_the_capped_usd_target_without_authorizing_order(self):
+        payload = supplier_discount_request(SupplierDiscountData(
+            supplier_contact="John Supplier",
+            recipient_email="quotes@example.com",
+            part_number="XYZ123",
+            quantity=2,
+            quoted_price=3750.0,
+            currency="USD",
+            target_discount_percentage=5,
+        ))
+
+        self.assertIn("5% discount", payload.body)
+        self.assertIn("$3,562.50 USD", payload.body)
+        self.assertIn("does not authorize an order", payload.body)
+        self.assert_professional_layout(payload)
 
 class TestSupplierVerificationTemplate(EmailTemplateAssertions):
     def test_verification_subject_starts_with_required_urgent_prefix(self):

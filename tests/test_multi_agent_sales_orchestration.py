@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 if os.getenv("WT_TEST_MODE", "mock").strip().lower() == "mock":
@@ -21,7 +22,6 @@ from agents.compliance_agent import ComplianceAgent
 from agents.customer_communication_agent import CustomerCommunicationAgent, GeneratedEmailDraft
 from agents.parts_intelligence_agent import PartsIntelligenceAgent
 from agents.rfq_intake_agent import RFQIntakeAgent
-from data.mock_inventory_db import MOCK_INVENTORY_DB
 from models.db_models import RFQIntakeOutput
 from services.db_service import db_service
 from services.orchestration_service import OrchestrationService
@@ -115,6 +115,8 @@ def _mock_supplier_offers(part_number, quantity_needed=1):
         "approval_status": "Approved",
         "reliability_score": 98.0,
         "score": 100.0,
+        "trace_documents": ["test-fixture:FAA-8130-3"],
+        "source_received_at": datetime.now(timezone.utc).isoformat(),
     }]
 
 
@@ -142,6 +144,8 @@ class TestMultiAgentSalesOrchestration(unittest.TestCase):
                 certificate_type="FAA 8130-3",
                 lead_time_days=3,
                 approval_status="Approved",
+                trace_documents=["test-fixture:FAA-8130-3"],
+                source_received_at=datetime.now(timezone.utc),
             )
 
     async def _run_batch(self):

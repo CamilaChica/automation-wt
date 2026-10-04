@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import socket
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
@@ -182,6 +184,41 @@ def test_outbox_dispatch_sends_only_after_claim_transaction_has_closed(monkeypat
     assert events.index("claim_commit") < events.index("send")
     assert events.index("send") < events.index("db_transaction_begin")
     assert events.index("mark_sent") < events.index("db_transaction_end")
+
+
+def test_outbox_dispatch_decodes_and_sends_queued_attachments(monkeypatch):
+    store = MagicMock()
+    store.storage_engine = "postgresql"
+    store.claim_outbox_messages.return_value = [{
+        "id": "OUT-PO-ATTACHMENT",
+        "mailbox": "sales",
+        "recipient": "camila@wingedtycoons.com",
+        "subject": "PO received",
+        "payload": {
+            "body": "Please review the attached PO.",
+            "attachments": [{
+                "filename": "purchase-order.pdf",
+                "content_type": "application/pdf",
+                "content_base64": base64.b64encode(b"%PDF-test").decode("ascii"),
+            }],
+        },
+        "reply_to": None,
+        "entity_id": None,
+    }]
+    store.transaction.return_value = nullcontext()
+    send = Mock(return_value=True)
+    monkeypatch.setattr("services.communication_service.operations_store", store)
+    monkeypatch.setattr("services.communication_service.send_message", send)
+
+    result = CommunicationService().dispatch_outbox_once()
+
+    assert result == {"sent": 1, "failed": 0}
+    send.assert_called_once()
+    assert send.call_args.kwargs["attachments"] == [{
+        "filename": "purchase-order.pdf",
+        "content_type": "application/pdf",
+        "content": b"%PDF-test",
+    }]
 
 
 def test_outbox_retries_throttling_and_server_errors_but_quarantines_timeouts(monkeypatch):

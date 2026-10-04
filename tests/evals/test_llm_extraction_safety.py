@@ -374,8 +374,11 @@ def test_supplier_escalation_is_persisted_for_review_without_saving_an_offer():
     assert result["pending_human_review"] is True
     assert save_email.called
     save_offer.assert_not_called()
-    record_event.assert_called_once()
-    assert record_event.call_args.kwargs["status"] == "PENDING_HUMAN_REVIEW"
+    assert any(
+        call.kwargs["event_type"] == "supplier_email_extraction_review"
+        and call.kwargs["status"] == "PENDING_HUMAN_REVIEW"
+        for call in record_event.call_args_list
+    )
 
 
 def test_email_extraction_provider_override_cannot_be_changed_by_task_configuration():

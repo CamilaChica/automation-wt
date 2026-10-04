@@ -10,15 +10,15 @@ _PN_FORMAT_REGEX = re.compile(r"^[A-Z0-9][A-Z0-9\-]{1,}[A-Z0-9]$")
 
 class PartsIntelligenceAgent(BaseAgent):
     """
-    Validates aerospace Part Numbers against the master parts catalog.
+    Validates aerospace part numbers against persisted inventory and supplier offers.
 
     Rules:
-    - Search exact Part Number matches first.
-    - Return full product information when found.
-    - Identify approved alternate parts from catalog data (never assumed).
-    - Provide a confidence score: 1.0 (exact), 0.9 (fuzzy), 0.8 (alternate).
+    - Search exact Part Number matches in persisted operational records.
+    - Return only product information present in those records.
+    - Never infer approved alternate parts.
+    - Provide a confidence score: 1.0 (exact), 0.0 (not found).
     - Flag unknown Part Numbers (confidence 0.0, is_valid False).
-    - Never assume compatibility — alternates come only from explicit catalog entries.
+    - Never assume compatibility or alternates.
     """
 
     def __init__(self):
@@ -26,10 +26,9 @@ class PartsIntelligenceAgent(BaseAgent):
             name="PartsIntelligenceAgent",
             role="Aerospace Parts Catalog Validator",
             objective=(
-                "Validate and normalize requested part numbers against the master "
-                "aviation parts catalog. Return full product details, approved alternates, "
-                "and a confidence score. Flag any unknown or ambiguous part numbers for "
-                "human review."
+                "Validate requested part numbers against persisted inventory and supplier "
+                "offer records. Return only recorded details; flag unknown part numbers "
+                "for human review."
             ),
             system_instruction=SOURCING_PROMPT,
             input_schema={
@@ -61,12 +60,12 @@ class PartsIntelligenceAgent(BaseAgent):
                     },
                     "match_type": {
                         "type": "string",
-                        "description": "exact | fuzzy | alternate | none"
+                        "description": "exact | none"
                     },
                     "is_valid": {"type": "boolean"},
                     "confidence_score": {
                         "type": "number",
-                        "description": "1.0 = exact, 0.9 = fuzzy/normalized, 0.8 = alternate, 0.0 = unknown"
+                        "description": "1.0 = exact database record, 0.0 = not found"
                     }
                 },
                 "required": ["resolved_part_number", "is_valid", "confidence_score", "match_type"]
@@ -83,11 +82,16 @@ class PartsIntelligenceAgent(BaseAgent):
                     condition="invalid_part_format",
                     action="halt_for_review",
                     escalate_to="human_operator"
+                ),
+                EscalationRule(
+                    condition="part_not_found",
+                    action="halt_for_review",
+                    escalate_to="human_operator"
                 )
             ],
             prompt_templates={
-                "default": "Inspect part numbers from the validated RFQ. Standardize hyphenation, spacing, and casing before lookup. Search the parts catalog for exact matches first, then normalized/fuzzy matches, then alternate PNs. Never assume compatibility — only return alternates explicitly listed in the catalog entry. If multiple parts match ambiguously, halt for human review. If the part is entirely unknown, flag it and escalate.",
-                "catalog_lookup": "Validate the part against the master aviation parts catalog and return only explicit matches or approved alternates.",
+                "default": "Inspect the part number from the validated RFQ and search persisted inventory and supplier-offer records for an exact match. Never infer compatibility, product details, or alternate part numbers. If the exact part is not recorded, flag it and escalate for human review.",
+                "catalog_lookup": "Return only exact part-number matches and details present in persisted inventory or supplier-offer records.",
             }
         )
         super().__init__(metadata)
@@ -138,14 +142,9 @@ class PartsIntelligenceAgent(BaseAgent):
             part = matched_parts[0]
 
             # Confidence is determined solely by match quality, never assumed
-            confidence_map = {
-                "exact":     1.0,
-                "fuzzy":     0.9,
-                "alternate": 0.8,
-            }
+            confidence_map = {"exact": 1.0}
             confidence_score = confidence_map.get(match_type, 0.0)
 
-            # Approved alternates come ONLY from the catalog entry — never assumed
             approved_alternates = part.get("alternate_part_numbers", [])
 
             return AgentResponse(
@@ -182,8 +181,8 @@ class PartsIntelligenceAgent(BaseAgent):
                 "confidence_score": 0.0
             },
             error_message=(
-                f"Part number '{req_pn}' was not found in the master aviation parts catalog. "
+                f"Part number '{req_pn}' was not found in persisted inventory or supplier offers. "
                 "Cannot proceed — part compatibility must never be assumed."
             ),
-            escalation_triggered=self.metadata.escalation_rules[1]  # invalid_part_format
+            escalation_triggered=self.metadata.escalation_rules[2]  # part_not_found
         )

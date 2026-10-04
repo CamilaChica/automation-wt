@@ -36,7 +36,19 @@ class FakeRouter:
         return schema.model_validate(self.decisions.pop(0)), SimpleNamespace()
 
 
-def make_orchestrator(router, handler, *, allowed_roles=frozenset({"ROLE_MANAGER"}), confirmation=False, max_steps=5):
+def make_orchestrator(
+    router,
+    handler,
+    *,
+    allowed_roles=frozenset({"ROLE_MANAGER"}),
+    confirmation=False,
+    max_steps=5,
+    permission_tier="Tier_1",
+    idempotency_required=False,
+    rate_limit_seconds=0,
+    audit_logging=False,
+    audit_logger=None,
+):
     registry = AgentToolRegistry([
         AgentTool(
             name="lookup_part",
@@ -46,9 +58,18 @@ def make_orchestrator(router, handler, *, allowed_roles=frozenset({"ROLE_MANAGER
             allowed_roles=allowed_roles,
             required_permissions=frozenset({"read_catalog"}),
             requires_confirmation=confirmation,
+            permission_tier=permission_tier,
+            idempotency_required=idempotency_required,
+            rate_limit_seconds=rate_limit_seconds,
+            audit_logging=audit_logging,
         )
     ])
-    return LLMToolOrchestrator(router, registry, max_steps=max_steps)
+    return LLMToolOrchestrator(
+        router,
+        registry,
+        max_steps=max_steps,
+        audit_logger=audit_logger,
+    )
 
 
 class TestLLMToolOrchestration(unittest.TestCase):
@@ -89,8 +110,12 @@ class TestLLMToolOrchestration(unittest.TestCase):
             name="decorated_lookup",
             description="Look up a part using a strict schema.",
             arguments_model=PartArguments,
-            allowed_roles=frozenset({"ROLE_MANAGER"}),
+            allowed_roles=frozenset({"ROLE_ADMIN", "ROLE_MANAGER"}),
             required_permissions=frozenset({"read_catalog"}),
+            permission_tier="Tier_2",
+            idempotency_required=True,
+            rate_limit_seconds=60,
+            audit_logging=True,
         )
         def handler(arguments):
             return {"part_number": arguments["part_number"]}
@@ -99,10 +124,274 @@ class TestLLMToolOrchestration(unittest.TestCase):
 
         self.assertEqual(registry.get("decorated_lookup").arguments_model, PartArguments)
         self.assertEqual(registry.get("decorated_lookup").required_permissions, {"read_catalog"})
-        self.assertEqual(
-            registry.descriptions()[0]["arguments"]["properties"]["part_number"]["maxLength"],
-            80,
+        schema = registry.descriptions()[0]
+        self.assertEqual(schema["parameters"]["properties"]["part_number"]["maxLength"], 80)
+        self.assertEqual(schema["required_permissions"], ["read_catalog"])
+        self.assertEqual(schema["permission_tier"], "Tier_2")
+        self.assertTrue(schema["idempotency_required"])
+        self.assertEqual(schema["rate_limit_seconds"], 60)
+        self.assertTrue(schema["audit_logging"])
+
+    def test_idempotent_tool_call_reuses_result_within_orchestration(self):
+        router = FakeRouter([
+            {
+                "action": "call_tool",
+                "tool_name": "lookup_part",
+                "arguments": {"part_number": "PN-123"},
+                "answer": None,
+            },
+            {
+                "action": "call_tool",
+                "tool_name": "lookup_part",
+                "arguments": {"part_number": "PN-123"},
+                "answer": None,
+            },
+            {
+                "action": "final",
+                "tool_name": None,
+                "arguments": {},
+                "answer": "The part lookup completed.",
+            },
+        ])
+        calls = []
+
+        def lookup(arguments):
+            calls.append(arguments)
+            return {"found": True, "part_number": arguments["part_number"]}
+
+        result = asyncio.run(make_orchestrator(
+            router,
+            lookup,
+            idempotency_required=True,
+        ).run(
+            "Look up PN-123.",
+            role="ROLE_MANAGER",
+            permissions={"read_catalog"},
+            actor_id="operator-1",
+        ))
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result.steps[0].result, result.steps[1].result)
+
+    def test_rate_limit_blocks_second_tool_execution(self):
+        router = FakeRouter([
+            {
+                "action": "call_tool",
+                "tool_name": "lookup_part",
+                "arguments": {"part_number": "PN-123"},
+                "answer": None,
+            },
+            {
+                "action": "call_tool",
+                "tool_name": "lookup_part",
+                "arguments": {"part_number": "PN-456"},
+                "answer": None,
+            },
+        ])
+        calls = []
+
+        def lookup(arguments):
+            calls.append(arguments)
+            return {"found": True}
+
+        with self.assertRaisesRegex(AgentToolError, "rate limited"):
+            asyncio.run(make_orchestrator(
+                router,
+                lookup,
+                rate_limit_seconds=60,
+            ).run(
+                "Look up two parts.",
+                role="ROLE_MANAGER",
+                permissions={"read_catalog"},
+                actor_id="operator-rate-limit-test",
+            ))
+        self.assertEqual(len(calls), 1)
+
+    def test_audit_required_tool_records_actor_before_and_after_execution(self):
+        audit_events = []
+        router = FakeRouter([
+            {
+                "action": "call_tool",
+                "tool_name": "lookup_part",
+                "arguments": {"part_number": "PN-123"},
+                "answer": None,
+            },
+            {
+                "action": "final",
+                "tool_name": None,
+                "arguments": {},
+                "answer": "The lookup completed.",
+            },
+        ])
+        result = asyncio.run(make_orchestrator(
+            router,
+            lambda _arguments: {"found": True},
+            audit_logging=True,
+            audit_logger=lambda **event: audit_events.append(event),
+        ).run(
+            "Look up PN-123.",
+            role="ROLE_MANAGER",
+            permissions={"read_catalog"},
+            actor_id="operator-1",
+        ))
+
+        self.assertEqual(result.steps[0].result["found"], True)
+        self.assertEqual([event["status"] for event in audit_events], ["requested", "succeeded"])
+        self.assertTrue(all(event["actor"] == "operator-1" for event in audit_events))
+
+    def test_audit_required_tool_fails_closed_without_actor(self):
+        router = FakeRouter([{
+            "action": "call_tool",
+            "tool_name": "lookup_part",
+            "arguments": {"part_number": "PN-123"},
+            "answer": None,
+        }])
+        calls = []
+
+        with self.assertRaisesRegex(AgentToolError, "actor identifier"):
+            asyncio.run(make_orchestrator(
+                router,
+                lambda arguments: calls.append(arguments),
+                audit_logging=True,
+                audit_logger=lambda **_event: None,
+            ).run(
+                "Look up PN-123.",
+                role="ROLE_MANAGER",
+                permissions={"read_catalog"},
+            ))
+        self.assertFalse(calls)
+
+    def test_audit_required_tool_fails_closed_without_audit_logger(self):
+        router = FakeRouter([{
+            "action": "call_tool",
+            "tool_name": "lookup_part",
+            "arguments": {"part_number": "PN-123"},
+            "answer": None,
+        }])
+        calls = []
+
+        with self.assertRaisesRegex(AgentToolError, "no audit logger"):
+            asyncio.run(make_orchestrator(
+                router,
+                lambda arguments: calls.append(arguments),
+                audit_logging=True,
+            ).run(
+                "Look up PN-123.",
+                role="ROLE_MANAGER",
+                permissions={"read_catalog"},
+                actor_id="operator-1",
+            ))
+        self.assertFalse(calls)
+
+    def test_supplier_discount_tool_schedules_only_verified_bounded_usd_offer(self):
+        audit_events = []
+        database = SimpleNamespace(
+            get_supplier_offers_for_part=lambda part_number: [{
+                "supplier_id": "SUP-123",
+                "part_number": part_number,
+                "supplier_name": "Aero Supply",
+                "supplier_email": "quotes@aero.example",
+                "supplier_approval_status": "Approved",
+                "approval_status": "Pending",
+                "currency": "USD",
+                "unit_cost": 100.0,
+                "quantity_available": 4,
+                "source_email_id": "supplier-message-123",
+            }],
+            record_audit_event=lambda **event: audit_events.append(event),
         )
+        router = FakeRouter([
+            {
+                "action": "call_tool",
+                "tool_name": "request_supplier_discount",
+                "arguments": {
+                    "supplier_id": "SUP-123",
+                    "part_number": "PN-123",
+                    "target_discount_percentage": 5,
+                    "currency": "USD",
+                    "quantity": 2,
+                },
+                "answer": None,
+            },
+            {
+                "action": "final",
+                "tool_name": None,
+                "arguments": {},
+                "answer": "The request was queued.",
+            },
+        ])
+
+        with patch(
+            "services.communication_service.communication_service.schedule_supplier_discount_request",
+            return_value={"status": "pending", "task_key": "supplier-discount:supplier-message-123:1"},
+        ) as schedule:
+            result = asyncio.run(create_default_agent_tool_orchestrator(
+                router=router,
+                database=database,
+            ).run(
+                "Ask the supplier for a 5% discount.",
+                role="ROLE_PURCHASING",
+                permissions={"negotiate_supplier_discounts"},
+                actor_id="operator-discount-tool-test",
+            ))
+
+        self.assertEqual(result.steps[0].result["status"], "pending")
+        self.assertEqual(schedule.call_args.kwargs["recipient"], "quotes@aero.example")
+        self.assertEqual(schedule.call_args.kwargs["source_email_id"], "supplier-message-123")
+        self.assertEqual(schedule.call_args.kwargs["target_discount_percentage"], 5)
+        self.assertEqual(schedule.call_args.kwargs["currency"], "USD")
+        self.assertEqual([event["status"] for event in audit_events], ["requested", "succeeded"])
+
+    def test_supplier_discount_contract_rejects_over_limit_and_non_usd(self):
+        tool_contract = create_default_agent_tool_orchestrator(
+            router=FakeRouter([]),
+            database=SimpleNamespace(get_supplier_offers_for_part=lambda _part: []),
+        ).registry.get("request_supplier_discount")
+
+        for invalid_arguments in (
+            {
+                "supplier_id": "SUP-123",
+                "part_number": "PN-123",
+                "target_discount_percentage": 5.01,
+                "currency": "USD",
+            },
+            {
+                "supplier_id": "SUP-123",
+                "part_number": "PN-123",
+                "target_discount_percentage": 5,
+                "currency": "EUR",
+            },
+        ):
+            with self.assertRaises(ValidationError):
+                tool_contract.arguments_model.model_validate(invalid_arguments)
+
+    def test_supplier_discount_tool_requires_purchasing_permission(self):
+        router = FakeRouter([{
+            "action": "call_tool",
+            "tool_name": "request_supplier_discount",
+            "arguments": {
+                "supplier_id": "SUP-123",
+                "part_number": "PN-123",
+                "target_discount_percentage": 5,
+                "currency": "USD",
+            },
+            "answer": None,
+        }])
+        database = SimpleNamespace(
+            get_supplier_offers_for_part=lambda _part: [],
+            record_audit_event=lambda **_event: None,
+        )
+
+        with self.assertRaisesRegex(AgentToolError, "not authorized"):
+            asyncio.run(create_default_agent_tool_orchestrator(
+                router=router,
+                database=database,
+            ).run(
+                "Request the discount.",
+                role="ROLE_SALES",
+                permissions={"negotiate_supplier_discounts"},
+                actor_id="operator-sales-tool-test",
+            ))
 
     def test_sql_lookup_uses_allowlisted_entities_and_omits_sensitive_fields(self):
         fake_database = SimpleNamespace(
@@ -151,6 +440,10 @@ class TestLLMToolOrchestration(unittest.TestCase):
             rag_pipeline=SimpleNamespace(),
             database=SimpleNamespace(),
         ).registry
+        restricted_tool = registry.get("query_rfq")
+        self.assertEqual(restricted_tool.permission_tier, "Tier_2")
+        self.assertTrue(restricted_tool.audit_logging)
+        self.assertTrue(registry.get("search_knowledge").public_schema()["audit_logging"])
 
         for tool_name, permission in (
             ("query_rfq", "read_business_records"),
@@ -533,6 +826,7 @@ class TestAgentOrchestrationEndpoint(unittest.TestCase):
             "calculate_prices",
             "read_business_records",
             "search_knowledge",
+            "negotiate_supplier_discounts",
         })
 
     def test_customer_cannot_access_internal_agent_tools(self):

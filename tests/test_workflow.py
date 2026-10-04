@@ -17,6 +17,7 @@ class TestRFQQuoteWorkflow(unittest.TestCase):
         db_service.quote_items.clear()
         db_service.audit_logs.clear()
         db_service.seed_mock_data()
+        db_service.seed_supplier_records()
 
     def tearDown(self):
         self.email_sending.stop()

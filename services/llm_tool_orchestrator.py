@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 import re
+import threading
+import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal, Type, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from services.email_templates import SupplierDiscountData
 from services.llm_provider import LLMRequest, LLMRouter, StructuredOutputError
 from services.prompt_security import PromptSecurityService
 
@@ -65,6 +70,21 @@ class ToolCallDecision(BaseModel):
 
 
 ToolHandler = Callable[[dict[str, Any]], Any | Awaitable[Any]]
+ToolAuditLogger = Callable[..., Any]
+_TOOL_POLICY_LOCK = threading.Lock()
+_TOOL_RATE_LIMITS: dict[tuple[str, str], float] = {}
+
+TOOL_TIER_ROLES = {
+    "Tier_1": frozenset({
+        "ROLE_INTERNAL",
+        "ROLE_ADMIN",
+        "ROLE_MANAGER",
+        "ROLE_SALES",
+        "ROLE_PURCHASING",
+    }),
+    "Tier_2": frozenset({"ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING"}),
+    "Tier_3": frozenset({"ROLE_ADMIN"}),
+}
 
 
 @dataclass(frozen=True)
@@ -76,6 +96,10 @@ class AgentTool:
     allowed_roles: frozenset[str]
     required_permissions: frozenset[str]
     requires_confirmation: bool = False
+    permission_tier: Literal["Tier_1", "Tier_2", "Tier_3"] = "Tier_1"
+    idempotency_required: bool = False
+    rate_limit_seconds: int = 0
+    audit_logging: bool = False
 
     def __post_init__(self) -> None:
         if not re.fullmatch(r"[a-z][a-z0-9_]{1,63}", self.name):
@@ -84,12 +108,25 @@ class AgentTool:
             raise ValueError(f"Tool {self.name!r} requires a description.")
         if not self.allowed_roles:
             raise ValueError(f"Tool {self.name!r} must have at least one allowed role.")
+        if self.permission_tier not in TOOL_TIER_ROLES:
+            raise ValueError(f"Unsupported permission tier for tool {self.name!r}.")
+        if not self.allowed_roles.issubset(TOOL_TIER_ROLES[self.permission_tier]):
+            raise ValueError(
+                f"Tool {self.name!r} allows roles outside permission tier {self.permission_tier}."
+            )
+        if not 0 <= self.rate_limit_seconds <= 86400:
+            raise ValueError("Tool rate_limit_seconds must be between 0 and 86400.")
 
     def public_schema(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "description": self.description,
-            "arguments": self.arguments_model.model_json_schema(),
+            "parameters": self.arguments_model.model_json_schema(),
+            "required_permissions": sorted(self.required_permissions),
+            "permission_tier": self.permission_tier,
+            "idempotency_required": self.idempotency_required,
+            "rate_limit_seconds": self.rate_limit_seconds,
+            "audit_logging": self.audit_logging,
             "requires_confirmation": self.requires_confirmation,
         }
 
@@ -133,6 +170,10 @@ class AgentToolDefinition:
     allowed_roles: frozenset[str]
     required_permissions: frozenset[str]
     requires_confirmation: bool = False
+    permission_tier: Literal["Tier_1", "Tier_2", "Tier_3"] = "Tier_1"
+    idempotency_required: bool = False
+    rate_limit_seconds: int = 0
+    audit_logging: bool = False
 
 
 def tool(
@@ -143,6 +184,10 @@ def tool(
     allowed_roles: frozenset[str],
     required_permissions: frozenset[str],
     requires_confirmation: bool = False,
+    permission_tier: Literal["Tier_1", "Tier_2", "Tier_3"] = "Tier_1",
+    idempotency_required: bool = False,
+    rate_limit_seconds: int = 0,
+    audit_logging: bool = False,
 ) -> Callable[[HandlerT], HandlerT]:
     """Attach an explicit, validated tool contract to a handler."""
     definition = AgentToolDefinition(
@@ -152,6 +197,10 @@ def tool(
         allowed_roles=allowed_roles,
         required_permissions=required_permissions,
         requires_confirmation=requires_confirmation,
+        permission_tier=permission_tier,
+        idempotency_required=idempotency_required,
+        rate_limit_seconds=rate_limit_seconds,
+        audit_logging=audit_logging,
     )
 
     def decorate(handler: HandlerT) -> HandlerT:
@@ -208,6 +257,7 @@ Never request credentials, reveal secrets, bypass authorization, or infer human 
         *,
         max_steps: int = 5,
         timeout_seconds: float = 15.0,
+        audit_logger: ToolAuditLogger | None = None,
     ):
         if max_steps < 1:
             raise ValueError("max_steps must be positive.")
@@ -217,6 +267,11 @@ Never request credentials, reveal secrets, bypass authorization, or infer human 
         self.registry = registry
         self.max_steps = min(max_steps, 8)
         self.timeout_seconds = timeout_seconds
+        self.audit_logger = audit_logger
+        self._policy_lock = _TOOL_POLICY_LOCK
+        self._last_tool_run = _TOOL_RATE_LIMITS
+        self._idempotent_results: dict[str, Any] = {}
+        self._inflight_idempotency_keys: set[str] = set()
 
     async def run(
         self,
@@ -224,6 +279,7 @@ Never request credentials, reveal secrets, bypass authorization, or infer human 
         *,
         role: str,
         permissions: set[str] | frozenset[str],
+        actor_id: str | None = None,
         human_confirmed: bool = False,
         response_mode: Literal["human", "app"] = "human",
     ) -> AgentToolRun:
@@ -236,6 +292,7 @@ Never request credentials, reveal secrets, bypass authorization, or infer human 
         if not role.strip():
             raise AgentToolError("An authenticated role is required.")
 
+        orchestration_id = uuid.uuid4().hex
         steps: list[dict[str, Any]] = []
         for _ in range(self.max_steps + 1):
             request = LLMRequest(
@@ -320,10 +377,18 @@ Never request credentials, reveal secrets, bypass authorization, or infer human 
             tool = self.registry.get(decision.tool_name or "")
             if role not in tool.allowed_roles:
                 raise AgentToolError(f"Role {role!r} is not authorized to use {tool.name!r}.")
+            if role not in TOOL_TIER_ROLES[tool.permission_tier]:
+                raise AgentToolError(
+                    f"Role {role!r} is not authorized for permission tier {tool.permission_tier}."
+                )
             if not tool.required_permissions.issubset(permissions):
                 raise AgentToolError(f"Required permission is missing for tool {tool.name!r}.")
             if tool.requires_confirmation and not human_confirmed:
                 raise AgentToolError(f"Human confirmation is required for tool {tool.name!r}.")
+            if (tool.idempotency_required or tool.audit_logging) and not (actor_id or "").strip():
+                raise AgentToolError(
+                    f"Tool {tool.name!r} requires an authenticated actor identifier."
+                )
 
             try:
                 safe_arguments = _sanitize_tool_result(decision.arguments, security)
@@ -337,18 +402,81 @@ Never request credentials, reveal secrets, bypass authorization, or infer human 
                     },
                 })
                 continue
-            if inspect.iscoroutinefunction(tool.handler):
-                result = await asyncio.wait_for(
-                    tool.handler(validated_arguments),
-                    timeout=self.timeout_seconds,
+            idempotency_key = self._idempotency_key(
+                tool, validated_arguments, role, permissions, actor_id or "", orchestration_id
+            )
+            with self._policy_lock:
+                if idempotency_key and idempotency_key in self._idempotent_results:
+                    result = self._idempotent_results[idempotency_key]
+                    steps.append({
+                        "tool_name": tool.name,
+                        "arguments": validated_arguments,
+                        "result": _sanitize_tool_result(result, security),
+                    })
+                    continue
+                if idempotency_key and idempotency_key in self._inflight_idempotency_keys:
+                    raise AgentToolError(
+                        f"An identical idempotent call for {tool.name!r} is already in progress."
+                    )
+                now = time.monotonic()
+                rate_key = (actor_id or role, tool.name)
+                previous_run = self._last_tool_run.get(rate_key)
+                if (
+                    tool.rate_limit_seconds
+                    and previous_run is not None
+                    and now - previous_run < tool.rate_limit_seconds
+                ):
+                    raise AgentToolError(
+                        f"Tool {tool.name!r} is rate limited; retry after "
+                        f"{tool.rate_limit_seconds} seconds."
+                    )
+                if len(self._last_tool_run) >= 8192 and rate_key not in self._last_tool_run:
+                    oldest_key = min(self._last_tool_run, key=self._last_tool_run.get)
+                    self._last_tool_run.pop(oldest_key)
+                self._last_tool_run[rate_key] = now
+                if idempotency_key:
+                    self._inflight_idempotency_keys.add(idempotency_key)
+
+            audit_started = False
+            try:
+                if tool.audit_logging:
+                    await self._write_audit_event(
+                        tool, actor_id or "", validated_arguments, "requested"
+                    )
+                    audit_started = True
+                if inspect.iscoroutinefunction(tool.handler):
+                    result = await asyncio.wait_for(
+                        tool.handler(validated_arguments),
+                        timeout=self.timeout_seconds,
+                    )
+                else:
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(tool.handler, validated_arguments),
+                        timeout=self.timeout_seconds,
+                    )
+                    if inspect.isawaitable(result):
+                        result = await asyncio.wait_for(result, timeout=self.timeout_seconds)
+                if idempotency_key:
+                    with self._policy_lock:
+                        if len(self._idempotent_results) >= 512:
+                            self._idempotent_results.pop(
+                                next(iter(self._idempotent_results))
+                            )
+                        self._idempotent_results[idempotency_key] = result
+            except Exception as exc:
+                if audit_started:
+                    await self._write_audit_event(
+                        tool, actor_id or "", validated_arguments, "failed", str(exc)
+                    )
+                raise
+            finally:
+                if idempotency_key:
+                    with self._policy_lock:
+                        self._inflight_idempotency_keys.discard(idempotency_key)
+            if tool.audit_logging:
+                await self._write_audit_event(
+                    tool, actor_id or "", validated_arguments, "succeeded"
                 )
-            else:
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(tool.handler, validated_arguments),
-                    timeout=self.timeout_seconds,
-                )
-                if inspect.isawaitable(result):
-                    result = await asyncio.wait_for(result, timeout=self.timeout_seconds)
             result = _sanitize_tool_result(result, security)
             steps.append({
                 "tool_name": tool.name,
@@ -357,6 +485,71 @@ Never request credentials, reveal secrets, bypass authorization, or infer human 
             })
 
         raise RuntimeError("The tool orchestration loop exited unexpectedly.")
+
+    @staticmethod
+    def _idempotency_key(
+        tool: AgentTool,
+        arguments: dict[str, Any],
+        role: str,
+        permissions: set[str] | frozenset[str],
+        actor_id: str,
+        orchestration_id: str,
+    ) -> str | None:
+        if not tool.idempotency_required:
+            return None
+        payload = json.dumps(
+            {
+                "tool": tool.name,
+                "arguments": arguments,
+                "role": role,
+                "actor_id": actor_id,
+                "permissions": sorted(permissions),
+                "orchestration_id": orchestration_id,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    async def _write_audit_event(
+        self,
+        tool: AgentTool,
+        actor_id: str,
+        arguments: dict[str, Any],
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        if self.audit_logger is None:
+            raise AgentToolError(
+                f"Tool {tool.name!r} requires audit logging, but no audit logger is configured."
+            )
+        security = PromptSecurityService()
+        safe_arguments = _sanitize_tool_result(arguments, security)
+        payload: dict[str, Any] = {"arguments": safe_arguments}
+        if error:
+            payload["error"] = security.inspect(error[:500]).sanitized_text
+        audit_id = hashlib.sha256(
+            json.dumps(
+                {"tool": tool.name, "arguments": safe_arguments, "status": status},
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        audit_arguments = {
+            "entity_id": f"tool:{audit_id}",
+            "actor": actor_id,
+            "action": f"agent_tool:{tool.name}",
+            "status": status,
+            "payload": payload,
+        }
+        if inspect.iscoroutinefunction(self.audit_logger):
+            logged = await self.audit_logger(**audit_arguments)
+        else:
+            logged = await asyncio.to_thread(self.audit_logger, **audit_arguments)
+        if inspect.isawaitable(logged):
+            await logged
 
 
 def _sanitize_tool_result(value: Any, security: PromptSecurityService) -> Any:
@@ -447,6 +640,28 @@ class RFQLookupArguments(BaseModel):
 
 class SupplierOffersLookupArguments(PartLookupArguments):
     limit: int = Field(default=5, ge=1, le=10, description="Maximum number of returned offers.")
+
+
+class SupplierDiscountRequestArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    supplier_id: str = Field(min_length=3, max_length=80, description="Persisted supplier identifier.")
+    part_number: str = Field(
+        min_length=3,
+        max_length=80,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9]$",
+        description="Exact part number on the approved supplier offer.",
+    )
+    target_discount_percentage: float = Field(
+        gt=0,
+        le=5,
+        allow_inf_nan=False,
+        description="Requested discount from the verified USD offer price; maximum 5%.",
+    )
+    currency: Literal["USD"] = Field(
+        description="USD only. Non-USD supplier offers are not eligible for automated negotiation."
+    )
+    quantity: int = Field(default=1, ge=1, le=10000)
 
 
 class RAGQueryArguments(BaseModel):
@@ -550,6 +765,8 @@ def create_default_agent_tool_orchestrator(
         arguments_model=RFQLookupArguments,
         allowed_roles=frozenset({"ROLE_ADMIN", "ROLE_MANAGER"}),
         required_permissions=frozenset({"read_business_records"}),
+        permission_tier="Tier_2",
+        audit_logging=True,
     )
     def query_rfq(arguments: dict[str, Any]) -> dict[str, Any]:
         from services.db_service import db_service
@@ -575,6 +792,8 @@ def create_default_agent_tool_orchestrator(
         arguments_model=SupplierOffersLookupArguments,
         allowed_roles=frozenset({"ROLE_ADMIN", "ROLE_MANAGER"}),
         required_permissions=frozenset({"read_business_records"}),
+        permission_tier="Tier_2",
+        audit_logging=True,
     )
     def query_supplier_offers(arguments: dict[str, Any]) -> dict[str, Any]:
         from services.db_service import db_service
@@ -612,6 +831,8 @@ def create_default_agent_tool_orchestrator(
         arguments_model=RAGQueryArguments,
         allowed_roles=frozenset({"ROLE_ADMIN", "ROLE_MANAGER"}),
         required_permissions=frozenset({"search_knowledge"}),
+        permission_tier="Tier_2",
+        audit_logging=True,
     )
     async def search_knowledge(arguments: dict[str, Any]) -> dict[str, Any]:
         nonlocal selected_rag_pipeline
@@ -643,6 +864,70 @@ def create_default_agent_tool_orchestrator(
         )
         return result.model_dump(mode="json")
 
+    @tool(
+        name="request_supplier_discount",
+        description=(
+            "Queue one non-binding request to an approved supplier for a discount of up to 5% "
+            "on a verified USD offer. USD only; requires a known source email and available "
+            "quantity. The request asks the supplier to consider the target price and never "
+            "accepts an offer, places an order, or changes a customer quote."
+        ),
+        arguments_model=SupplierDiscountRequestArguments,
+        allowed_roles=frozenset({"ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING"}),
+        required_permissions=frozenset({"negotiate_supplier_discounts"}),
+        permission_tier="Tier_2",
+        idempotency_required=True,
+        rate_limit_seconds=60,
+        audit_logging=True,
+    )
+    async def request_supplier_discount(arguments: dict[str, Any]) -> dict[str, Any]:
+        from services.communication_service import communication_service
+        from services.db_service import db_service
+
+        store = database or db_service
+        requested_part = arguments["part_number"].strip().upper()
+        quantity = arguments["quantity"]
+        offers = store.get_supplier_offers_for_part(requested_part)
+        offer = next(
+            (
+                item for item in offers
+                if str(item.get("supplier_id") or "") == arguments["supplier_id"]
+                and str(item.get("part_number") or "").strip().upper() == requested_part
+            ),
+            None,
+        )
+        if offer is None:
+            raise ValueError("No exact supplier offer matches the supplied supplier and part identifiers.")
+        if (
+            str(offer.get("approval_status") or "").casefold() != "approved"
+            and str(offer.get("supplier_approval_status") or "").casefold() != "approved"
+        ):
+            raise ValueError("A discount request requires an approved supplier offer.")
+        if str(offer.get("currency") or "").strip().upper() != arguments["currency"]:
+            raise ValueError("Automated discount requests are limited to verified USD offers.")
+        if not offer.get("source_email_id"):
+            raise ValueError("The supplier offer has no source email; a discount request cannot be safely correlated.")
+        if offer.get("unit_cost") is None or float(offer["unit_cost"]) <= 0:
+            raise ValueError("The supplier offer must have a positive unit price.")
+        available = offer.get("quantity_available")
+        if available is not None and int(available) < quantity:
+            raise ValueError("The approved supplier offer does not cover the requested quantity.")
+        recipient = str(offer.get("supplier_email") or "").strip()
+        if not communication_service._is_valid_email(recipient):
+            raise ValueError("The approved supplier offer does not have a valid supplier email.")
+
+        return await asyncio.to_thread(
+            communication_service.schedule_supplier_discount_request,
+            recipient=recipient,
+            supplier_name=str(offer.get("supplier_name") or "").strip(),
+            part_number=requested_part,
+            unit_cost=float(offer["unit_cost"]),
+            source_email_id=str(offer["source_email_id"]),
+            quantity=quantity,
+            currency=arguments["currency"],
+            target_discount_percentage=arguments["target_discount_percentage"],
+        )
+
     registry = AgentToolRegistry.from_decorated(
         lookup_part,
         check_inventory,
@@ -651,5 +936,21 @@ def create_default_agent_tool_orchestrator(
         query_rfq,
         query_supplier_offers,
         search_knowledge,
+        request_supplier_discount,
     )
-    return LLMToolOrchestrator(selected_router, registry)
+    if database is None:
+        from services.operations_store import operations_store
+
+        audit_store = operations_store
+    else:
+        audit_store = database
+    audit_logger = getattr(audit_store, "record_audit_event", None)
+    if not callable(audit_logger):
+        from services.operations_store import operations_store
+
+        audit_logger = operations_store.record_audit_event
+    return LLMToolOrchestrator(
+        selected_router,
+        registry,
+        audit_logger=audit_logger,
+    )

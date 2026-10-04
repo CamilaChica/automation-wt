@@ -88,7 +88,7 @@ class OrchestrationService:
         return state
 
     @staticmethod
-    def _requested_certification(raw_text: str) -> str:
+    def _requested_certification(raw_text: str) -> Optional[str]:
         text = (raw_text or "").lower()
         if "easa form 1" in text:
             return "EASA Form 1"
@@ -96,7 +96,7 @@ class OrchestrationService:
             return "CoC"
         if "8130" in text:
             return "FAA 8130-3"
-        return "Applicable airworthiness certification"
+        return None
 
     @classmethod
     def calculate_pricing(
@@ -413,6 +413,9 @@ class OrchestrationService:
                 "rfq_id": rfq_id,
                 "reason": rfq.pause_reason or "Paused by an operator.",
             }
+        if rfq.status == "Supplier_Confirmation_Requested":
+            db_service.update_rfq_status(rfq_id, "Supplier_Sourcing")
+            rfq = db_service.get_rfq(rfq_id)
 
         # 1. RFQ Intake Check
         if rfq.status == "Intake":
@@ -543,7 +546,10 @@ class OrchestrationService:
                                 item.requested_part_number,
                                 item.quantity,
                                 condition_requested=item.condition_preference or "NE",
-                                certification_requested=self._requested_certification(rfq.raw_text),
+                                certification_requested=(
+                                    self._requested_certification(rfq.raw_text)
+                                    or "Applicable airworthiness certification"
+                                ),
                             )
                             db_service.add_audit_log(
                                 rfq_id, "SupplierCommunicationAgent", "supplier_rfq_dispatch",
@@ -644,6 +650,25 @@ class OrchestrationService:
                                 f"Requested current availability from {len(confirmations)} supplier(s) using previous quote threads.",
                                 "SUCCESS" if confirmations else "WARNING", json.dumps(confirmations),
                             )
+                            historical_offer_date = next(
+                                (
+                                    str(offer.get("updated_at")).split("T", 1)[0]
+                                    for offer in stale_offers if offer.get("updated_at")
+                                ),
+                                None,
+                            )
+                            communication_service.send_rfq_sourcing_update(
+                                recipient=rfq.customer_email,
+                                customer_name=rfq.customer_name,
+                                rfq_id=rfq_id,
+                                part_number=item.resolved_part_number,
+                                reply_to=rfq.thread_id,
+                                historical_offer_date=historical_offer_date,
+                                supplier_contact_queued=any(
+                                    result.get("transmission_status") in {"SENT", "PENDING", "QUEUED"}
+                                    for result in confirmations
+                                ),
+                            )
                             return {
                                 "status": "Supplier_Confirmation_Requested",
                                 "error": f"All stored supplier quotes for '{item.resolved_part_number}' are older than 30 days.",
@@ -670,6 +695,17 @@ class OrchestrationService:
                                 "PENDING" if operations_store.storage_engine == "postgresql" else "SUCCESS" if request_results else "WARNING",
                                 json.dumps(request_results),
                             )
+                        communication_service.send_rfq_sourcing_update(
+                            recipient=rfq.customer_email,
+                            customer_name=rfq.customer_name,
+                            rfq_id=rfq_id,
+                            part_number=item.resolved_part_number,
+                            reply_to=rfq.thread_id,
+                            supplier_contact_queued=any(
+                                result.get("transmission_status") in {"SENT", "PENDING", "QUEUED"}
+                                for result in request_results
+                            ),
+                        )
                         return {
                             "status": "Sourcing_Failed",
                             "error": f"Sourcing failed: {sup_res.error_message}",
@@ -685,7 +721,7 @@ class OrchestrationService:
                         "unit_cost": best_quote["unit_cost"],
                         "details": best_quote,
                         "certificate_type": best_quote["certificate_type"],
-                        "has_full_trace": True
+                        "has_full_trace": bool(best_quote.get("trace_documents")),
                     }
                     pipeline_state = self._save_pipeline_state(
                         rfq_id, allocated_sources=allocated_sources
@@ -707,9 +743,10 @@ class OrchestrationService:
                             "warehouse":        inv_data.get("warehouse"),
                             "lead_time":        inv_data.get("lead_time"),
                             "available_quantity": available_qty,
+                            "trace_documents": inv_data.get("trace_documents") or [],
                         },
                         "certificate_type": inv_data.get("certificate_type", "None"),
-                        "has_full_trace":   inv_data.get("has_full_trace", True),
+                        "has_full_trace":   inv_data.get("has_full_trace", False),
                     }
                     pipeline_state = self._save_pipeline_state(
                         rfq_id, allocated_sources=allocated_sources
@@ -751,10 +788,18 @@ class OrchestrationService:
                     "source": source_details.get("source"),
                     "supplier_name": source_details.get("details", {}).get("supplier_name", "Winged Tycoons Internal"),
                     "certificate_type": source_details.get("certificate_type"),
-                    "has_full_trace": source_details.get("has_full_trace", True)
-                    ,"requested_certificate_type": self._requested_certification(rfq.raw_text)
-                    ,"requested_condition": item.condition_preference
-                    ,"condition": source_details.get("details", {}).get("condition") or item.condition_preference
+                    "has_full_trace": source_details.get("has_full_trace", False),
+                    "trace_documents": source_details.get("details", {}).get("trace_documents") or [],
+                    "supplier_approved": (
+                        source_details.get("details", {}).get("approval_status") == "Approved"
+                        if source_details.get("source") == "Supplier"
+                        else None
+                    ),
+                    "certificate_status": source_details.get("details", {}).get("certificate_status"),
+                    "expiration_date": source_details.get("details", {}).get("expiration_date"),
+                    "requested_certificate_type": self._requested_certification(rfq.raw_text),
+                    "requested_condition": item.condition_preference,
+                    "condition": source_details.get("details", {}).get("condition") or item.condition_preference,
                 })
                 
                 source_details["compliance_status"] = comp_res.data.get("compliance_status", "Pass")
@@ -762,30 +807,26 @@ class OrchestrationService:
                     rfq_id, allocated_sources=allocated_sources
                 )
                 
-                if not comp_res.success:
-                    db_service.update_rfq_status(rfq_id, "Compliance_Blocked")
+                compliance_status = comp_res.data.get("compliance_status")
+                if compliance_status != "APPROVED":
+                    review_required = compliance_status == "HUMAN_REVIEW_REQUIRED"
+                    rfq_status = "Compliance_Warning" if review_required else "Compliance_Blocked"
+                    db_service.update_rfq_status(rfq_id, rfq_status)
                     db_service.add_audit_log(
                         rfq_id, "ComplianceAgent", "compliance_audit",
-                        f"Compliance check failed for '{item.resolved_part_number}': {comp_res.error_message}",
-                        "FAILURE", json.dumps(comp_res.dict())
+                        f"Compliance check for '{item.resolved_part_number}' requires "
+                        f"{'human review' if review_required else 'blocking'}: "
+                        f"{', '.join(comp_res.data.get('issues_detected', []))}",
+                        "WARNING" if review_required else "FAILURE",
+                        json.dumps(comp_res.model_dump(mode="json"))
                     )
                     return {
-                        "status": "Compliance_Blocked",
-                        "error": f"Compliance Blocked: {comp_res.error_message}",
-                        "escalation": comp_res.escalation_triggered
-                    }
-                    
-                if comp_res.escalation_triggered and comp_res.escalation_triggered.condition == "missing_airworthiness_certificate":
-                    # Warning requiring manual waiver
-                    db_service.update_rfq_status(rfq_id, "Compliance_Warning")
-                    db_service.add_audit_log(
-                        rfq_id, "ComplianceAgent", "compliance_audit",
-                        f"Compliance warning: {', '.join(comp_res.data.get('issues_detected', []))}",
-                        "WARNING", json.dumps(comp_res.dict())
-                    )
-                    return {
-                        "status": "Compliance_Warning",
-                        "error": "Missing trace/compliance certifications. Human operator review is mandatory.",
+                        "status": rfq_status,
+                        "error": (
+                            "Compliance review required before pricing or customer communication."
+                            if review_required
+                            else f"Compliance Blocked: {comp_res.error_message}"
+                        ),
                         "escalation": comp_res.escalation_triggered
                     }
                 
@@ -861,7 +902,10 @@ class OrchestrationService:
                     "unit_cost": p_data["unit_cost"],
                     "margin_percent": p_data["margin_percent"],
                     "compliance_status": source_details.get("compliance_status", "Pass"),
-                    "attachments": getattr(item, "attachments", [])
+                    "attachments": getattr(item, "attachments", []),
+                    "source_email_id": source_details.get("details", {}).get("source_email_id"),
+                    "warranty_terms": source_details.get("details", {}).get("warranty_terms"),
+                    "trace_documents": source_details.get("details", {}).get("trace_documents") or [],
                 })
                 
             context = {
@@ -932,6 +976,9 @@ class OrchestrationService:
                     ,description=item.get("description", item["part_number"])
                     ,condition=item.get("condition")
                     ,lead_time_days=item.get("lead_time_days")
+                    ,source_email_id=item.get("source_email_id")
+                    ,warranty_terms=item.get("warranty_terms")
+                    ,trace_documents=item.get("trace_documents")
                 )
                 
             # Log success
@@ -992,56 +1039,33 @@ class OrchestrationService:
 
     async def _dispatch_customer_quote(self, rfq: Any, quote: Any) -> AgentResponse:
         quote_items = db_service.get_quote_items(quote.id)
-        pipeline_state = AgentPipelineState(
-            rfq_id=rfq.id,
-            customer_email=rfq.customer_email,
+        try:
+            transmission = communication_service.send_customer_quote(
+                recipient=rfq.customer_email,
+                customer_name=rfq.customer_name,
+                quote_id=quote.id,
+                quote_summary=f"Approved quote {quote.id}; total ${float(quote.total_amount or 0):,.2f}.",
+                reply_to=rfq.thread_id,
+                quote_items=quote_items,
+            )
+        except Exception as exc:
+            logger.exception("Customer quote dispatch failed rfq=%s quote=%s", rfq.id, quote.id)
+            return AgentResponse(
+                success=False,
+                error_message=f"Customer email delivery failed: {type(exc).__name__}: {exc}",
+            )
+        body, _ = communication_service.render_customer_quote_email(
             customer_name=rfq.customer_name,
-            requested_items=[
-                {
-                    "part_number": item.part_number,
-                    "quantity": item.quantity,
-                    "condition": item.condition,
-                }
-                for item in quote_items
-            ],
             quote_id=quote.id,
-            quote_total=quote.total_amount,
-            lead_time_days=quote.lead_time_days,
-            communication_status="READY",
+            quote=quote,
+            items=quote_items,
         )
-        # Outlook-native reply in the original thread, addressed to the client.
-        reply_to = rfq.thread_id
-        return await self.comm_agent.execute({
-            "customer_email": rfq.customer_email,
-            "customer_name": rfq.customer_name,
-            "company_name": rfq.customer_name,
-            "communication_sentiment": self._load_pipeline_state(rfq.id).get("communication_sentiment"),
-            "quote_details": {
-                "quote_id": quote.id,
-                "subtotal": quote.subtotal,
-                "shipping_cost": quote.shipping_cost,
-                "total_amount": quote.total_amount,
-                "quantity_defaulted": any(
-                    item.quantity == 1 and not re.search(
-                        r"(?:qty|quantity|q(?:t)?y\.?)\s*[:#]?\s*\d+|\b\d+\s*(?:ea|each|pcs?|pieces?|units?)\b|\b(?:need|require|want|request|order)\s+\d+",
-                        rfq.raw_text,
-                        re.IGNORECASE,
-                    )
-                    for item in quote_items
-                ),
-                "items": [
-                    {
-                        "part_number": item.part_number,
-                        "quantity": item.quantity,
-                        "uom": getattr(item, "uom", "EA"),
-                        "unit_price": item.unit_price,
-                        "attachments": getattr(item, "attachments", []),
-                    }
-                    for item in quote_items
-                ],
-            },
-            "reply_to": reply_to,
-        }, context={"pipeline_state": pipeline_state})
+        return AgentResponse(success=True, data={
+            "communication_logged": True,
+            "transmission_status": transmission["transmission_status"],
+            "formatted_body": body,
+            "subject": transmission["subject"],
+        })
 
     async def approve_and_queue_quote_async(
         self,
@@ -1136,10 +1160,24 @@ class OrchestrationService:
             "quote_details": quote_details,
             "reply_to": rfq.thread_id,
         }, context={"draft_only": True})
-        if not draft_result.success:
-            return {"error": draft_result.error_message or "Quote email drafting failed."}
+        if draft_result.success:
+            draft = draft_result.data
+            await repositories.records.record_llm_telemetry(**dict(draft["telemetry"]))
+            await repositories.records.record_automation_event(**draft["automation_event"])
+        else:
+            draft = {}
+            await repositories.rfq.add_audit_log(
+                rfq_id=rfq_id,
+                agent_name="CustomerCommunicationAgent",
+                action_type="quote_email_draft_skipped",
+                message=(
+                    "The generated draft was unavailable; the customer email will use the "
+                    "verified quote record and deterministic template."
+                ),
+                status="WARNING",
+                payload_json=json.dumps({"error": draft_result.error_message}),
+            )
 
-        draft = draft_result.data
         if not await repositories.quote.approve_for_dispatch(
             quote_id=quote_id,
             rfq_id=rfq_id,
@@ -1152,16 +1190,24 @@ class OrchestrationService:
         ):
             return {"error": f"Quote {quote_id} is no longer awaiting approval."}
 
-        telemetry = dict(draft["telemetry"])
-        await repositories.records.record_llm_telemetry(**telemetry)
-        await repositories.records.record_automation_event(**draft["automation_event"])
+        rendered_body, rendered_html = communication_service.render_customer_quote_email(
+            customer_name=rfq.customer_name,
+            quote_id=quote_id,
+            quote={
+                "shipping_cost": quote_payload.get("shipping_cost", 0),
+                "total_amount": quote_payload.get("total_amount", 0),
+                "valid_until": quote_payload.get("valid_until"),
+            },
+            items=updated_items,
+        )
         transmission = await communication_service.enqueue_customer_quote_async(
             repositories,
             recipient=rfq.customer_email,
             quote_id=quote_id,
             rfq_id=rfq_id,
-            subject=draft["subject"],
-            body=draft["formatted_body"],
+            subject=f"Winged Tycoons quotation {quote_id}",
+            body=rendered_body,
+            html_body=rendered_html,
             quote_items=updated_items,
             reply_to=rfq.thread_id,
         )
@@ -1178,7 +1224,7 @@ class OrchestrationService:
             "status": "Quote_Dispatch_Pending",
             "quote_id": quote_id,
             "transmission_status": transmission["transmission_status"],
-            "email_body": draft["formatted_body"],
+            "email_body": rendered_body,
         }
 
     async def approve_and_send_quote(
@@ -1245,32 +1291,35 @@ class OrchestrationService:
             "SUCCESS"
         )
         
-        # Trigger outbound email via CustomerCommunicationAgent
+        # Render commercial details only from the persisted quote record.
         rfq = db_service.get_rfq(rfq_id)
         quote_items = db_service.get_quote_items(quote_id)
-        comm_res = await self.comm_agent.execute({
-            "customer_email": rfq.customer_email,
-            "customer_name": rfq.customer_name,
-            "company_name": rfq.customer_name,
-            "communication_sentiment": self._load_pipeline_state(rfq.id).get("communication_sentiment"),
-            "quote_details": {
-                "quote_id": quote_id,
-                "subtotal": quote.subtotal,
-                "shipping_cost": quote.shipping_cost,
-                "total_amount": quote.total_amount,
-                "items": [
-                    {
-                        "part_number": item.part_number,
-                        "quantity": item.quantity,
-                        "uom": getattr(item, "uom", "EA"),
-                        "unit_price": item.unit_price,
-                        "attachments": getattr(item, "attachments", []),
-                    }
-                    for item in quote_items
-                ],
-            },
-            "reply_to": rfq.thread_id,
-        })
+        try:
+            transmission = communication_service.send_customer_quote(
+                recipient=rfq.customer_email,
+                customer_name=rfq.customer_name,
+                quote_id=quote_id,
+                quote_summary=f"Approved quote {quote_id}; total ${float(quote.total_amount or 0):,.2f}.",
+                reply_to=rfq.thread_id,
+                quote_items=quote_items,
+            )
+            rendered_body, _ = communication_service.render_customer_quote_email(
+                customer_name=rfq.customer_name,
+                quote_id=quote_id,
+                quote=quote,
+                items=quote_items,
+            )
+            comm_res = AgentResponse(success=True, data={
+                "transmission_status": transmission["transmission_status"],
+                "formatted_body": rendered_body,
+                "subject": transmission["subject"],
+            })
+        except Exception as exc:
+            logger.exception("Approved customer quote dispatch failed quote=%s", quote_id)
+            comm_res = AgentResponse(
+                success=False,
+                error_message=f"Customer email delivery failed: {type(exc).__name__}: {exc}",
+            )
 
         if not comm_res.success:
             db_service.update_quote_status(quote_id, "Dispatch_Failed", comments=comm_res.error_message)

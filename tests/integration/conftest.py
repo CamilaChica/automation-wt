@@ -54,17 +54,3 @@ async def disposable_postgres_engine():
                 await connection.execute(text(f'DROP SCHEMA "{schema_name}" CASCADE'))
     finally:
         await admin_engine.dispose()
-
-
-def pytest_addoption(parser):
-    parser.addoption(
-        "--run-live-llm",
-        action="store_true",
-        default=False,
-        help="Run opt-in live OpenAI/Anthropic/Gemini verification tests.",
-    )
-
-
-def pytest_configure(config):
-    if config.getoption("--run-live-llm"):
-        os.environ["RUN_LIVE_LLM"] = "1"

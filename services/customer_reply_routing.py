@@ -54,33 +54,6 @@ def find_rfq_for_reply(rfqs: Iterable, sender: str, subject: str, body: str) -> 
     return next((r for r in own if r.status in QUOTED_STATUSES), None)
 
 
-def policy_answers(text: str) -> list[str]:
-    """Deterministic answers for common sales questions that do not depend on a quote."""
-    lowered = (text or "").lower()
-    answers = []
-    if re.search(r"\bship|shipping|deliver|export|send (?:it|them|the part)|incoterm|freight|courier", lowered):
-        answers.append(
-            "Shipping: Yes, we ship worldwide, including to your country. Shipping method and cost will be "
-            "confirmed with your quotation."
-        )
-    if re.search(r"8130|easa|form 1|certificat|\bcert\b|trace|paperwork|documentation", lowered):
-        answers.append(
-            "Certification: Parts are supplied with their available release paperwork (FAA 8130-3 and/or "
-            "EASA Form 1 where applicable). The exact certificate for each part will be stated in the quotation."
-        )
-    if re.search(r"warrant", lowered):
-        answers.append(
-            "Warranty: Warranty depends on the part condition (e.g. new, overhauled, serviceable) and will be "
-            "stated in the quotation. We have noted your warranty requirement."
-        )
-    if re.search(r"lead time|how long|when|eta|status|update|still waiting|any news", lowered):
-        answers.append(
-            "Status: Your quotation is in progress; we are checking our inventory and supplier network and "
-            "will send it in this same email thread."
-        )
-    return answers
-
-
 DUPLICATE_REQUEST_WINDOW = timedelta(days=30)
 _PN_TOKEN = re.compile(r"\b[A-Z0-9]+(?:-[A-Z0-9]+)+\b", re.IGNORECASE)
 _QTY = re.compile(r"\b(?:qty|quantity|qnty)\b\s*[:=#]?\s*(\d{1,6})", re.IGNORECASE)
@@ -163,15 +136,13 @@ def build_resurfaced_quote_text(quote, matched_items, qty_changed: bool) -> str:
 
 def build_rfq_update_reply(rfq_id: str, customer_text: str, quote_answer: str | None = None) -> str:
     """Body (without greeting) acknowledging extra details/questions on an existing RFQ."""
-    answers = policy_answers(customer_text)
     parts = [f"Thank you for your message regarding your request {rfq_id}. We have added your details to this request."]
     if quote_answer:
         parts.append(quote_answer)
-    if answers:
-        parts.append("\n".join(f"- {line}" for line in answers))
     if not quote_answer:
         parts.append(
-            "Your quotation is being prepared and will be sent in this same email thread. "
+            "Our sales team is checking the details against your request and the available records. "
+            "We will follow up in this email thread once they are confirmed. "
             "There is no need to submit a new request."
         )
     parts.append("Best regards,\nWinged Tycoons Sales Team")

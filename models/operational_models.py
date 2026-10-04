@@ -457,6 +457,7 @@ class SupplierPartRecord(Base):
     warranty_terms: Mapped[str | None] = mapped_column(Text)
     trace_documents: Mapped[str | None] = mapped_column(Text)
     source_email_id: Mapped[str | None] = mapped_column(String(512), unique=True)
+    source_received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     confidence: Mapped[float | None] = mapped_column(Float)
     approval_status: Mapped[str] = mapped_column(String(32), default="Pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

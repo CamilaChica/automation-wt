@@ -29,6 +29,8 @@ POSTGRES_STORE_METHODS = (
     "is_inbound_email_processed",
     "release_inbound_message",
     "save_raw_email",
+    "set_raw_email_processing_status",
+    "get_raw_email_mime",
     "record_audit_event",
     "insert_audit_log",
     "list_audit_logs",
@@ -335,6 +337,39 @@ class OperationsStore:
         finally:
             conn.close()
         return raw_email_id
+
+    def get_raw_email_mime(self, source_message_id: str, mailbox: str = "purchasing") -> bytes | None:
+        if self._postgres:
+            return self._postgres.get_raw_email_mime(source_message_id, mailbox=mailbox)
+        source_id = str(source_message_id or "").strip()
+        if not source_id:
+            return None
+        candidates = list(dict.fromkeys((source_id, source_id.split(":", 1)[0])))
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT raw_mime FROM raw_emails WHERE mailbox = ? AND provider_message_id IN (?, ?) "
+                "ORDER BY CASE WHEN provider_message_id = ? THEN 0 ELSE 1 END LIMIT 1",
+                (mailbox, candidates[0], candidates[-1], source_id),
+            ).fetchone()
+            return bytes(row["raw_mime"]) if row and row["raw_mime"] is not None else None
+        finally:
+            conn.close()
+
+    def set_raw_email_processing_status(
+        self, mailbox: str, provider_message_id: str, processing_status: str,
+    ) -> None:
+        if self._postgres:
+            self._postgres.set_raw_email_processing_status(
+                mailbox, provider_message_id, processing_status
+            )
+            return
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE raw_emails SET processing_status = ? "
+                "WHERE mailbox = ? AND provider_message_id = ?",
+                (processing_status, mailbox, provider_message_id),
+            )
 
     def record_audit_event(self, *, entity_id: str, actor: str, action: str, status: str, payload: dict[str, Any] | None = None) -> str:
         if self._postgres:

@@ -11,6 +11,7 @@ from services.operations_store import operations_store
 from services.supplier_database import supplier_db
 from services.supplier_inventory_parser import normalize_inventory_row, parse_supplier_inventory_attachment
 from services.communication_service import communication_service
+from services.inbound_email_archive import _received_at
 
 
 def has_inventory_table_attachments(message: dict[str, Any]) -> bool:
@@ -115,6 +116,7 @@ def import_inventory_attachments(message: dict[str, Any], mailbox: str) -> dict[
                             description=normalized.get("description") or "",
                             availability_location=normalized.get("availability_location"),
                             trace_documents=[normalized["certificate_type"]] if normalized.get("certificate_type") else [],
+                            source_received_at=_received_at(message.get("date")),
                         )
                         imported_part_numbers.add(normalized["part_number"])
                         imported += 1
@@ -272,6 +274,7 @@ async def import_inventory_attachments_async(
                                     [normalized["certificate_type"]]
                                     if normalized.get("certificate_type") else []
                                 ),
+                                source_received_at=_received_at(message.get("date")),
                             )
                         imported_part_numbers.add(normalized["part_number"])
                         imported_items.append({

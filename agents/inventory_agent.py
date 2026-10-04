@@ -7,12 +7,12 @@ class InventoryAgent(BaseAgent):
     """
     InventoryAgent — Warehouse Stock Controller
     -------------------------------------------
-    Queries the internal warehouse inventory for a requested part number and
-    quantity, computes Available-To-Promise (ATP), and classifies availability.
+    Queries persisted warehouse inventory for a requested part number and
+    quantity, then classifies the recorded available quantity.
 
     Core calculation
     ~~~~~~~~~~~~~~~~
-        available_to_promise = quantity_on_hand - quantity_reserved
+        available_to_promise = persisted quantity_available
 
     Response contract
     ~~~~~~~~~~~~~~~~~
@@ -43,11 +43,11 @@ class InventoryAgent(BaseAgent):
             ),
             system_instruction=(
                 "You query the internal warehouse database via the check_inventory tool. "
-                "Compute ATP = quantity_on_hand - quantity_reserved.  "
-                "If ATP >= requested quantity → IN_STOCK. "
-                "If 0 <= ATP < requested quantity → PARTIAL_OR_SHORTAGE, escalate to sourcing. "
+                "Use the persisted quantity_available value. Do not infer reservation counts. "
+                "If available quantity >= requested quantity → IN_STOCK. "
+                "If available quantity < requested quantity → PARTIAL_OR_SHORTAGE, escalate to sourcing. "
                 "If part is unknown → NOT_FOUND, escalate to sourcing. "
-                "Do NOT guess or invent quantities. Only report what is physically confirmed."
+                "Do NOT guess or invent quantities. Only report what is physically recorded."
             ),
             input_schema={
                 "type": "object",
@@ -68,7 +68,7 @@ class InventoryAgent(BaseAgent):
                 "properties": {
                     "requested_quantity":  {"type": "integer"},
                     "available_quantity":  {"type": "integer",
-                                           "description": "ATP = quantity_on_hand - quantity_reserved"},
+                                           "description": "Quantity available in persisted inventory records"},
                     "shortage_quantity":   {"type": "integer"},
                     "condition":           {"type": "string"},
                     "warehouse":           {"type": "string"},
@@ -97,7 +97,7 @@ class InventoryAgent(BaseAgent):
                 )
             ],
             prompt_templates={
-                "default": "You query the internal warehouse database via the check_inventory tool. Compute ATP = quantity_on_hand - quantity_reserved. If ATP >= requested quantity -> IN_STOCK. If 0 <= ATP < requested quantity -> PARTIAL_OR_SHORTAGE, escalate to sourcing. If part is unknown -> NOT_FOUND, escalate to sourcing. Do NOT guess or invent quantities. Only report what is physically confirmed.",
+                "default": "Query persisted warehouse inventory via check_inventory and use its recorded available quantity. If enough is available -> IN_STOCK. If insufficient -> PARTIAL_OR_SHORTAGE and escalate to sourcing. If the part is unknown -> NOT_FOUND and escalate. Do not infer reservations or invent quantities.",
                 "stock_check": "Validate the available inventory quantity and determine ATP before continuing with pricing.",
             }
         )

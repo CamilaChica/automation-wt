@@ -107,6 +107,7 @@ class PostgresReviewTelemetryRepository:
             missing_columns: dict[str, list[str]] = {}
             required_columns = {
                 "purchase_orders": {"id", "po_number", "customer_email", "total_amount", "status", "quote_id", "rfq_id", "received_message_id", "attachment_metadata"},
+                "supplier_parts": {"id", "supplier_id", "part_number", "source_email_id", "source_received_at"},
                 "communications": {"id", "entity_type", "entity_id", "recipient", "sender", "channel", "subject", "message", "message_type", "status"},
                 "audit_logs": {"id", "rfq_id", "agent_name", "action_type", "message", "status", "payload_json", "created_at"},
                 "outbox_messages": {"id", "deduplication_key", "mailbox", "recipient", "subject", "payload", "status", "retry_count", "available_at"},
@@ -251,13 +252,16 @@ class PostgresReviewTelemetryRepository:
                     "WHERE message_id = :message_id"
                 ), {"message_id": key})
 
-    def save_inbound_email(self, *, mailbox: str, message_id: str, sender: str, subject: str, body: str, processing_status: str = "processed") -> str:
+    def save_inbound_email(self, *, mailbox: str, message_id: str, sender: str, subject: str, body: str, processing_status: str = "processed", received_at: datetime | None = None) -> str:
         email_id = f"EML-{uuid.uuid5(uuid.NAMESPACE_URL, message_id).hex[:16].upper()}"
         with self._begin() as connection:
-            result = connection.execute(insert(InboundEmailRecord).values(
+            values = dict(
                 id=email_id, mailbox=mailbox, message_id=message_id, sender=sender,
                 subject=subject, body=body, processing_status=processing_status,
-            ).on_conflict_do_update(
+            )
+            if received_at is not None:
+                values["received_at"] = received_at
+            result = connection.execute(insert(InboundEmailRecord).values(**values).on_conflict_do_update(
                 index_elements=[InboundEmailRecord.message_id],
                 set_={"mailbox": mailbox, "sender": sender, "subject": subject, "body": body,
                       "processing_status": processing_status},
@@ -312,6 +316,29 @@ class PostgresReviewTelemetryRepository:
                 set_=update_values,
             ).returning(RawEmailRecord.id))
             return str(result.scalar_one())
+
+    def set_raw_email_processing_status(
+        self, mailbox: str, provider_message_id: str, processing_status: str,
+    ) -> None:
+        with self._begin() as connection:
+            connection.execute(update(RawEmailRecord).where(
+                RawEmailRecord.mailbox == mailbox,
+                RawEmailRecord.provider_message_id == provider_message_id,
+            ).values(processing_status=processing_status))
+
+    def get_raw_email_mime(self, source_message_id: str, mailbox: str = "purchasing") -> bytes | None:
+        source_id = str(source_message_id or "").strip()
+        if not source_id:
+            return None
+        candidates = list(dict.fromkeys((source_id, source_id.split(":", 1)[0])))
+        with self._read() as connection:
+            value = connection.execute(select(RawEmailRecord.raw_mime).where(
+                RawEmailRecord.mailbox == mailbox,
+                RawEmailRecord.provider_message_id.in_(candidates),
+            ).order_by(
+                (RawEmailRecord.provider_message_id != source_id).asc(),
+            ).limit(1)).scalar_one_or_none()
+            return bytes(value) if value is not None else None
 
     def record_audit_event(self, *, entity_id: str, actor: str, action: str, status: str, payload: dict[str, Any] | None = None) -> str:
         audit_id = f"AUD-{uuid.uuid4().hex[:24].upper()}"
@@ -894,6 +921,8 @@ class PostgresReviewTelemetryRepository:
         recipient: str,
         subject: str,
         body: str,
+        html_body: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
         reply_to: str | None = None,
         communication_task_id: str | None = None,
         entity_id: str | None = None,
@@ -914,7 +943,11 @@ class PostgresReviewTelemetryRepository:
                 "mailbox": mailbox,
                 "recipient": recipient,
                 "subject": subject,
-                "payload": json.dumps({"body": body}),
+                "payload": json.dumps({
+                    "body": body,
+                    "html_body": html_body,
+                    "attachments": attachments or [],
+                }),
                 "reply_to": reply_to,
                 "task_id": communication_task_id,
                 "max_retries": max(1, int(max_retries)),
@@ -1033,7 +1066,7 @@ class PostgresReviewTelemetryRepository:
             ).order_by(SupplierRecord.company_name)).mappings().all()
             return [dict(row) for row in rows]
 
-    def save_supplier_offer(self, *, supplier_name: str, supplier_email: str | None = None, part_number: str = "", quantity_available: int | None = None, unit_cost: float | None = None, certificate_type: str | None = None, lead_time_days: int | None = None, approval_status: str = "Pending", condition_code: str | None = None, source_email_id: str | None = None, confidence: float = 1.0, description: str = "", availability_location: str | None = None, warranty_terms: str | None = None, trace_documents: list[str] | None = None, currency: str = "USD") -> dict[str, Any]:
+    def save_supplier_offer(self, *, supplier_name: str, supplier_email: str | None = None, part_number: str = "", quantity_available: int | None = None, unit_cost: float | None = None, certificate_type: str | None = None, lead_time_days: int | None = None, approval_status: str = "Pending", condition_code: str | None = None, source_email_id: str | None = None, source_received_at=None, confidence: float = 1.0, description: str = "", availability_location: str | None = None, warranty_terms: str | None = None, trace_documents: list[str] | None = None, currency: str = "USD") -> dict[str, Any]:
         with self._begin() as connection:
             supplier_id = self.upsert_supplier(supplier_name, supplier_email, approval_status=approval_status)
             offer_id = (
@@ -1048,11 +1081,17 @@ class PostgresReviewTelemetryRepository:
                 quantity_available=quantity_available, unit_cost=unit_cost, currency=currency,
                 certificate_type=certificate_type, lead_time_days=lead_time_days,
                 availability_location=availability_location, warranty_terms=warranty_terms,
-                source_email_id=source_email_id, confidence=confidence, approval_status=approval_status,
+                source_email_id=source_email_id, source_received_at=source_received_at,
+                confidence=confidence, approval_status=approval_status,
             )
             values = {**offer_data.model_dump(), "trace_documents": trace_json}
             statement = insert(SupplierPartRecord).values(**values)
             update_values = {key: value for key, value in values.items() if key not in {"id", "source_email_id"}}
+            update_values.pop("source_received_at", None)
+            update_values["source_received_at"] = func.coalesce(
+                SupplierPartRecord.source_received_at,
+                statement.excluded.source_received_at,
+            )
             update_values["updated_at"] = text("now()")
             if source_email_id:
                 statement = statement.on_conflict_do_update(index_elements=[SupplierPartRecord.source_email_id], set_=update_values)
@@ -1065,16 +1104,17 @@ class PostgresReviewTelemetryRepository:
     def get_supplier_offers(self, part_number: str, quantity_needed: int = 1) -> list[dict[str, Any]]:
         with self._read() as connection:
             rows = connection.execute(text(
-                "SELECT p.id AS supplier_part_id, p.supplier_id, p.part_number, p.quantity_available, p.unit_cost, "
+                "SELECT p.id AS supplier_part_id, p.supplier_id, p.part_number, p.quantity_available, p.unit_cost, p.currency, "
                 "p.certificate_type, p.lead_time_days, p.condition_code, p.approval_status, p.confidence, "
-                "p.updated_at, p.source_email_id, s.company_name AS supplier_name, s.email AS supplier_email, "
+                "p.updated_at, p.source_email_id, p.source_received_at, p.warranty_terms, p.trace_documents, "
+                "s.company_name AS supplier_name, s.email AS supplier_email, "
                 "s.approval_status AS supplier_approval_status FROM supplier_parts p JOIN suppliers s ON s.id = p.supplier_id "
                 "WHERE REGEXP_REPLACE(UPPER(COALESCE(p.part_number, '')), '[^A-Z0-9]', '', 'g') = :part_number "
                 "AND (p.quantity_available IS NULL OR p.quantity_available >= :quantity) "
                 "AND COALESCE(p.unit_cost, 0) > 0 "
                 "AND COALESCE(p.approval_status, '') <> 'Rejected' AND COALESCE(s.approval_status, '') <> 'Rejected' "
                 "ORDER BY (p.approval_status = 'Approved' OR s.approval_status = 'Approved') DESC, "
-                "p.updated_at DESC, p.unit_cost ASC LIMIT 50"
+                "p.source_received_at DESC NULLS LAST, p.updated_at DESC, p.unit_cost ASC LIMIT 50"
             ), {
                 "part_number": re.sub(r"[^A-Z0-9]", "", part_number.upper()),
                 "quantity": max(1, int(quantity_needed)),

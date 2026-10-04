@@ -1,7 +1,7 @@
 """Offline LLM integration contract tests.
 
-Live provider calls are opt-in with ``RUN_LIVE_LLM=1`` or the documented
-``--run-live-llm`` marker when executed through pytest. The default suite never
+Live provider calls are opt-in with ``RUN_LIVE_LLM=1`` or ``--run-live-llm``
+when executed through pytest. The default suite never
 contacts OpenAI, Anthropic, or Google.
 """
 
@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import unittest
 from unittest.mock import Mock, patch
 
+import pytest
 from pydantic import BaseModel, Field
 
 from services.llm_provider import (
@@ -28,7 +28,7 @@ from services.llm_provider import (
     ProviderUnavailableError,
 )
 
-RUN_LIVE_LLM = os.getenv("RUN_LIVE_LLM", "").lower() in {"1", "true", "yes"} or "--run-live-llm" in sys.argv
+pytestmark = pytest.mark.integration
 
 
 class RFQExtraction(BaseModel):
@@ -261,15 +261,38 @@ class TestTimeoutAndRateLimitHandling(unittest.TestCase):
         self.assertEqual(result.provider, "anthropic")
 
 
-@unittest.skipUnless(RUN_LIVE_LLM, "Set RUN_LIVE_LLM=1 to execute optional live provider verification")
-class TestOptionalLiveLLMVerification(unittest.TestCase):
-    def test_configured_default_provider_can_be_reached(self):
-        provider_name = os.getenv("LLM_DEFAULT_PROVIDER", "openai")
-        router = LLMRouter()
-        response = router.complete(LLMRequest("deployment_smoke_test", "Return exactly OK.", "OK"))
-        self.assertEqual(response.provider, provider_name)
-        self.assertTrue(response.text)
+@pytest.mark.live_llm
+def test_configured_provider_can_be_reached():
+    provider_name = os.getenv("LLM_DEFAULT_PROVIDER", "openai").strip().lower()
+    provider_factories = {
+        "openai": (OpenAIProvider, "OPENAI_API_KEY"),
+        "anthropic": (AnthropicProvider, "ANTHROPIC_API_KEY"),
+        "gemini": (GeminiProvider, "GEMINI_API_KEY"),
+    }
+    if provider_name not in provider_factories:
+        pytest.fail(f"Unsupported LLM_DEFAULT_PROVIDER: {provider_name!r}")
+
+    provider_class, key_name = provider_factories[provider_name]
+    if not os.getenv(key_name, "").strip():
+        pytest.skip(f"{key_name} is not configured; live provider verification was not run.")
+
+    with patch.dict(os.environ, {"LLM_RETRY_ATTEMPTS": "1"}, clear=False):
+        router = LLMRouter({provider_name: provider_class()})
+        response = router.complete(
+            LLMRequest(
+                "deployment_smoke_test",
+                "Return exactly OK.",
+                "OK",
+                timeout_seconds=10,
+                max_tokens=8,
+                response_format="text",
+            ),
+            provider_override=provider_name,
+        )
+
+    assert response.provider == provider_name
+    assert response.text.strip()
 
 
 if __name__ == "__main__":
-    unittest.main()
+    raise SystemExit("Run this test module with pytest so live-provider safety gates apply.")

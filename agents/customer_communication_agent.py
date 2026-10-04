@@ -59,7 +59,11 @@ class CustomerCommunicationAgent(BaseAgent):
         self._router_injected = llm_router is not None
         self.llm_router = llm_router or LLMRouter()
         self.llm_timeout_seconds = float(os.getenv("LLM_EMAIL_TIMEOUT_SECONDS", "12"))
-        self.llm_model = os.getenv("CUSTOMER_COMMUNICATION_MODEL") or os.getenv("OPENAI_MODEL")
+        self.llm_model = (
+            os.getenv("CUSTOMER_COMMUNICATION_MODEL")
+            or self.metadata.llm_profile.model
+            or os.getenv("OPENAI_MODEL")
+        )
         self.template_fallback_enabled = os.getenv("LLM_ALLOW_TEMPLATE_FALLBACK", "true").strip().lower() in {"1", "true", "yes", "on"}
         self.llm_live_enabled = os.getenv("LLM_LIVE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
         provider_name = self.llm_router.task_providers.get("customer_communication", os.getenv("LLM_DEFAULT_PROVIDER", "openai"))
@@ -125,7 +129,7 @@ class CustomerCommunicationAgent(BaseAgent):
         }[sentiment_label]
         request = LLMRequest(
             task="customer_communication",
-            system_prompt=(f"{CUSTOMER_COMMUNICATION_PROMPT} "
+            system_prompt=(f"{self.metadata.system_instruction} "
                            "Redact supplier costs, internal margins, supplier identities, warehouse locations, credentials, and private audit data. "
                            "Address the customer as the supplied company's team, using the company name from the customer portal or verified client communication. "
                            "Encourage use of the customer portal and confirm whether the quotation meets their needs. "
@@ -144,9 +148,15 @@ class CustomerCommunicationAgent(BaseAgent):
                 "approved_quote_summary": summary,
             }}, ensure_ascii=False, default=str),
             model=self.llm_model,
-            temperature=float(os.getenv("CUSTOMER_COMMUNICATION_TEMPERATURE", "0.2")),
+            temperature=float(os.getenv(
+                "CUSTOMER_COMMUNICATION_TEMPERATURE",
+                str(self.metadata.llm_profile.temperature),
+            )),
             timeout_seconds=self.llm_timeout_seconds,
-            max_tokens=int(os.getenv("CUSTOMER_COMMUNICATION_MAX_TOKENS", "1200")),
+            max_tokens=int(os.getenv(
+                "CUSTOMER_COMMUNICATION_MAX_TOKENS",
+                str(self.metadata.llm_profile.max_tokens),
+            )),
             response_format="json",
         )
         started = time.perf_counter()
@@ -244,8 +254,6 @@ class CustomerCommunicationAgent(BaseAgent):
                 quote_summary=summary,
                 reply_to=inputs.get("reply_to"),
                 quote_items=details.get("items") or None,
-                subject_override=draft.subject,
-                body_override=draft.body_text,
             )
         except Exception as exc:
             logger.exception("customer_email_dispatch status=failure quote_id=%s error=%s", quote_id, type(exc).__name__)
@@ -257,9 +265,9 @@ class CustomerCommunicationAgent(BaseAgent):
         return AgentResponse(success=True, data={
             "communication_logged": True,
             "transmission_status": transmission["transmission_status"],
-            "formatted_body": draft.body_text,
-            "subject": draft.subject,
-            "body_html": draft.body_html,
+            "formatted_body": transmission.get("rendered_body", draft.body_text),
+            "subject": transmission.get("rendered_subject", draft.subject),
+            "body_html": transmission.get("rendered_html_body", draft.body_html),
             "redacted_fields_applied": draft.redacted_fields_applied,
             "confidence_score": draft.confidence_score,
             "llm_fallback_used": fallback_used,

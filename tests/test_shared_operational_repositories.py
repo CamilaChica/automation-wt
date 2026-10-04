@@ -187,6 +187,8 @@ async def test_async_email_purchase_order_uses_repository_and_outbox(monkeypatch
     assert receive_po.await_args.kwargs["attachment_metadata"][0]["size"] == 3
     notify.assert_awaited_once()
     assert notify.await_args.kwargs["recipient"] == "review@example.test"
+    assert notify.await_args.kwargs["attachments"][0]["filename"] == "WT-PO-ASYNC-UNIT.pdf"
+    assert notify.await_args.kwargs["attachments"][0]["content"] == b"pdf"
     repositories.records.enqueue_operator_review.assert_not_awaited()
 
 
@@ -503,12 +505,13 @@ async def test_async_quote_approval_coordinator_drafts_and_queues_atomically(mon
         expected_version=3,
     )
 
-    assert result == {
-        "status": "Quote_Dispatch_Pending",
-        "quote_id": "QTE-ASYNC-COORDINATOR",
-        "transmission_status": "PENDING",
-        "email_body": "Approved quote details.",
-    }
+    assert result["status"] == "Quote_Dispatch_Pending"
+    assert result["quote_id"] == "QTE-ASYNC-COORDINATOR"
+    assert result["transmission_status"] == "PENDING"
+    assert result["email_body"] == enqueue.await_args.kwargs["body"]
+    assert "PN-ASYNC" in result["email_body"]
+    assert "$30.00" in result["email_body"]
+    assert result["email_body"] != draft.data["formatted_body"]
     assert generate.await_args.kwargs["context"] == {"draft_only": True}
     approved_payload = approve.await_args.kwargs["quote_payload"]
     assert approved_payload["status"] == "Pending_Approval"
@@ -655,6 +658,10 @@ async def test_async_purchase_order_submission_commits_outbox_with_review_state(
     assert response["internal_notification"]["transmission_status"] == "PENDING"
     receive.assert_awaited_once()
     notification.assert_awaited_once()
+    assert [file["filename"] for file in notification.await_args.kwargs["attachments"]] == [
+        "ATT-1.pdf", "ATT-2.pdf", "ATT-3.pdf",
+    ]
+    assert all(file["content"].startswith(b"%PDF-1.4") for file in notification.await_args.kwargs["attachments"])
     session.commit.assert_awaited_once()
     assert call_order == ["receive", "notify", "commit"]
 

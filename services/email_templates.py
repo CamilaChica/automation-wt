@@ -65,7 +65,11 @@ class SupplierDiscountData(BaseModel):
     recipient_email: str
     part_number: str
     quantity: int = Field(..., gt=0)
-    quoted_price: float = Field(..., ge=0)
+    quoted_price: float = Field(..., ge=0, allow_inf_nan=False)
+    currency: Literal["USD"] = "USD"
+    target_discount_percentage: float | None = Field(
+        None, gt=0, le=5, allow_inf_nan=False
+    )
     supplier_sentiment: Literal["positive", "neutral", "negative", "mixed"] | None = None
 
 
@@ -185,10 +189,24 @@ def supplier_discount_request(data: SupplierDiscountData) -> EmailPayload:
         "negative": "Thank you for clarifying your position. We appreciate your time.",
         "mixed": "Thank you for the quotation and for sharing the relevant context.",
     }.get(data.supplier_sentiment, "Thank you for providing the initial quotation.")
+    if data.target_discount_percentage is None:
+        negotiation_request = (
+            "We are actively working to secure this order for our customer. Could you please confirm if you can "
+            "offer your best commercial price, best possible net price, or any volume discount for this requirement?"
+        )
+    else:
+        target_price = data.quoted_price * (1 - data.target_discount_percentage / 100)
+        negotiation_request = (
+            "We are actively working to secure this order for our customer. Could you please confirm whether you "
+            f"can offer a {data.target_discount_percentage:g}% discount, bringing the target unit price to "
+            f"${target_price:,.2f} {data.currency} for this quantity? This is a request for your consideration "
+            "only and does not authorize an order."
+        )
     body = (
         f"Dear {data.supplier_contact},\n\n"
-        f"{acknowledgement} Your initial quotation was PN {data.part_number} at ${data.quoted_price:,.2f} per unit.\n\n"
-        "We are actively working to secure this order for our customer. Could you please confirm if you can offer your best commercial price, best possible net price, or any volume discount for this requirement?\n\n"
+        f"{acknowledgement} Your initial quotation was PN {data.part_number} at "
+        f"${data.quoted_price:,.2f} {data.currency} per unit.\n\n"
+        f"{negotiation_request}\n\n"
         "We appreciate your support and look forward to finalizing this purchase.\n\n"
         "Best regards,\n\n"
         "Purchasing Team | Winged Tycoons"

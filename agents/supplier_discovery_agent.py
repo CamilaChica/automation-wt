@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 from agents.base_agent import BaseAgent, AgentMetadata, AgentResponse, EscalationRule
@@ -169,16 +170,19 @@ class SupplierDiscoveryAgent(BaseAgent):
         fresh_records: List[Dict[str, Any]] = []
         self.last_stale_offers = []
         for record in records:
-            if not record.get("updated_at"):
-                fresh_records.append(record)
-                continue
             try:
-                updated_at = datetime.fromisoformat(str(record.get("updated_at")).replace("Z", "+00:00"))
-                if updated_at.tzinfo is None:
-                    updated_at = updated_at.replace(tzinfo=timezone.utc)
+                received_at = record.get("source_received_at")
+                if isinstance(received_at, datetime):
+                    quoted_at = received_at
+                elif received_at:
+                    quoted_at = datetime.fromisoformat(str(received_at).replace("Z", "+00:00"))
+                else:
+                    quoted_at = datetime.min.replace(tzinfo=timezone.utc)
+                if quoted_at.tzinfo is None:
+                    quoted_at = quoted_at.replace(tzinfo=timezone.utc)
             except (TypeError, ValueError):
-                updated_at = datetime.min.replace(tzinfo=timezone.utc)
-            if updated_at >= cutoff:
+                quoted_at = datetime.min.replace(tzinfo=timezone.utc)
+            if quoted_at >= cutoff:
                 fresh_records.append(record)
             else:
                 self.last_stale_offers.append(record)
@@ -202,6 +206,12 @@ class SupplierDiscoveryAgent(BaseAgent):
                 score += max(0, 25 - (unit_cost / 100.0))
             score += confidence * 10
 
+            trace_documents = record.get("trace_documents") or []
+            if isinstance(trace_documents, str):
+                try:
+                    trace_documents = json.loads(trace_documents)
+                except json.JSONDecodeError:
+                    trace_documents = [trace_documents] if trace_documents.strip() else []
             ranked.append({
                 "supplier_id": record.get("supplier_id", ""),
                 "supplier_name": record.get("supplier_name", "Unknown Supplier"),
@@ -211,6 +221,9 @@ class SupplierDiscoveryAgent(BaseAgent):
                 "quantity_available": int(record.get("quantity_available") or 0),
                 "lead_time_days": lead_time,
                 "certificate_type": record.get("certificate_type") or "None",
+                "source_email_id": record.get("source_email_id"),
+                "warranty_terms": record.get("warranty_terms"),
+                "trace_documents": trace_documents if isinstance(trace_documents, list) else [],
                 "approval_status": record.get("approval_status") or "Pending",
                 "reliability_score": round(confidence * 100, 2),
                 "score": round(score, 2),

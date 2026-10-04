@@ -145,6 +145,14 @@ def _record_email_purchase_order(message: dict[str, Any], rfq: Any, quote: Any, 
             quote_id=quote.id,
             items=internal_items,
             review_url=os.getenv("SALES_DASHBOARD_URL") or os.getenv("PUBLIC_APP_URL", "http://localhost:3000"),
+            attachments=[
+                {
+                    "filename": str(attachment.get("filename") or "purchase-order-attachment"),
+                    "content_type": str(attachment.get("content_type") or "application/octet-stream"),
+                    "content": attachment.get("content"),
+                }
+                for attachment in message.get("attachments") or []
+            ],
         )
     return {"status": "Pending_PO_Review", "po_number": po_number, "quote_id": quote.id, "notification": notification}
 
@@ -269,7 +277,15 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
                 }),
             )
         except Exception as exc:
-            _reply_to_rfq_update(message, existing, sender, body)
+            if "requested_document_unavailable_from_verified_supplier_source" in str(exc):
+                communication_service.send_customer_document_unavailable(
+                    recipient=sender,
+                    customer_name=existing.customer_name,
+                    quote_id=quote.id,
+                    reply_to=message.get("message_id") or existing.thread_id,
+                )
+            else:
+                _reply_to_rfq_update(message, existing, sender, body)
             _review_inbound_customer_message(message, f"customer_question_needs_review:{type(exc).__name__}", existing.id)
         return True
     if classification["category"] == "other":
@@ -449,6 +465,14 @@ async def _ingest_existing_sales_message_async(message: dict[str, Any], reposito
                     quote_id=quote.id,
                     items=internal_items,
                     review_url=os.getenv("SALES_DASHBOARD_URL") or os.getenv("PUBLIC_APP_URL", "http://localhost:3000"),
+                    attachments=[
+                        {
+                            "filename": str(attachment.get("filename") or "purchase-order-attachment"),
+                            "content_type": str(attachment.get("content_type") or "application/octet-stream"),
+                            "content": attachment.get("content"),
+                        }
+                        for attachment in message.get("attachments") or []
+                    ],
                 )
                 return True
             reason = "email_po_conflicts_with_existing_purchase_order"
@@ -493,7 +517,16 @@ async def _ingest_existing_sales_message_async(message: dict[str, Any], reposito
                 return True
             except Exception as exc:
                 reason = f"customer_question_needs_review:{type(exc).__name__}"
-                await _reply_to_rfq_update_async(message, existing, sender, body, rfqs, repositories)
+                if "requested_document_unavailable_from_verified_supplier_source" in str(exc):
+                    await communication_service.send_customer_document_unavailable_async(
+                        repositories,
+                        recipient=sender,
+                        customer_name=existing.customer_name,
+                        quote_id=quote.id,
+                        reply_to=message_id or existing.thread_id,
+                    )
+                else:
+                    await _reply_to_rfq_update_async(message, existing, sender, body, rfqs, repositories)
         await repositories.records.enqueue_operator_review(
             idempotency_key=f"customer-email-review:{message_id or sender}",
             task="customer_email_classification",

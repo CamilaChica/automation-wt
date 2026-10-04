@@ -1,6 +1,9 @@
 """Natural-language supplier and customer email workflows."""
 
 import asyncio
+import base64
+import email
+import html as html_lib
 import logging
 import os
 import re
@@ -30,13 +33,109 @@ from services.email_templates import (
     supplier_rfq as compose_supplier_rfq,
     supplier_verification as compose_supplier_verification,
 )
-from services.mailbox_service import MAILBOXES, send_message
+from services.mailbox_service import MAILBOXES, ensure_staging_recipient_allowed, send_message
 from services.operations_store import operations_store
 from services.supplier_database import supplier_db
 
 logger = logging.getLogger(__name__)
 
 customer_question_service = CustomerQuestionService()
+
+
+def _serialize_email_attachments(attachments: list[dict[str, Any]] | None) -> list[dict[str, str]]:
+    serialized = []
+    total_bytes = 0
+    for attachment in attachments or []:
+        content = attachment.get("content")
+        if not isinstance(content, bytes):
+            raise ValueError("Email attachment content must be bytes.")
+        total_bytes += len(content)
+        if total_bytes > 25 * 1024 * 1024:
+            raise ValueError("Email attachments exceed the 25 MB combined limit.")
+        serialized.append({
+            "filename": str(attachment.get("filename") or "attachment"),
+            "content_type": str(attachment.get("content_type") or "application/octet-stream"),
+            "content_base64": base64.b64encode(content).decode("ascii"),
+        })
+    return serialized
+
+
+def _deserialize_email_attachments(attachments: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    decoded = []
+    for attachment in attachments or []:
+        try:
+            content = base64.b64decode(attachment["content_base64"], validate=True)
+        except (KeyError, ValueError) as exc:
+            raise ValueError("Queued email attachment is invalid or corrupted.") from exc
+        decoded.append({
+            "filename": attachment.get("filename") or "attachment",
+            "content_type": attachment.get("content_type") or "application/octet-stream",
+            "content": content,
+        })
+    return decoded
+
+
+def _customer_html_from_text(body: str) -> str:
+    return (
+        "<div style=\"font-family:Arial,sans-serif;color:#172033;line-height:1.6;max-width:760px\">"
+        + html_lib.escape(body).replace("\n", "<br>\n")
+        + "</div>"
+    )
+
+
+def _source_documents_for_customer_request(question: str, items: list[Any]) -> list[dict[str, Any]]:
+    if not customer_question_service.is_document_request(question):
+        return []
+    from services.mailbox_service import _extract_attachments_from_message
+
+    allowed_extensions = {".pdf", ".doc", ".docx", ".jpg", ".jpeg", ".png"}
+    document_terms = re.compile(
+        r"(certificate|cert|trace|8130|easa|form.?1|release|conformity|logbook|back.?to.?birth)",
+        re.I,
+    )
+    selected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    total_bytes = 0
+    for item in items:
+        source_message_id = item.get("source_email_id") if isinstance(item, dict) else getattr(item, "source_email_id", None)
+        document_names = item.get("trace_documents") if isinstance(item, dict) else getattr(item, "trace_documents", None)
+        if isinstance(document_names, str):
+            try:
+                document_names = json.loads(document_names)
+            except json.JSONDecodeError:
+                document_names = [document_names]
+        if not isinstance(document_names, (list, tuple)):
+            document_names = []
+        if not source_message_id:
+            continue
+        raw_mime = operations_store.get_raw_email_mime(str(source_message_id), mailbox="purchasing")
+        if not raw_mime:
+            continue
+        message = email.message_from_bytes(raw_mime)
+        for attachment in _extract_attachments_from_message(message):
+            filename = str(attachment.get("filename") or "")
+            content = attachment.get("content")
+            normalized_name = os.path.basename(filename).casefold()
+            if (
+                not content
+                or os.path.splitext(normalized_name)[1] not in allowed_extensions
+                or not (
+                    document_terms.search(normalized_name)
+                    or any(str(name).casefold() in normalized_name for name in document_names)
+                )
+            ):
+                continue
+            digest = hashlib.sha256(content).hexdigest()
+            if digest in seen:
+                continue
+            total_bytes += len(content)
+            if total_bytes > 25 * 1024 * 1024:
+                raise ValueError("Requested supplier documents exceed the 25 MB email attachment limit.")
+            selected.append(attachment)
+            seen.add(digest)
+    if not selected:
+        raise ValueError("requested_document_unavailable_from_verified_supplier_source")
+    return selected
 
 
 def _next_customer_business_window(due: datetime) -> datetime:
@@ -265,6 +364,7 @@ class CommunicationService:
     ) -> Dict[str, Any]:
         if not self._is_valid_email(recipient):
             raise ValueError("Recipient email is invalid. Email dispatch aborted.")
+        ensure_staging_recipient_allowed(recipient)
         subject = f"Re: RFQ request: {part_number.upper()} - information needed"
         body = self._missing_fields_request(part_number, missing_fields)
         key = self._supplier_info_key(recipient, part_number)
@@ -338,6 +438,7 @@ class CommunicationService:
     ) -> Dict[str, Any]:
         if not self._is_valid_email(recipient):
             raise ValueError("Recipient email is invalid. Email dispatch aborted.")
+        ensure_staging_recipient_allowed(recipient)
         subject = f"Re: Quote details required - {part_reference}"
         body = (
             "Hello,\n\n"
@@ -385,12 +486,13 @@ class CommunicationService:
         previous_po_number: Optional[str] = None,
         previous_quote_id: Optional[str] = None,
         review_url: Optional[str] = None,
+        attachments: List[Dict[str, Any]] | None = None,
     ) -> Dict[str, Any]:
         subject, body = self._purchase_order_notification_content(
             po_number, customer_name, customer_email, quote_id, items,
             previous_po_number, previous_quote_id, review_url,
         )
-        return self._send("sales", recipient, subject, body, reply_to=None)
+        return self._send("sales", recipient, subject, body, reply_to=None, attachments=attachments)
 
     def _purchase_order_notification_content(
         self,
@@ -402,6 +504,7 @@ class CommunicationService:
         previous_po_number: Optional[str] = None,
         previous_quote_id: Optional[str] = None,
         review_url: Optional[str] = None,
+        attachments: List[Dict[str, Any]] | None = None,
     ) -> tuple[str, str]:
         self.validate_purchase_order_metadata(
             po_number=po_number,
@@ -445,6 +548,7 @@ class CommunicationService:
         previous_po_number: Optional[str] = None,
         previous_quote_id: Optional[str] = None,
         review_url: Optional[str] = None,
+        attachments: List[Dict[str, Any]] | None = None,
     ) -> Dict[str, Any]:
         subject, body = self._purchase_order_notification_content(
             po_number, customer_name, customer_email, quote_id, items,
@@ -452,8 +556,13 @@ class CommunicationService:
         )
         if not self._is_valid_email(recipient):
             raise ValueError("Recipient email is invalid. Email dispatch aborted.")
+        ensure_staging_recipient_allowed(recipient)
+        serialized_attachments = _serialize_email_attachments(attachments)
         deduplication_key = hashlib.sha256(
-            "\0".join(("sales", recipient.lower(), subject, body, "", "", quote_id)).encode("utf-8")
+            "\0".join((
+                "sales", recipient.lower(), subject, body, "", "", quote_id,
+                json.dumps(serialized_attachments, sort_keys=True),
+            )).encode("utf-8")
         ).hexdigest()
         queued = await repositories.records.enqueue_outbox_message(
             deduplication_key=deduplication_key,
@@ -461,6 +570,7 @@ class CommunicationService:
             recipient=recipient,
             subject=subject,
             body=body,
+            attachments=serialized_attachments,
             entity_id=quote_id,
         )
         return {
@@ -500,6 +610,7 @@ class CommunicationService:
         subject, body = self._shipment_tracking_content(shipment_id, public_token, company_name)
         if not self._is_valid_email(recipient):
             raise ValueError("Recipient email is invalid. Email dispatch aborted.")
+        ensure_staging_recipient_allowed(recipient)
         deduplication_key = hashlib.sha256(
             "\0".join(("sales", recipient.lower(), subject, body, "", "", shipment_id)).encode("utf-8")
         ).hexdigest()
@@ -575,10 +686,8 @@ class CommunicationService:
         quote_summary: str,
         reply_to: Optional[str] = None,
         quote_items: Optional[List[Dict[str, Any]]] = None,
-        subject_override: Optional[str] = None,
-        body_override: Optional[str] = None,
     ) -> Dict[str, Any]:
-        subject = subject_override or f"Winged Tycoons quotation {quote_id}"
+        subject = f"Winged Tycoons quotation {quote_id}"
         quote_body = str(quote_summary or "").strip()
         if not quote_body:
             quote_body = "Please see the approved quotation below."
@@ -622,49 +731,18 @@ class CommunicationService:
         elif self._sending_enabled():
             raise ValueError("Persisted or structured quote item data is required before live customer dispatch.")
 
-        first_item = quote_items[0] if quote_items else None
-        rfq_items = db_service.get_rfq_items(quote_details.rfq_id) if quote_details else []
-        rfq_item = rfq_items[0] if rfq_items else None
-        if quote_details and first_item:
-            template = compose_customer_quote(CustomerQuoteData(
-                contact_name=safe_display_text(customer_name),
-                company_name=safe_display_text(customer_name),
-                recipient_email=recipient,
-                quote_number=quote_id,
-                part_number=first_item.part_number,
-                description=first_item.description or first_item.part_number,
-                quantity=first_item.quantity,
-                condition=(first_item.condition or getattr(rfq_item, "condition_preference", None) or "Available"),
-                certification=first_item.certificate_type or "Available upon request",
-                unit_price=first_item.unit_price,
-                lead_time=(f"{quote_details.lead_time_days} days" if quote_details.lead_time_days is not None else "Available upon request"),
-                valid_until=quote_details.valid_until or "Available upon request",
-            ))
-            if not subject_override:
-                subject = template.subject
-            body = template.body
-        else:
-            body = (
-                f"Dear {safe_display_text(customer_name)},\n\n"
-                "Thank you for your request. Please find the approved quotation below.\n\n"
-                f"{quote_body}\n\n"
-                "Shipping is customer-selected and not included in the proposal. Please reply with your purchase order or any questions. "
-                "We will keep this conversation together for follow-up.\n\n"
-                "Best regards,\nWinged Tycoons Sales Team"
-            )
-        if body_override:
-            body = body_override.strip()
-            if not body:
-                raise ValueError("Generated customer email body is empty. Email dispatch aborted.")
-        body = enforce_customer_email_policy(
-            body,
-            customer_name,
-            satisfaction_question="Does this quotation meet your needs?",
+        body, html_body = self.render_customer_quote_email(
+            customer_name=customer_name,
+            quote_id=quote_id,
+            quote=quote_details,
+            items=quote_items,
+            quote_summary=quote_body,
         )
         if operations_store.storage_engine == "postgresql" and quote_details:
             with operations_store.transaction():
                 result = self._send(
                     "sales", recipient, subject, body, reply_to=reply_to,
+                    html_body=html_body,
                     entity_id=quote_id, deduplication_key=f"customer-quote:{quote_id}",
                 )
                 self.schedule_customer_followup(
@@ -676,6 +754,7 @@ class CommunicationService:
         else:
             result = self._send(
                 "sales", recipient, subject, body, reply_to=reply_to,
+                html_body=html_body,
                 entity_id=quote_id, deduplication_key=f"customer-quote:{quote_id}",
             )
             self.schedule_customer_followup(
@@ -684,7 +763,101 @@ class CommunicationService:
                 quote_id=quote_id,
                 reply_to=reply_to,
             )
-        return result
+        return {
+            **result,
+            "rendered_subject": subject,
+            "rendered_body": body,
+            "rendered_html_body": html_body,
+        }
+
+    @staticmethod
+    def render_customer_quote_email(
+        *,
+        customer_name: str,
+        quote_id: str,
+        quote: Any,
+        items: List[Any],
+        quote_summary: str = "",
+    ) -> tuple[str, str]:
+        def value(item: Any, key: str, default: Any = None) -> Any:
+            return item.get(key, default) if isinstance(item, dict) else getattr(item, key, default)
+
+        rows = []
+        text_rows = []
+        subtotal = 0.0
+        for item in items:
+            part_number = safe_display_text(value(item, "part_number", ""))
+            description = safe_display_text(value(item, "description") or part_number)
+            quantity = int(value(item, "quantity", 0) or 0)
+            unit_price = float(value(item, "unit_price", 0) or 0)
+            line_total = quantity * unit_price
+            subtotal += line_total
+            condition = safe_display_text(value(item, "condition") or "Not specified")
+            certificate = safe_display_text(value(item, "certificate_type") or "Not specified")
+            lead_time = value(item, "lead_time_days")
+            lead_text = f"{int(lead_time)} days" if lead_time is not None else "To be confirmed"
+            text_rows.append(
+                f"{part_number} — {description}; Qty {quantity}; Condition {condition}; "
+                f"Release document {certificate}; Lead time {lead_text}; "
+                f"Unit price ${unit_price:,.2f}; Line total ${line_total:,.2f}"
+            )
+            rows.append(
+                "<tr>"
+                f"<td>{html_lib.escape(part_number)}<br><span>{html_lib.escape(description)}</span></td>"
+                f"<td>{quantity}</td><td>{html_lib.escape(condition)}</td>"
+                f"<td>{html_lib.escape(certificate)}</td><td>{html_lib.escape(lead_text)}</td>"
+                f"<td>${unit_price:,.2f}</td><td>${line_total:,.2f}</td>"
+                "</tr>"
+            )
+        shipping = float(value(quote, "shipping_cost", 0) or 0) if quote else 0.0
+        total = float(value(quote, "total_amount", subtotal + shipping) or subtotal + shipping) if quote else subtotal + shipping
+        valid_until = safe_display_text(value(quote, "valid_until") or "Not specified") if quote else "Not specified"
+        name = safe_display_text(customer_name or "Customer")
+        text_body = (
+            f"Dear {name},\n\n"
+            f"Thank you for your request. Your quotation {quote_id} is ready.\n\n"
+            "QUOTATION SUMMARY\n"
+            f"Quote reference: {quote_id}\n"
+            f"Valid through: {valid_until}\n\n"
+            "ITEMIZED PRICING\n"
+            + "\n".join(text_rows)
+            + f"\n\nSubtotal: ${subtotal:,.2f}\nShipping: ${shipping:,.2f}\nTotal: ${total:,.2f}\n\n"
+            "Shipping is not included unless listed above. Release documents and supporting records are "
+            "identified only as stated for each item; copies can be provided when available and verified.\n\n"
+            "Please reply to this email with your purchase order or any questions. We will keep all "
+            "quotation correspondence in this thread.\n\n"
+            "Best regards,\nWinged Tycoons Sales Team"
+        )
+        safe_text_body = enforce_customer_email_policy(
+            text_body, customer_name, satisfaction_question="Does this quotation meet your needs?"
+        )
+        html_body = (
+            "<div style=\"font-family:Arial,sans-serif;color:#172033;max-width:900px;margin:auto\">"
+            f"<p>Dear {html_lib.escape(name)},</p>"
+            f"<p>Thank you for your request. Your quotation <strong>{html_lib.escape(quote_id)}</strong> is ready.</p>"
+            "<h2 style=\"color:#8a6a19\">Quotation summary</h2>"
+            f"<p><strong>Quote reference:</strong> {html_lib.escape(quote_id)}<br>"
+            f"<strong>Valid through:</strong> {html_lib.escape(valid_until)}</p>"
+            "<h2 style=\"color:#8a6a19\">Itemized pricing</h2>"
+            "<table style=\"border-collapse:collapse;width:100%\">"
+            "<thead><tr>"
+            + "".join(
+                f"<th style=\"text-align:left;border-bottom:2px solid #d7dde5;padding:8px\">{label}</th>"
+                for label in ("Part / description", "Qty", "Condition", "Release document", "Lead time", "Unit price", "Line total")
+            )
+            + "</tr></thead><tbody>"
+            + "".join(rows)
+            + "</tbody></table>"
+            f"<p style=\"text-align:right\"><strong>Subtotal:</strong> ${subtotal:,.2f}<br>"
+            f"<strong>Shipping:</strong> ${shipping:,.2f}<br>"
+            f"<strong>Total:</strong> ${total:,.2f}</p>"
+            "<p>Shipping is not included unless listed above. Release documents and supporting records are "
+            "identified only as stated for each item; copies can be provided when available and verified.</p>"
+            "<p>Please reply to this email with your purchase order or any questions. We will keep all "
+            "quotation correspondence in this thread.</p>"
+            "<p>Best regards,<br>Winged Tycoons Sales Team</p></div>"
+        )
+        return safe_text_body, html_body
 
     async def enqueue_customer_quote_async(
         self,
@@ -695,11 +868,13 @@ class CommunicationService:
         rfq_id: str,
         subject: str,
         body: str,
+        html_body: str | None = None,
         quote_items: List[Dict[str, Any]],
         reply_to: Optional[str] = None,
     ) -> Dict[str, Any]:
         if not self._is_valid_email(recipient):
             raise ValueError("Customer email is invalid. Email dispatch aborted.")
+        ensure_staging_recipient_allowed(recipient)
         if not str(body or "").strip():
             raise ValueError("Customer email body is empty. Email dispatch aborted.")
         prepare_and_validate_email(
@@ -714,6 +889,7 @@ class CommunicationService:
             recipient=recipient,
             subject=subject,
             body=body.strip(),
+            html_body=html_body,
             reply_to=reply_to,
             entity_id=quote_id,
         )
@@ -870,6 +1046,50 @@ class CommunicationService:
             deduplication_key=f"rfq-noquote:{rfq_id}",
         )
 
+    def send_rfq_sourcing_update(
+        self,
+        *,
+        recipient: str,
+        customer_name: str,
+        rfq_id: str,
+        part_number: str,
+        reply_to: Optional[str] = None,
+        historical_offer_date: str | None = None,
+        supplier_contact_queued: bool = True,
+    ) -> Dict[str, Any]:
+        part = safe_display_text(part_number)
+        historical_note = (
+            f"Our records include a supplier offer dated {safe_display_text(historical_offer_date)}, "
+            "but it is older than 30 days and is not being represented as current pricing or availability. "
+            if historical_offer_date else ""
+        )
+        supplier_update = (
+            "We have asked the supplier(s) to reconfirm current price, quantity, condition, release "
+            "documentation, and lead time. "
+            if supplier_contact_queued else
+            "We are arranging supplier confirmation for current price, quantity, condition, release "
+            "documentation, and lead time. "
+        )
+        body = enforce_customer_email_policy(
+            f"Dear {safe_display_text(customer_name)},\n\n"
+            f"We are still sourcing part {part} for request {rfq_id}. "
+            f"{historical_note}"
+            f"{supplier_update}"
+            "We will send a firm quotation when a current offer is verified. "
+            "There is no confirmed price or availability to commit to yet.\n\n"
+            "Kind regards,\nWinged Tycoons Sales Team",
+            customer_name,
+        )
+        return self._send(
+            "sales",
+            recipient,
+            f"Re: Request for quote {rfq_id} - sourcing update",
+            body,
+            reply_to=reply_to,
+            entity_id=rfq_id,
+            deduplication_key=f"rfq-sourcing-update:{rfq_id}",
+        )
+
     def send_customer_information_response(
         self,
         *,
@@ -885,7 +1105,11 @@ class CommunicationService:
         if not quote:
             raise ValueError(f"Quote {quote_id} was not found for customer response.")
         items = db_service.get_quote_items(quote_id)
-        grounded_answer = customer_question_service.answer_from_quote(request_text, quote, items)
+        attachments = _source_documents_for_customer_request(request_text, items)
+        grounded_answer = customer_question_service.answer_from_quote(
+            request_text, quote, items,
+            source_documents=[item["filename"] for item in attachments] if attachments else None,
+        )
         if not grounded_answer:
             raise ValueError("The customer question could not be answered from approved quote data.")
         sentiment_label = self._sentiment_label(communication_sentiment)
@@ -901,12 +1125,15 @@ class CommunicationService:
             f"{grounded_answer}\n\n"
             "Kind regards,\nWinged Tycoons Aviation Team"
         ), customer_name, satisfaction_question="Does this answer your question and provide everything you need?")
+        html_body = _customer_html_from_text(body)
         return self._send(
             "sales",
             recipient,
             f"Re: Quotation {quote_id} - requested details",
             body,
             reply_to=reply_to,
+            html_body=html_body,
+            attachments=attachments,
         )
 
     async def send_customer_information_response_async(
@@ -924,7 +1151,11 @@ class CommunicationService:
     ) -> Dict[str, Any]:
         if not self._is_valid_email(recipient):
             raise ValueError("Customer email is invalid. Email dispatch aborted.")
-        grounded_answer = customer_question_service.answer_from_quote(request_text, quote, items)
+        attachments = _source_documents_for_customer_request(request_text, items)
+        grounded_answer = customer_question_service.answer_from_quote(
+            request_text, quote, items,
+            source_documents=[item["filename"] for item in attachments] if attachments else None,
+        )
         if not grounded_answer:
             raise ValueError("The customer question could not be answered from approved quote data.")
         sentiment_label = self._sentiment_label(communication_sentiment)
@@ -940,9 +1171,80 @@ class CommunicationService:
             f"{grounded_answer}\n\n"
             "Kind regards,\nWinged Tycoons Aviation Team"
         ), customer_name, satisfaction_question="Does this answer your question and provide everything you need?")
+        html_body = _customer_html_from_text(body)
         subject = f"Re: Quotation {quote_id} - requested details"
         return await self._enqueue_customer_reply_async(
-            repositories, recipient, subject, body, reply_to, quote_id
+            repositories, recipient, subject, body, reply_to, quote_id,
+            attachments=attachments, html_body=html_body,
+        )
+
+    def send_customer_document_unavailable(
+        self,
+        *,
+        recipient: str,
+        customer_name: str,
+        quote_id: str,
+        reply_to: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        quote_items = db_service.get_quote_items(quote_id)
+        certificate_facts = [
+            f"{item.part_number}: {item.certificate_type}"
+            for item in quote_items if getattr(item, "certificate_type", None)
+        ]
+        certificate_text = (
+            "The approved quote lists " + "; ".join(certificate_facts) + ". "
+            if certificate_facts else ""
+        )
+        body = enforce_customer_email_policy(
+            f"Dear {safe_display_text(customer_name)},\n\n"
+            f"Regarding quotation {quote_id}, {certificate_text}"
+            "The requested certificate or trace document is not available in the verified source files. "
+            "We have sent this request to our team for document retrieval and validation. To avoid sending "
+            "a document that may not match the quoted unit, we will follow up in this email thread once "
+            "the correct file has been confirmed.\n\n"
+            "Kind regards,\nWinged Tycoons Aviation Team",
+            customer_name,
+        )
+        return self._send(
+            "sales", recipient, f"Re: Quotation {quote_id} - document request", body,
+            reply_to=reply_to,
+        )
+
+    async def send_customer_document_unavailable_async(
+        self,
+        repositories,
+        *,
+        recipient: str,
+        customer_name: str,
+        quote_id: str,
+        reply_to: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not self._is_valid_email(recipient):
+            raise ValueError("Customer email is invalid. Email dispatch aborted.")
+        quote_items = await repositories.records.list_by_payload_value(
+            "quote_items", "quote_id", quote_id
+        )
+        certificate_facts = [
+            f"{item.get('part_number')}: {item.get('certificate_type')}"
+            for item in quote_items.values() if item.get("certificate_type")
+        ]
+        certificate_text = (
+            "The approved quote lists " + "; ".join(certificate_facts) + ". "
+            if certificate_facts else ""
+        )
+        body = enforce_customer_email_policy(
+            f"Dear {safe_display_text(customer_name)},\n\n"
+            f"Regarding quotation {quote_id}, {certificate_text}"
+            "The requested certificate or trace document is not available in the verified source files. "
+            "We have sent this request to our team for document retrieval and validation. To avoid sending "
+            "a document that may not match the quoted unit, we will follow up in this email thread once "
+            "the correct file has been confirmed.\n\n"
+            "Kind regards,\nWinged Tycoons Aviation Team",
+            customer_name,
+        )
+        return await self._enqueue_customer_reply_async(
+            repositories, recipient, f"Re: Quotation {quote_id} - document request",
+            body, reply_to, quote_id,
         )
 
     @staticmethod
@@ -995,6 +1297,7 @@ class CommunicationService:
     ) -> Dict[str, Any]:
         if not self._is_valid_email(recipient):
             raise ValueError("Customer email is invalid. Email dispatch aborted.")
+        ensure_staging_recipient_allowed(recipient)
         subject, body = self._rfq_update_email(rfq_id, customer_name, customer_text, original_subject, quote_answer)
         return await self._enqueue_customer_reply_async(
             repositories, recipient, subject, body, reply_to, rfq_id,
@@ -1004,10 +1307,17 @@ class CommunicationService:
     async def _enqueue_customer_reply_async(
         self, repositories, recipient: str, subject: str, body: str, reply_to: Optional[str], entity_id: str,
         deduplication_key: str | None = None,
+        attachments: List[Dict[str, Any]] | None = None,
+        html_body: str | None = None,
     ) -> Dict[str, Any]:
+        ensure_staging_recipient_allowed(recipient)
+        serialized_attachments = _serialize_email_attachments(attachments)
         quote_id = entity_id
         deduplication_key = deduplication_key or hashlib.sha256(
-            "\0".join(("sales", recipient.lower(), subject, body, reply_to or "", "", quote_id)).encode("utf-8")
+            "\0".join((
+                "sales", recipient.lower(), subject, body, html_body or "", reply_to or "", "", quote_id,
+                json.dumps(serialized_attachments, sort_keys=True),
+            )).encode("utf-8")
         ).hexdigest()
         queued = await repositories.records.enqueue_outbox_message(
             deduplication_key=deduplication_key,
@@ -1015,6 +1325,8 @@ class CommunicationService:
             recipient=recipient,
             subject=subject,
             body=body,
+            html_body=html_body,
+            attachments=serialized_attachments,
             reply_to=reply_to,
             entity_id=quote_id,
         )
@@ -1103,7 +1415,13 @@ class CommunicationService:
         round_number: int = 1,
         quantity: int = 1,
         supplier_sentiment: Dict[str, Any] | None = None,
+        currency: str = "USD",
+        target_discount_percentage: float | None = None,
     ) -> Dict[str, Any]:
+        if currency.strip().upper() != "USD":
+            raise ValueError("Automated supplier discount requests support USD offers only.")
+        if target_discount_percentage is not None and not 0 < target_discount_percentage <= 5:
+            raise ValueError("Automated supplier discount requests are capped at 5%.")
         max_rounds = min(5, max(1, int(os.getenv("SUPPLIER_DISCOUNT_MAX_ROUNDS", "3"))))
         if round_number > max_rounds:
             return {"status": "LIMIT_REACHED", "round": round_number}
@@ -1113,6 +1431,8 @@ class CommunicationService:
             part_number=part_number.upper(),
             quantity=quantity,
             quoted_price=unit_cost,
+            currency="USD",
+            target_discount_percentage=target_discount_percentage,
             supplier_sentiment=self._sentiment_label(supplier_sentiment),
         ))
         return self._schedule_communication_task(
@@ -1139,7 +1459,13 @@ class CommunicationService:
         round_number: int = 1,
         quantity: int = 1,
         supplier_sentiment: Dict[str, Any] | None = None,
+        currency: str = "USD",
+        target_discount_percentage: float | None = None,
     ) -> Dict[str, Any]:
+        if currency.strip().upper() != "USD":
+            raise ValueError("Automated supplier discount requests support USD offers only.")
+        if target_discount_percentage is not None and not 0 < target_discount_percentage <= 5:
+            raise ValueError("Automated supplier discount requests are capped at 5%.")
         max_rounds = min(5, max(1, int(os.getenv("SUPPLIER_DISCOUNT_MAX_ROUNDS", "3"))))
         if round_number > max_rounds:
             return {"status": "LIMIT_REACHED", "round": round_number}
@@ -1149,6 +1475,8 @@ class CommunicationService:
             part_number=part_number.upper(),
             quantity=quantity,
             quoted_price=unit_cost,
+            currency="USD",
+            target_discount_percentage=target_discount_percentage,
             supplier_sentiment=self._sentiment_label(supplier_sentiment),
         ))
         return await repositories.records.schedule_communication_task(
@@ -1196,6 +1524,7 @@ class CommunicationService:
             raise ValueError("Unknown outbound mailbox.")
         if not self._is_valid_email(recipient):
             raise ValueError("Recipient email is invalid. Email dispatch aborted.")
+        ensure_staging_recipient_allowed(recipient)
         task_id = str(task["id"])
         deduplication_key = hashlib.sha256(
             "\0".join((mailbox, recipient.lower(), str(task.get("subject") or ""),
@@ -1250,12 +1579,20 @@ class CommunicationService:
         subject: str,
         body: str,
         reply_to: Optional[str],
+        html_body: str | None = None,
+        attachments: List[Dict[str, Any]] | None = None,
         communication_task_id: str | None = None,
         entity_id: str | None = None,
         deduplication_key: str | None = None,
     ) -> Dict[str, Any]:
+        ensure_staging_recipient_allowed(recipient)
         if operations_store.storage_engine == "postgresql":
-            dedupe_material = "\0".join((mailbox, recipient.lower(), subject, body, reply_to or "", communication_task_id or "", entity_id or ""))
+            serialized_attachments = _serialize_email_attachments(attachments)
+            dedupe_material = "\0".join((
+                mailbox, recipient.lower(), subject, body, html_body or "", reply_to or "",
+                communication_task_id or "", entity_id or "",
+                json.dumps(serialized_attachments, sort_keys=True),
+            ))
             deduplication_key = deduplication_key or hashlib.sha256(dedupe_material.encode("utf-8")).hexdigest()
             if not self._is_valid_email(recipient):
                 raise ValueError("Recipient email is invalid. Email dispatch aborted.")
@@ -1265,6 +1602,8 @@ class CommunicationService:
                 recipient=recipient,
                 subject=subject,
                 body=body,
+                html_body=html_body,
+                attachments=serialized_attachments,
                 reply_to=reply_to,
                 communication_task_id=communication_task_id,
                 entity_id=entity_id,
@@ -1289,7 +1628,10 @@ class CommunicationService:
         if not self._is_valid_email(recipient):
             raise ValueError("Recipient email is invalid. Email dispatch aborted.")
         if self._sending_enabled():
-            threaded = send_message(mailbox, recipient, subject, body, reply_to=reply_to)
+            threaded = send_message(
+                mailbox, recipient, subject, body, reply_to=reply_to,
+                html_body=html_body, attachments=attachments,
+            )
             result["transmission_status"] = "SENT"
             result["threaded"] = threaded is not False
             if reply_to and threaded is False:
@@ -1342,13 +1684,19 @@ class CommunicationService:
         for message in operations_store.claim_outbox_messages(limit=limit):
             payload = message.get("payload") or {}
             body = payload.get("body", "") if isinstance(payload, dict) else str(payload)
+            html_body = payload.get("html_body") if isinstance(payload, dict) else None
             try:
+                attachments = _deserialize_email_attachments(
+                    payload.get("attachments") if isinstance(payload, dict) else None
+                )
                 threaded = send_message(
                     message["mailbox"],
                     message["recipient"],
                     message["subject"],
                     body,
                     reply_to=message.get("reply_to"),
+                    html_body=html_body,
+                    attachments=attachments,
                 )
                 if message.get("reply_to") and threaded is False:
                     self._flag_unthreaded_reply(
@@ -1429,10 +1777,14 @@ class CommunicationService:
         for message in claimed:
             payload = message.get("payload") or {}
             body = payload.get("body", "") if isinstance(payload, dict) else str(payload)
+            html_body = payload.get("html_body") if isinstance(payload, dict) else None
             error = None
             retryable = False
             threaded = True
             try:
+                attachments = _deserialize_email_attachments(
+                    payload.get("attachments") if isinstance(payload, dict) else None
+                )
                 threaded = await asyncio.to_thread(
                     send_message,
                     message["mailbox"],
@@ -1440,6 +1792,8 @@ class CommunicationService:
                     message["subject"],
                     body,
                     reply_to=message.get("reply_to"),
+                    html_body=html_body,
+                    attachments=attachments,
                 )
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"

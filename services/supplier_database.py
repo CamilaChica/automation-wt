@@ -119,6 +119,7 @@ class SupplierDatabase:
                     trace_documents TEXT,
                     valid_until TEXT,
                     source_email_id TEXT,
+                    source_received_at TEXT,
                     confidence REAL,
                     approval_status TEXT NOT NULL DEFAULT 'Pending',
                     created_at TEXT NOT NULL,
@@ -158,6 +159,7 @@ class SupplierDatabase:
                 ("availability_location", "TEXT"),
                 ("warranty_terms", "TEXT"),
                 ("trace_documents", "TEXT"),
+                ("source_received_at", "TEXT"),
                 ("max_attempts", "INTEGER NOT NULL DEFAULT 5"),
                 ("last_error", "TEXT"),
             ):
@@ -186,14 +188,23 @@ class SupplierDatabase:
             )
             return supplier_id
 
-    def save_email(self, mailbox: str, message_id: str, sender: str, subject: str, body: str, received_at: Optional[str] = None) -> str:
+    def save_email(
+        self,
+        mailbox: str,
+        message_id: str,
+        sender: str,
+        subject: str,
+        body: str,
+        received_at: Optional[str] = None,
+        processing_status: str = "processed",
+    ) -> str:
         if not received_at:
             received_at = _now_iso()
         email_id = f"EML-{uuid.uuid4().hex[:8].upper()}"
         with self._connection() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO inbound_emails (id, mailbox, message_id, sender, subject, body, received_at, processing_status) VALUES (?, ?, ?, ?, ?, ?, ?, 'processed')",
-                (email_id, mailbox, message_id, sender, subject, body, received_at),
+                "INSERT OR REPLACE INTO inbound_emails (id, mailbox, message_id, sender, subject, body, received_at, processing_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (email_id, mailbox, message_id, sender, subject, body, received_at, processing_status),
             )
         return email_id
 
@@ -223,25 +234,34 @@ class SupplierDatabase:
         warranty_terms: Optional[str] = None,
         trace_documents: Optional[List[str]] = None,
         currency: str = "USD",
+        source_received_at: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         supplier_id = self.upsert_supplier(supplier_name, supplier_email=supplier_email, approval_status=approval_status)
         offer_id = f"SPO-{uuid.uuid4().hex[:8].upper()}"
         now = _now_iso()
+        received_at = source_received_at.isoformat() if source_received_at else None
         with self._connection() as conn:
-            existing = conn.execute(
-                "SELECT id FROM supplier_parts WHERE supplier_id = ? AND part_number = ?",
-                (supplier_id, part_number.upper()),
-            ).fetchone()
+            existing = None
+            if source_email_id:
+                existing = conn.execute(
+                    "SELECT id FROM supplier_parts WHERE source_email_id = ? ORDER BY updated_at DESC LIMIT 1",
+                    (source_email_id,),
+                ).fetchone()
+            if existing is None and not source_email_id:
+                existing = conn.execute(
+                    "SELECT id FROM supplier_parts WHERE supplier_id = ? AND part_number = ?",
+                    (supplier_id, part_number.upper()),
+                ).fetchone()
             if existing:
                 conn.execute(
-                    "UPDATE supplier_parts SET description = ?, quantity_available = ?, unit_cost = ?, currency = ?, certificate_type = ?, lead_time_days = ?, availability_location = ?, warranty_terms = ?, trace_documents = ?, approval_status = ?, condition_code = ?, source_email_id = ?, confidence = ?, updated_at = ? WHERE id = ?",
-                    (description, quantity_available, unit_cost, currency.upper(), certificate_type, lead_time_days, availability_location, warranty_terms, json.dumps(trace_documents or []), approval_status, condition_code, source_email_id, confidence, now, existing["id"]),
+                    "UPDATE supplier_parts SET description = ?, quantity_available = ?, unit_cost = ?, currency = ?, certificate_type = ?, lead_time_days = ?, availability_location = ?, warranty_terms = ?, trace_documents = ?, approval_status = ?, condition_code = ?, source_email_id = COALESCE(?, source_email_id), source_received_at = COALESCE(source_received_at, ?), confidence = ?, updated_at = ? WHERE id = ?",
+                    (description, quantity_available, unit_cost, currency.upper(), certificate_type, lead_time_days, availability_location, warranty_terms, json.dumps(trace_documents or []), approval_status, condition_code, source_email_id, received_at, confidence, now, existing["id"]),
                 )
                 offer_id = existing["id"]
             else:
                 conn.execute(
-                    "INSERT INTO supplier_parts (id, supplier_id, part_number, condition_code, description, quantity_available, unit_cost, currency, certificate_type, lead_time_days, availability_location, warranty_terms, trace_documents, source_email_id, confidence, approval_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (offer_id, supplier_id, part_number.upper(), condition_code, description, quantity_available, unit_cost, currency.upper(), certificate_type, lead_time_days, availability_location, warranty_terms, json.dumps(trace_documents or []), source_email_id, confidence, approval_status, now, now),
+                    "INSERT INTO supplier_parts (id, supplier_id, part_number, condition_code, description, quantity_available, unit_cost, currency, certificate_type, lead_time_days, availability_location, warranty_terms, trace_documents, source_email_id, source_received_at, confidence, approval_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (offer_id, supplier_id, part_number.upper(), condition_code, description, quantity_available, unit_cost, currency.upper(), certificate_type, lead_time_days, availability_location, warranty_terms, json.dumps(trace_documents or []), source_email_id, received_at, confidence, approval_status, now, now),
                 )
 
         return {
@@ -256,6 +276,7 @@ class SupplierDatabase:
             "approval_status": approval_status,
             "condition_code": condition_code,
             "source_email_id": source_email_id,
+            "source_received_at": received_at,
             "confidence": confidence,
         }
 
@@ -265,8 +286,10 @@ class SupplierDatabase:
             rows = conn.execute(
                 """
                 SELECT sp.id AS supplier_part_id, sp.supplier_id, sp.part_number, sp.quantity_available, sp.unit_cost,
+                       sp.currency,
                        sp.certificate_type, sp.lead_time_days, sp.condition_code, sp.approval_status,
-                       sp.confidence, sp.updated_at, sp.source_email_id, s.company_name AS supplier_name,
+                       sp.confidence, sp.updated_at, sp.source_email_id, sp.source_received_at, sp.warranty_terms, sp.trace_documents,
+                       s.company_name AS supplier_name,
                        s.email AS supplier_email, s.approval_status AS supplier_approval_status
                 FROM supplier_parts sp
                 JOIN suppliers s ON s.id = sp.supplier_id
@@ -274,6 +297,7 @@ class SupplierDatabase:
                   AND (sp.quantity_available IS NULL OR sp.quantity_available >= ?)
                   AND (sp.approval_status = 'Approved' OR s.approval_status = 'Approved')
                 ORDER BY CASE WHEN sp.source_email_id IS NOT NULL THEN 1 ELSE 0 END DESC,
+                         sp.source_received_at DESC,
                          sp.updated_at DESC,
                          sp.unit_cost ASC,
                          sp.lead_time_days ASC

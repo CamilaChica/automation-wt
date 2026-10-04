@@ -10,6 +10,11 @@ from services.workflow_states import InvalidWorkflowTransition, WorkflowState, c
 class TestWorkflowStates(unittest.TestCase):
     def test_legacy_status_maps_to_canonical_state(self):
         self.assertEqual(canonical_state("Supplier_Sourcing"), WorkflowState.SOURCING_SUPPLIERS)
+        self.assertEqual(
+            canonical_state("Supplier_Confirmation_Requested"),
+            WorkflowState.SOURCING_SUPPLIERS,
+        )
+        validate_transition("Supplier_Confirmation_Requested", "Supplier_Sourcing")
         self.assertEqual(canonical_state("Quote_Sent"), WorkflowState.QUOTE_SENT)
 
     def test_invalid_transition_is_rejected(self):

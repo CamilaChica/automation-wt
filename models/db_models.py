@@ -111,6 +111,9 @@ class QuoteItem(BaseModel):
     lead_time_days: Optional[int] = Field(None, ge=0, description="Quoted lead time in days")
     compliance_status: str = Field("Pass", description="Pass, Warn, Fail")
     attachments: List[str] = Field(default_factory=list, description="Document or attachment names tied to the quoted item")
+    source_email_id: Optional[str] = Field(None, description="Supplier message used to source the quoted item")
+    warranty_terms: Optional[str] = Field(None, description="Supplier warranty terms verified for this quoted item")
+    trace_documents: List[str] = Field(default_factory=list, description="Trace documents identified for the selected supplier offer")
 
 class Quote(BaseModel):
     id: str = Field(description="Unique quote ID")

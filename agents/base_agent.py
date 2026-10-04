@@ -1,7 +1,9 @@
 from copy import deepcopy
-from typing import Dict, Any, List, Optional, Type
+from typing import Dict, Any, List, Literal, Optional, Type
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+
+from agents import AGENT_CONFIGS
 
 
 PROMPT_POLICY = """\
@@ -22,7 +24,7 @@ operational data.
 
 AGENT_TUNING_GUIDANCE = {
     "RFQIntakeAgent": "Normalize only supported facts. Preserve every line item, quantity, UOM, condition, delivery constraint, and confidence signal. Mark incomplete or conflicting extraction as clarification-required.",
-    "PartsIntelligenceAgent": "Validate part-number format before catalog lookup. Distinguish exact, alternate, fuzzy, and not-found matches; never convert an ambiguous match into a confirmed part.",
+    "PartsIntelligenceAgent": "Validate part-number format before lookup. Match only persisted inventory or supplier-offer records exactly; never infer alternates, product details, or compatibility.",
     "InventoryAgent": "Compute available-to-promise from confirmed stock only. Report shortages explicitly and route any partial or missing stock to sourcing.",
     "SupplierDiscoveryAgent": "Filter supplier offers before ranking. Reject missing airworthiness trace, insufficient quantity, denied parties, and offers beyond the requested lead-time limit. Preserve vendor ID and RFQ correlation.",
     "ComplianceAgent": "Treat sanctions, denied-party, export-control, invalid certificates, and incomplete trace as blocking or human-review conditions. New supplier parts require explicit valid certificate and full trace evidence.",
@@ -67,10 +69,20 @@ class AgentMetadata(BaseModel):
     input_schema: Dict[str, Any] = Field(description="JSON schema describing the inputs this agent expects")
     output_schema: Dict[str, Any] = Field(description="JSON schema describing the outputs this agent generates")
     available_tools: List[str] = Field(description="List of tool names the agent has access to")
+    available_tool_contracts: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Structured tool contracts attached to this agent; actual execution remains "
+            "restricted to the server-authorized runtime allowlist."
+        ),
+    )
     permissions: List[str] = Field(description="Actions or resources this agent is permitted to access")
     escalation_rules: List[EscalationRule] = Field(description="Rules for when the agent must yield control to a human or coordinator")
     prompt_templates: Dict[str, str] = Field(default_factory=dict, description="Prompt templates keyed by scenario or phase")
     llm_profile: AgentLLMProfile = Field(default_factory=AgentLLMProfile)
+    error_fallback: Literal[
+        "escalate_to_human_queue", "route_to_orchestrator"
+    ] = "escalate_to_human_queue"
 
     @property
     def system_instructions(self) -> str:
@@ -82,6 +94,22 @@ class AgentMetadata(BaseModel):
 
     @model_validator(mode="after")
     def _fill_default_prompt_template(self):
+        config = AGENT_CONFIGS.get(self.name)
+        if config:
+            configured_instructions = config["system_instructions"]
+            self.system_instruction = (
+                f"{self.system_instruction}\n\nAgent-specific configuration:\n"
+                f"{configured_instructions}"
+            )
+            self.available_tools = list(config["tools"])
+            self.available_tool_contracts = deepcopy(config.get("tool_contracts", []))
+            self.llm_profile.model = config["model"]
+            self.llm_profile.temperature = config["temperature"]
+            self.llm_profile.max_tokens = config["max_tokens"]
+            self.llm_profile.response_format = (
+                "json" if config["output_format"] == "json_schema" else "text"
+            )
+            self.error_fallback = config["error_fallback"]
         if not self.system_instruction.startswith(PROMPT_POLICY):
             self.system_instruction = (
                 f"{PROMPT_POLICY}\n"
@@ -179,7 +207,12 @@ class BaseAgent:
 
     def handle_escalation(self, input_data: Dict[str, Any], error: Optional[str] = None) -> AgentResponse:
         """Return a structured HITL response after autonomous retries are exhausted."""
-        rule = self.metadata.escalation_rules[0] if self.metadata.escalation_rules else None
+        route_to_orchestrator = self.metadata.error_fallback == "route_to_orchestrator"
+        rule = EscalationRule(
+            condition="execution_failure",
+            action="route_to_orchestrator" if route_to_orchestrator else "halt_for_review",
+            escalate_to="orchestrator" if route_to_orchestrator else "human_operator",
+        )
         return AgentResponse(
             success=False,
             error_message=error or "Autonomous execution retries exhausted.",

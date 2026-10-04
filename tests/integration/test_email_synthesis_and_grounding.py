@@ -153,6 +153,15 @@ class TestSyntaxAndDataAccuracy(SQLiteEmailFixture):
                 customer_name=context.company_name,
                 quote_id="QTE-9921",
                 quote_summary=summary,
+                quote_items=[{
+                    "part_number": context.part_number,
+                    "description": "Actuator",
+                    "quantity": context.quantity,
+                    "unit_price": context.unit_price,
+                    "condition": context.condition,
+                    "certificate_type": context.certification,
+                    "lead_time_days": context.lead_time,
+                }],
             )
 
         body = send.call_args.args[3]
@@ -161,6 +170,9 @@ class TestSyntaxAndDataAccuracy(SQLiteEmailFixture):
         self.assertIn(f"${context.unit_price:,.2f}", body)
         self.assertIn(context.certification, body)
         self.assertEqual(result["transmission_status"], "DRY_RUN")
+        self.assertEqual(result["rendered_subject"], send.call_args.args[2])
+        self.assertEqual(result["rendered_body"], body)
+        self.assertEqual(result["rendered_html_body"], send.call_args.kwargs["html_body"])
         self.assertIn(f"Dear {context.company_name}'s team!", body)
         self.assertIn("Does this quotation meet your needs?", body)
         self.assertIn("https://portal.wingedtycoons.com/customer-portal", body)
@@ -224,6 +236,15 @@ class TestToneAndHumanLikeness(SQLiteEmailFixture):
                 "Maria Buyer",
                 "QTE-9921",
                 "Quote ID: QTE-9921\nPart: XYZ123 | Qty 2 EA\nUnit price: $4,600.00\nCertification: FAA Form 8130-3",
+                quote_items=[{
+                    "part_number": "XYZ123",
+                    "description": "Actuator",
+                    "quantity": 2,
+                    "unit_price": 4600.0,
+                    "condition": "OH",
+                    "certificate_type": "FAA Form 8130-3",
+                    "lead_time_days": 5,
+                }],
             )
         body = send.call_args.args[3]
         words = re.findall(r"\b\w+[\w'-]*\b", body)

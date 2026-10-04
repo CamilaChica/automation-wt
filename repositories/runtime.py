@@ -251,7 +251,7 @@ class OperationalRecordRepository:
 
     async def save_inbound_email(self, **values) -> None:
         message_id = str(values["message_id"])
-        statement = postgres_insert(InboundEmailRecord).values(
+        email_values = dict(
             id=f"IN-{uuid.uuid5(uuid.NAMESPACE_URL, message_id).hex[:24].upper()}",
             message_id=message_id,
             mailbox=values["mailbox"],
@@ -260,7 +260,10 @@ class OperationalRecordRepository:
             body=values.get("body") or "",
             processing_status=values.get("processing_status") or "processed",
             extraction_error=values.get("extraction_error"),
-        ).on_conflict_do_update(
+        )
+        if values.get("received_at") is not None:
+            email_values["received_at"] = values["received_at"]
+        statement = postgres_insert(InboundEmailRecord).values(**email_values).on_conflict_do_update(
             index_elements=[InboundEmailRecord.message_id],
             set_={
                 "mailbox": values["mailbox"],
@@ -320,6 +323,8 @@ class OperationalRecordRepository:
         recipient: str,
         subject: str,
         body: str,
+        html_body: str | None = None,
+        attachments: list[dict] | None = None,
         reply_to: str | None = None,
         communication_task_id: str | None = None,
         entity_id: str | None = None,
@@ -334,7 +339,11 @@ class OperationalRecordRepository:
                 mailbox=mailbox,
                 recipient=recipient,
                 subject=subject,
-                payload={"body": body},
+                payload={
+                    "body": body,
+                    "html_body": html_body,
+                    "attachments": attachments or [],
+                },
                 reply_to=reply_to,
                 communication_task_id=communication_task_id,
                 status="PENDING",

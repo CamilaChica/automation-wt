@@ -17,7 +17,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 def main() -> None:
     load_dotenv(os.path.join(ROOT, ".env"), override=True)
     if len(sys.argv) != 2:
-        raise SystemExit("Usage: python scripts/test_carrier_webhook.py <webhook-url>")
+        raise SystemExit("Usage: python scripts/replay_carrier_webhook.py <webhook-url>")
     webhook_url = sys.argv[1]
     secret = os.getenv("CARRIER_WEBHOOK_SECRET", "").strip()
     if not secret:

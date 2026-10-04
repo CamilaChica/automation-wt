@@ -34,14 +34,43 @@ def _price_field_value(value: Optional[str]) -> Optional[float]:
         return None
 
 
-def _save_inbound_email(*, mailbox: str, message_id: str, sender: str, subject: str, body: str) -> None:
+def _email_headers(email_text: str) -> tuple[str, str]:
+    sender = ""
+    subject = ""
+    for line in email_text.splitlines():
+        if line.lower().startswith("from:"):
+            sender = line.split(":", 1)[1].strip()
+        elif line.lower().startswith("subject:"):
+            subject = line.split(":", 1)[1].strip()
+    return sender, subject
+
+
+def _save_inbound_email(
+    *,
+    mailbox: str,
+    message_id: str,
+    sender: str,
+    subject: str,
+    body: str,
+    received_at: datetime | None = None,
+    processing_status: str = "processed",
+) -> None:
     if operations_store.storage_engine == "postgresql":
         operations_store.save_inbound_email(
             mailbox=mailbox, message_id=message_id, sender=sender,
-            subject=subject, body=body, processing_status="processed",
+            subject=subject, body=body, processing_status=processing_status,
+            received_at=received_at,
         )
         return
-    supplier_db.save_email(mailbox=mailbox, message_id=message_id, sender=sender, subject=subject, body=body)
+    supplier_db.save_email(
+        mailbox=mailbox,
+        message_id=message_id,
+        sender=sender,
+        subject=subject,
+        body=body,
+        received_at=received_at.isoformat() if received_at else None,
+        processing_status=processing_status,
+    )
 
 
 def _save_supplier_offer(**offer: Any) -> dict[str, Any]:
@@ -106,10 +135,41 @@ class SupplierEmailIngestionService:
         self.extractor = SupplierEmailExtractor()
         self.llm_router = LLMRouter()
 
-    def ingest_email(self, email_text: str, mailbox: str = "purchasing", message_id: Optional[str] = None, attachments: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    def ingest_email(self, email_text: str, mailbox: str = "purchasing", message_id: Optional[str] = None, attachments: Optional[List[Dict[str, Any]]] = None, source_received_at: datetime | None = None) -> Dict[str, Any]:
         try:
             attachment_context = build_email_context(email_text, attachments)
-            extracted = self.extractor.extract(attachment_context)
+            source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
+            try:
+                extracted = self.extractor.extract(attachment_context)
+            except ValueError as exc:
+                sender, subject = _email_headers(email_text)
+                review_id = operations_store.enqueue_operator_review(
+                    idempotency_key=f"supplier-email-review:{source_email_id}",
+                    task="supplier_quote_extraction",
+                    source_text=attachment_context,
+                    extraction={"error": str(exc)},
+                    reason="supplier_email_unstructured",
+                    prompt_version=EXTRACTION_CONTRACTS["supplier_quote_extraction"].prompt_version,
+                    hold_flags=["part number or quote details not extracted"],
+                    entity_id=source_email_id,
+                )
+                _save_inbound_email(
+                    mailbox=mailbox,
+                    message_id=source_email_id,
+                    sender=sender,
+                    subject=subject or "Supplier email requires review",
+                    body=email_text,
+                    received_at=source_received_at,
+                    processing_status="pending_human_review",
+                )
+                return {
+                    "success": False,
+                    "status": "Pending_Human_Review",
+                    "pending_human_review": True,
+                    "source_email_id": source_email_id,
+                    "review_event_id": review_id,
+                    "error": str(exc),
+                }
             deterministic_part_number = extracted.get("part_number")
             structured_items: list[dict[str, Any]] = []
             try:
@@ -122,7 +182,6 @@ class SupplierEmailIngestionService:
             except Exception:
                 # Deterministic extraction remains the bounded outage fallback.
                 llm_data = None
-            source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
             sentiment_result = analyze_communication_sentiment(
                 attachment_context,
                 router=self.llm_router,
@@ -137,19 +196,14 @@ class SupplierEmailIngestionService:
                 if item.currency.value and item.currency.value.upper() != "USD"
             })
             if llm_data and (llm_data.pending_human_review or unsupported_currencies):
-                sender = ""
-                subject = ""
-                for line in email_text.splitlines():
-                    if line.lower().startswith("from:"):
-                        sender = line.split(":", 1)[1].strip()
-                    elif line.lower().startswith("subject:"):
-                        subject = line.split(":", 1)[1].strip()
+                sender, subject = _email_headers(email_text)
                 _save_inbound_email(
                     mailbox=mailbox,
                     message_id=source_email_id,
                     sender=sender,
                     subject=subject or "Supplier quote requires human review",
                     body=email_text,
+                    received_at=source_received_at,
                 )
                 review_event_id = llm_data.telemetry.get("review_queue_id")
                 hold_flags = list(llm_data.missing_fields)
@@ -255,6 +309,7 @@ class SupplierEmailIngestionService:
                 sender=supplier_email,
                 subject=subject or f"Supplier Quote for {part_number}",
                 body=email_text,
+                received_at=source_received_at,
             )
 
             items = []
@@ -290,6 +345,7 @@ class SupplierEmailIngestionService:
                     availability_location=item.get("availability_location") or extracted.get("availability_location"),
                     warranty_terms=item.get("warranty_terms") or extracted.get("warranty_terms"),
                     trace_documents=item.get("trace_documents") or extracted.get("trace_documents", []),
+                    source_received_at=source_received_at,
                 )
                 items.append({
                     "part_number": item_part_number,
@@ -325,11 +381,43 @@ class SupplierEmailIngestionService:
         repositories,
         mailbox: str = "purchasing",
         message_id: Optional[str] = None,
+        source_received_at: datetime | None = None,
     ) -> Dict[str, Any]:
         """Persist plain supplier-email extraction through the async repositories."""
         try:
             attachment_context = build_email_context(email_text, None)
-            extracted = await asyncio.to_thread(self.extractor.extract, attachment_context)
+            source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
+            try:
+                extracted = await asyncio.to_thread(self.extractor.extract, attachment_context)
+            except ValueError as exc:
+                sender, subject = _email_headers(email_text)
+                review_id = await repositories.records.enqueue_operator_review(
+                    idempotency_key=f"supplier-email-review:{source_email_id}",
+                    task="supplier_quote_extraction",
+                    source_text=attachment_context,
+                    extraction={"error": str(exc)},
+                    reason="supplier_email_unstructured",
+                    prompt_version=EXTRACTION_CONTRACTS["supplier_quote_extraction"].prompt_version,
+                    hold_flags=["part number or quote details not extracted"],
+                    entity_id=source_email_id,
+                )
+                await repositories.records.save_inbound_email(
+                    mailbox=mailbox,
+                    message_id=source_email_id,
+                    sender=sender,
+                    subject=subject or "Supplier email requires review",
+                    body=email_text,
+                    processing_status="pending_human_review",
+                    received_at=source_received_at,
+                )
+                return {
+                    "success": False,
+                    "status": "Pending_Human_Review",
+                    "pending_human_review": True,
+                    "source_email_id": source_email_id,
+                    "review_event_id": review_id,
+                    "error": str(exc),
+                }
             deterministic_part_number = extracted.get("part_number")
             try:
                 llm_data = await asyncio.to_thread(
@@ -347,14 +435,7 @@ class SupplierEmailIngestionService:
                 for item in (llm_data.items if llm_data else [])
                 if item.currency.value and item.currency.value.upper() != "USD"
             })
-            sender = ""
-            subject = ""
-            for line in email_text.splitlines():
-                if line.lower().startswith("from:"):
-                    sender = line.split(":", 1)[1].strip()
-                elif line.lower().startswith("subject:"):
-                    subject = line.split(":", 1)[1].strip()
-            source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
+            sender, subject = _email_headers(email_text)
             telemetry = llm_data.telemetry if llm_data else {}
             sentiment_result = await asyncio.to_thread(
                 analyze_communication_sentiment,
@@ -395,6 +476,7 @@ class SupplierEmailIngestionService:
                     sender=sender,
                     subject=subject or "Supplier quote requires human review",
                     body=email_text,
+                    received_at=source_received_at,
                     processing_status="pending_human_review",
                 )
                 await repositories.records.record_llm_telemetry(
@@ -479,6 +561,7 @@ class SupplierEmailIngestionService:
                 sender=supplier_email,
                 subject=subject or f"Supplier Quote for {part_number}",
                 body=email_text,
+                received_at=source_received_at,
                 processing_status="processed",
             )
 
@@ -515,6 +598,7 @@ class SupplierEmailIngestionService:
                     availability_location=item.get("availability_location") or extracted.get("availability_location"),
                     warranty_terms=item.get("warranty_terms") or extracted.get("warranty_terms"),
                     trace_documents=item.get("trace_documents") or extracted.get("trace_documents", []),
+                    source_received_at=source_received_at,
                 )
                 items.append({
                     "part_number": item_part_number,

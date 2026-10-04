@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -33,5 +35,6 @@ class SupplierOfferEntry(BaseModel):
     availability_location: str | None = Field(default=None, max_length=255)
     warranty_terms: str | None = None
     source_email_id: str | None = Field(default=None, max_length=512)
+    source_received_at: datetime | None = None
     confidence: float | None = Field(default=None, ge=0, le=1)
     approval_status: str = Field(default="Pending", max_length=32)

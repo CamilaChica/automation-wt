@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import asyncio
+import base64
 import os
 import unittest
 import uuid
@@ -130,7 +131,14 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
                     "RFQ-MATCH": {"id": "RFQ-MATCH", "status": "Supplier_Sourcing"},
                     "RFQ-NO-MATCH": {"id": "RFQ-NO-MATCH", "status": "Supplier_Sourcing"},
                 },
+                ("rfqs", "Supplier_Confirmation_Requested"): {
+                    "RFQ-STALE": {
+                        "id": "RFQ-STALE",
+                        "status": "Supplier_Confirmation_Requested",
+                    },
+                },
                 ("rfq_items", "RFQ-MATCH"): {"ITEM-MATCH": {"resolved_part_number": "PN-1"}},
+                ("rfq_items", "RFQ-STALE"): {"ITEM-STALE": {"resolved_part_number": "PN-1"}},
                 ("rfq_items", "RFQ-NO-MATCH"): {"ITEM-OTHER": {"requested_part_number": "PN-2"}},
             }.get((domain, value), {})),
             has_domain=AsyncMock(return_value=True),
@@ -173,27 +181,33 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
             [
                 unittest.mock.call("rfqs", "status", "Supplier_Sourcing"),
                 unittest.mock.call("rfqs", "status", "No_Quote"),
+                unittest.mock.call("rfqs", "status", "Supplier_Confirmation_Requested"),
                 unittest.mock.call("rfq_items", "rfq_id", "RFQ-MATCH"),
                 unittest.mock.call("rfq_items", "rfq_id", "RFQ-NO-MATCH"),
+                unittest.mock.call("rfq_items", "rfq_id", "RFQ-STALE"),
             ],
         )
         rfq_repository.list_by_status.assert_not_awaited()
         records.has_domain.assert_not_awaited()
-        self.assertEqual(len(events), 1)
+        self.assertEqual(len(events), 2)
         self.assertEqual(events[0]["entity_id"], "RFQ-MATCH")
         self.assertEqual(events[0]["idempotency_key"], "rfq-resume:RFQ-MATCH:PN-1")
+        self.assertEqual(events[1]["entity_id"], "RFQ-STALE")
+        self.assertEqual(events[1]["idempotency_key"], "rfq-resume:RFQ-STALE:PN-1")
         self.assertTrue(engine.disposed)
 
         events.clear()
         engine.disposed = False
-        records.list_by_payload_value = AsyncMock(side_effect=[
-            {},
-            {},
-            {"ITEM-RELATIONAL": {"requested_part_number": "PN-1"}},
-        ])
+        async def relational_records(domain, _field, _value):
+            if domain == "rfq_items":
+                return {"ITEM-RELATIONAL": {"requested_part_number": "PN-1"}}
+            return {}
+
+        records.list_by_payload_value = AsyncMock(side_effect=relational_records)
         records.has_domain = AsyncMock(return_value=False)
         rfq_repository.list_by_status = AsyncMock(side_effect=[
             [SimpleNamespace(id="RFQ-RELATIONAL", status="Supplier_Sourcing")],
+            [],
             [],
         ])
         with (
@@ -206,7 +220,11 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
 
         self.assertEqual(
             rfq_repository.list_by_status.await_args_list,
-            [unittest.mock.call("Supplier_Sourcing"), unittest.mock.call("No_Quote")],
+            [
+                unittest.mock.call("Supplier_Sourcing"),
+                unittest.mock.call("No_Quote"),
+                unittest.mock.call("Supplier_Confirmation_Requested"),
+            ],
         )
         records.has_domain.assert_awaited_once_with("rfqs")
         self.assertEqual(events[0]["entity_id"], "RFQ-RELATIONAL")
@@ -295,6 +313,37 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
         self.assertEqual(mock_send.call_args.args[1], "camila@wingedtycoons.com")
         self.assertIn("PO-1001", mock_send.call_args.args[3])
         self.assertIn("Global Airlines", mock_send.call_args.args[3])
+
+    def test_async_purchase_order_notification_queues_attachment_bytes(self):
+        captured = {}
+
+        class Records:
+            async def enqueue_outbox_message(self, **values):
+                captured.update(values)
+                return {"id": "OUT-PO-ATTACHMENT", "status": "PENDING"}
+
+        result = asyncio.run(CommunicationService().notify_purchase_order_async(
+            SimpleNamespace(records=Records()),
+            recipient="camila@wingedtycoons.com",
+            po_number="PO-1002",
+            customer_name="Global Airlines",
+            customer_email="buyer@global.example",
+            quote_id="QTE-1002",
+            items=[],
+            attachments=[{
+                "filename": "purchase-order.pdf",
+                "content_type": "application/pdf",
+                "content": b"%PDF-test",
+            }],
+        ))
+
+        queued_attachment = captured["attachments"][0]
+        self.assertEqual(result["transmission_status"], "PENDING")
+        self.assertEqual(queued_attachment["filename"], "purchase-order.pdf")
+        self.assertEqual(
+            base64.b64decode(queued_attachment["content_base64"]),
+            b"%PDF-test",
+        )
 
 
 if __name__ == "__main__":

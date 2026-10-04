@@ -11,6 +11,7 @@ import base64
 import html
 import imaplib
 import logging
+import mimetypes
 import os
 import re
 import smtplib
@@ -150,7 +151,11 @@ def _mailbox_user_for_graph(mailbox: str) -> str:
 
 
 def _fetch_graph_inbox_messages(
-    mailbox: str, limit: int = 25, skip: int = 0, max_age_days: int | None = None
+    mailbox: str,
+    limit: int = 25,
+    skip: int = 0,
+    max_age_days: int | None = None,
+    oldest_first: bool = False,
 ) -> list[dict[str, Any]]:
     mailbox_user = _mailbox_user_for_graph(mailbox)
     token = _graph_access_token()
@@ -162,9 +167,10 @@ def _fetch_graph_inbox_messages(
         max_age_days = int(os.getenv("MAILBOX_MAX_AGE_DAYS", "7"))
     cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat().replace("+00:00", "Z")
     skip_param = f"&$skip={int(skip)}" if skip else ""
+    sort_order = "asc" if oldest_first else "desc"
     url = (
         f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/mailFolders/inbox/messages"
-        f"?$top={limit}{skip_param}&$select=id,internetMessageId,conversationId,internetMessageHeaders,from,subject,body,receivedDateTime,hasAttachments&$filter=receivedDateTime ge {cutoff}&$orderby=receivedDateTime desc"
+        f"?$top={limit}{skip_param}&$select=id,internetMessageId,conversationId,internetMessageHeaders,from,subject,body,receivedDateTime,hasAttachments&$filter=receivedDateTime ge {cutoff}&$orderby=receivedDateTime {sort_order}"
     )
     response = requests.get(url, headers=headers, timeout=30)
     response.raise_for_status()
@@ -225,11 +231,21 @@ def _fetch_graph_attachments(mailbox_user: str, message_id: str, token: str) -> 
 
 
 def fetch_inbox_messages(
-    mailbox: str, limit: int = 25, skip: int = 0, max_age_days: int | None = None
+    mailbox: str,
+    limit: int = 25,
+    skip: int = 0,
+    max_age_days: int | None = None,
+    oldest_first: bool = False,
 ) -> list[dict[str, Any]]:
     if all(os.getenv(name) for name in ("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET")):
         try:
-            return _fetch_graph_inbox_messages(mailbox, limit=limit, skip=skip, max_age_days=max_age_days)
+            return _fetch_graph_inbox_messages(
+                mailbox,
+                limit=limit,
+                skip=skip,
+                max_age_days=max_age_days,
+                oldest_first=oldest_first,
+            )
         except Exception as exc:
             # Keep the app resilient if Azure Graph is temporarily unavailable.
             logger.warning("Graph mailbox read failed; falling back to IMAP mailbox=%s error=%s", mailbox, type(exc).__name__)
@@ -249,9 +265,12 @@ def fetch_inbox_messages(
             raise RuntimeError("Unable to search mailbox.")
         all_ids = data[0].split()
         end = len(all_ids) - int(skip)
-        message_ids = all_ids[max(0, end - limit):max(0, end)]
+        if oldest_first:
+            message_ids = all_ids[max(0, int(skip)):max(0, int(skip)) + limit]
+        else:
+            message_ids = all_ids[max(0, end - limit):max(0, end)]
         results = []
-        for message_id in reversed(message_ids):
+        for message_id in message_ids if oldest_first else reversed(message_ids):
             status, message_data = client.fetch(message_id, "(RFC822)")
             if status != "OK":
                 continue
@@ -355,23 +374,68 @@ def _reply_subject(subject: str) -> str:
     return clean if clean.lower().startswith("re:") else f"Re: {clean}"
 
 
-def send_message(mailbox: str, recipient: str, subject: str, body: str, reply_to: Optional[str] = None) -> bool:
+def ensure_staging_recipient_allowed(recipient: str) -> None:
+    environments = {
+        os.getenv(name, "").strip().lower()
+        for name in ("WT_ENV", "ENVIRONMENT", "WT_AUTH_ENV")
+    }
+    staging_configured = bool(os.getenv("STAGING_EMAIL_ALLOWLIST", "").strip())
+    if not staging_configured and not environments.intersection(
+        {"stage", "staging", "test", "testing"}
+    ):
+        return
+
+    allowed_recipients = {
+        address.strip().lower()
+        for address in os.getenv("STAGING_EMAIL_ALLOWLIST", "").replace(";", ",").split(",")
+        if address.strip()
+    }
+    if recipient.strip().lower() not in allowed_recipients:
+        raise RuntimeError(
+            "Staging email recipient is not in STAGING_EMAIL_ALLOWLIST; dispatch blocked."
+        )
+
+
+def send_message(
+    mailbox: str,
+    recipient: str,
+    subject: str,
+    body: str,
+    reply_to: Optional[str] = None,
+    *,
+    html_body: str | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+) -> bool:
     """Send an email. Returns False when a reply was requested but the original thread was not found."""
+    ensure_staging_recipient_allowed(recipient)
     if _use_legacy_graph_client():
         config = MAILBOXES.get(mailbox)
         if not config:
             raise ValueError("Unknown mailbox.")
         message_body = {
             "subject": subject,
-            "body": {"contentType": "Text", "content": body},
+            "body": {"contentType": "HTML" if html_body else "Text", "content": html_body or body},
             "toRecipients": [{"emailAddress": {"address": recipient}}],
         }
+        if attachments:
+            message_body["attachments"] = [
+                {
+                    "@odata.type": "#microsoft.graph.fileAttachment",
+                    "name": _safe_attachment_name(attachment.get("filename")),
+                    "contentType": _attachment_content_type(attachment),
+                    "contentBytes": base64.b64encode(attachment["content"]).decode("ascii"),
+                }
+                for attachment in attachments
+            ]
         if reply_to:
             message_body["replyTo"] = [{"emailAddress": {"address": reply_to}}]
         _client().request("POST", f"/users/{config.address}/sendMail", {"message": message_body, "saveToSentItems": True})
         return True
     if all(os.getenv(name) for name in ("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET")):
-        return _send_graph_message(mailbox, recipient, subject, body, reply_to=reply_to)
+        return _send_graph_message(
+            mailbox, recipient, subject, body, reply_to=reply_to,
+            html_body=html_body, attachments=attachments,
+        )
 
     username, password = _credentials(mailbox)
     message = EmailMessage()
@@ -383,6 +447,19 @@ def send_message(mailbox: str, recipient: str, subject: str, body: str, reply_to
         message["In-Reply-To"] = reference
         message["References"] = reference
     message.set_content(body)
+    if html_body:
+        message.add_alternative(html_body, subtype="html")
+    for attachment in attachments or []:
+        content = attachment.get("content")
+        if not isinstance(content, bytes):
+            raise ValueError("Email attachment content must be bytes.")
+        maintype, subtype = _attachment_content_type(attachment).split("/", 1)
+        message.add_attachment(
+            content,
+            maintype=maintype,
+            subtype=subtype,
+            filename=_safe_attachment_name(attachment.get("filename")),
+        )
     with smtplib.SMTP("smtp.office365.com", 587, timeout=30) as client:
         client.starttls()
         client.login(username, password)
@@ -407,10 +484,130 @@ def _resolve_graph_message_id(mailbox_user: str, headers: dict, reply_to: str) -
     return found[0].get("id") if found else None
 
 
-def _send_graph_message(mailbox: str, recipient: str, subject: str, body: str, reply_to: Optional[str] = None) -> bool:
+def _safe_attachment_name(value: Any) -> str:
+    name = os.path.basename(str(value or "attachment")).replace("\r", "").replace("\n", "").strip()
+    return name or "attachment"
+
+
+def _attachment_content_type(attachment: dict[str, Any]) -> str:
+    content_type = str(attachment.get("content_type") or "").split(";", 1)[0].strip().lower()
+    if re.fullmatch(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+", content_type):
+        return content_type
+    guessed_type, _ = mimetypes.guess_type(_safe_attachment_name(attachment.get("filename")))
+    return guessed_type or "application/octet-stream"
+
+
+def _send_graph_message(
+    mailbox: str,
+    recipient: str,
+    subject: str,
+    body: str,
+    reply_to: Optional[str] = None,
+    *,
+    html_body: str | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+) -> bool:
     mailbox_user = _mailbox_user_for_graph(mailbox)
     token = _graph_access_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    if html_body or attachments:
+        content_type = "HTML" if html_body else "Text"
+        content = html_body or body
+        graph_id = _resolve_graph_message_id(mailbox_user, headers, reply_to) if reply_to else None
+        original_found = bool(graph_id)
+        if graph_id:
+            response = requests.post(
+                f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/messages/{graph_id}/createReply",
+                headers=headers,
+                timeout=30,
+            )
+            response.raise_for_status()
+            draft_id = str(response.json()["id"])
+            response = requests.patch(
+                f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/messages/{draft_id}",
+                headers=headers,
+                json={
+                    "toRecipients": [{"emailAddress": {"address": recipient}}],
+                    "body": {"contentType": content_type, "content": content},
+                },
+                timeout=30,
+            )
+            response.raise_for_status()
+        else:
+            response = requests.post(
+                f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/messages",
+                headers=headers,
+                json={
+                    "subject": _reply_subject(subject) if reply_to else subject,
+                    "body": {"contentType": content_type, "content": content},
+                    "toRecipients": [{"emailAddress": {"address": recipient}}],
+                },
+                timeout=30,
+            )
+            response.raise_for_status()
+            draft_id = str(response.json()["id"])
+
+        for attachment in attachments or []:
+            file_content = attachment.get("content")
+            if not isinstance(file_content, bytes):
+                raise ValueError("Email attachment content must be bytes.")
+            name = _safe_attachment_name(attachment.get("filename"))
+            if len(file_content) <= 3 * 1024 * 1024:
+                response = requests.post(
+                    f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/messages/{draft_id}/attachments",
+                    headers=headers,
+                    json={
+                        "@odata.type": "#microsoft.graph.fileAttachment",
+                        "name": name,
+                        "contentType": _attachment_content_type(attachment),
+                        "contentBytes": base64.b64encode(file_content).decode("ascii"),
+                    },
+                    timeout=30,
+                )
+                response.raise_for_status()
+                continue
+
+            response = requests.post(
+                f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/messages/{draft_id}/attachments/createUploadSession",
+                headers=headers,
+                json={"AttachmentItem": {
+                    "attachmentType": "file",
+                    "name": name,
+                    "size": len(file_content),
+                    "contentType": _attachment_content_type(attachment),
+                }},
+                timeout=30,
+            )
+            response.raise_for_status()
+            upload_url = str(response.json()["uploadUrl"])
+            chunk_size = 320 * 1024
+            for start in range(0, len(file_content), chunk_size):
+                chunk = file_content[start:start + chunk_size]
+                end = start + len(chunk) - 1
+                response = requests.put(
+                    upload_url,
+                    headers={
+                        "Content-Length": str(len(chunk)),
+                        "Content-Range": f"bytes {start}-{end}/{len(file_content)}",
+                    },
+                    data=chunk,
+                    timeout=60,
+                )
+                response.raise_for_status()
+
+        response = requests.post(
+            f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/messages/{draft_id}/send",
+            headers=headers,
+            timeout=30,
+        )
+        response.raise_for_status()
+        if reply_to and not original_found:
+            logger.warning(
+                "email_reply_thread_not_found mailbox=%s recipient=%s; sent as new email for team review",
+                mailbox, recipient,
+            )
+        return not reply_to or original_found
+
     if reply_to:
         graph_id = _resolve_graph_message_id(mailbox_user, headers, reply_to)
         if graph_id:

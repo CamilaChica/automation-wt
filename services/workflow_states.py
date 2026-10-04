@@ -21,6 +21,7 @@ class WorkflowState(StrEnum):
     COMPLIANCE_REVIEW_BLOCKED = "Blocked_Compliance_Review"
     VERIFICATION_HALTED = "Verification_Halted"
     SUPPLIER_SOURCING_FAILED = "Sourcing_Failed"
+    SUPPLIER_CONFIRMATION_REQUESTED = "Supplier_Confirmation_Requested"
     NO_QUOTE = "No_Quote"
     COMPLIANCE_CHECK = "Compliance_Check"
     COMPLIANCE_BLOCKED = "Compliance_Blocked"
@@ -50,6 +51,7 @@ LEGACY_TO_CANONICAL = {
     "Validating": WorkflowState.RFQ_VALIDATED,
     "Inventory_Lookup": WorkflowState.SEARCHING_INVENTORY,
     "Supplier_Sourcing": WorkflowState.SOURCING_SUPPLIERS,
+    "Supplier_Confirmation_Requested": WorkflowState.SOURCING_SUPPLIERS,
     "Quote_Generation": WorkflowState.CUSTOMER_QUOTE_READY,
     "Pending_Approval": WorkflowState.CUSTOMER_QUOTE_READY,
     "Pending_Approval_Low_Margin": WorkflowState.CUSTOMER_QUOTE_READY,

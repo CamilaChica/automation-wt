@@ -54,6 +54,7 @@ from repositories.runtime import create_operational_repositories
 from repositories.rfq_repository import RFQRepository
 from services.export_control_service import export_control_service
 from services.attachment_service import AttachmentService
+from services.document_parser import extract_attachment_text
 from services.swarm_runtime import swarm_runtime
 from services.llm_provider import (
     AnthropicProvider,
@@ -979,9 +980,29 @@ async def submit_rfq(
     """
     if not request.raw_text.strip():
         raise HTTPException(status_code=400, detail="Raw RFQ text cannot be empty.")
-        
+
+    raw_text = request.raw_text.strip()
+    if request.attachment_ids:
+        normalized_ids = [attachment_id.strip().upper() for attachment_id in request.attachment_ids]
+        if len(normalized_ids) > 3 or len(set(normalized_ids)) != len(normalized_ids):
+            raise HTTPException(status_code=400, detail="Attach up to three different parts-list files.")
+        for index, attachment_id in enumerate(normalized_ids, start=1):
+            attachment_path = attachment_service.get_stored_path(attachment_id)
+            if attachment_path is None:
+                raise HTTPException(status_code=400, detail="A parts-list upload could not be found. Please upload it again.")
+            attachment_text = extract_attachment_text(
+                attachment_path.name,
+                "application/octet-stream",
+                attachment_path.read_bytes(),
+            )
+            if not attachment_text.strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Could not read parts-list file {index}. Upload a CSV, Excel workbook, or text-readable PDF.",
+                )
+            raw_text += f"\n\nUploaded parts-list file {index} contents:\n{attachment_text.strip()}"
+
     # Signed-in customers always submit under the email they logged in with.
-    raw_text = request.raw_text
     if user["role"] == ROLE_CUSTOMER:
         customer_email = str(user["email"]).strip().lower()
         customer_name = (request.customer_name or "").strip()
@@ -1024,7 +1045,6 @@ async def submit_rfq(
                 status="SUCCESS",
                 payload_json=json.dumps({"attachment_ids": request.attachment_ids}),
             ))
-        await session.commit()
 
     if session is None:
         db_service.add_audit_log(
@@ -1045,7 +1065,7 @@ async def submit_rfq(
         try:
             await swarm_runtime.publish_rfq_received(
                 rfq_id=rfq.id,
-                raw_text=request.raw_text,
+                raw_text=raw_text,
                 customer_id=f"CUS-{customer_email.lower()}",
                 customer_name=customer_name,
                 customer_email=customer_email,
@@ -1068,10 +1088,12 @@ async def submit_rfq(
 
     screening = export_control_service.screen(
         customer_name=customer_name,
-        raw_text=request.raw_text,
+        raw_text=raw_text,
         destination=request.customer_country,
     )
     if screening.blocked:
+        if session is not None:
+            await session.commit()
         orchestration_service.block_rfq_for_compliance(rfq.id, screening)
         return IntakeResponse(
             rfq_id=rfq.id,
@@ -1079,40 +1101,30 @@ async def submit_rfq(
             message="RFQ blocked pending export-control compliance review.",
         )
     
-    # Run the pipeline synchronously to make parsing results immediately available in MVP
-    pipeline_res = await orchestration_service.process_rfq_pipeline(rfq.id)
-    
-    status = pipeline_res.get("status", rfq.status)
-    error = pipeline_res.get("error", "")
-
-    if status not in {"Quote_Sent", "Quote_Dispatch_Pending"}:
-        # Guarantee the customer gets a confirmation even when parsing/review halted the pipeline.
-        try:
-            stored = db_service.get_rfq(rfq.id) or rfq
-            communication_service.send_rfq_acknowledgement(
-                rfq_id=rfq.id,
-                recipient=customer_email,
-                customer_name=customer_name or getattr(stored, "customer_name", None),
-                part_numbers=[item.requested_part_number for item in db_service.get_rfq_items(rfq.id)],
-                reply_to=getattr(stored, "thread_id", None) or request.reply_to,
-            )
-        except Exception as exc:
-            logger.warning("rfq_acknowledgement_fallback_failed rfq_id=%s error=%s", rfq.id, type(exc).__name__)
-    
-    if status == "Quote_Sent":
-        msg = f"Thank you! Your quote for {rfq.id} has been emailed to {customer_email}."
-    elif status == "Quote_Dispatch_Pending":
-        msg = f"Thank you! Your quote for {rfq.id} is ready and on its way to {customer_email}."
-    elif "Failed" in status or "Halted" in status or "Warning" in status:
-        logger.warning("RFQ %s pipeline issue: %s", rfq.id, error)
-        msg = f"Thank you! We received {rfq.id}. Our team is reviewing it personally and will email you shortly."
+    intake_key = f"rfq-intake:{rfq.id}"
+    event_values = {
+        "event_type": "process_new_rfq",
+        "entity_type": "rfq",
+        "entity_id": rfq.id,
+        "status": "QUEUED",
+        "result": json.dumps({"source": "customer_api"}),
+        "idempotency_key": intake_key,
+        "max_attempts": 5,
+    }
+    if session is not None:
+        repositories = create_operational_repositories(session)
+        await repositories.records.record_automation_event(**event_values)
+        await session.commit()
     else:
-        msg = f"Thank you! We received {rfq.id}. Our team is checking availability and pricing and will email your quote to {customer_email} shortly."
-        
+        operations_store.record_automation_event(**event_values)
+
     return IntakeResponse(
         rfq_id=rfq.id,
-        status=status,
-        message=msg
+        status="Processing_Queued",
+        message=(
+            f"Request {rfq.id} has been received and queued for processing. "
+            "We will email a verified quotation or a specific sourcing update to you."
+        ),
     )
 
 @app.post("/api/rfqs/{rfq_id}/process")
@@ -1315,6 +1327,7 @@ async def orchestrate_internal_agent_task(
             {"query": request.query, "response_mode": request.response_mode},
             {
                 "role": user.get("role", ""),
+                "actor_id": str(user.get("id") or user.get("email") or ""),
                 "permissions": {
                     "read_catalog",
                     "read_inventory",
@@ -1323,6 +1336,10 @@ async def orchestrate_internal_agent_task(
                 } | (
                     {"read_business_records", "search_knowledge"}
                     if user.get("role") in {"ROLE_ADMIN", "ROLE_MANAGER"}
+                    else set()
+                ) | (
+                    {"negotiate_supplier_discounts"}
+                    if user.get("role") in {"ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASING"}
                     else set()
                 ),
             },
@@ -1754,9 +1771,28 @@ def _validate_po_attachments(attachment_ids: List[str]) -> None:
             raise HTTPException(status_code=400, detail="Upload accepted documents (PDF, Word, JPG or PNG) before submitting the purchase order.")
 
 
+def _load_po_attachments(attachment_ids: List[str]) -> List[Dict[str, Any]]:
+    files = []
+    for attachment_id in attachment_ids:
+        document_path = attachment_service.get_stored_path(attachment_id)
+        if document_path is None:
+            raise HTTPException(status_code=400, detail="A purchase-order attachment is no longer available.")
+        content = document_path.read_bytes()
+        content_type = attachment_service._detect_type(document_path.suffix.lower(), content)
+        if content_type is None:
+            raise HTTPException(status_code=400, detail="A purchase-order attachment is not a valid supported document.")
+        files.append({
+            "filename": document_path.name,
+            "content_type": content_type,
+            "content": content,
+        })
+    return files
+
+
 def _accept_prequote_purchase_order(request: "PurchaseOrderRequest", rfq: Any, rfq_reference: str) -> Dict[str, Any]:
     """Accept a PO sent before the quote email; the sales team reviews it manually."""
     _validate_po_attachments(request.attachment_ids)
+    attachments = _load_po_attachments(request.attachment_ids)
     customer_email = getattr(rfq, "customer_email", None) or (rfq.get("customer_email") if isinstance(rfq, dict) else "")
     customer_name = getattr(rfq, "customer_name", None) or (rfq.get("customer_name") if isinstance(rfq, dict) else "") or customer_email
     recipient = os.getenv("CAMILA_NOTIFICATION_EMAIL", os.getenv("PURCHASE_ORDER_NOTIFICATION_EMAIL", "camila@wingedtycoons.com"))
@@ -1773,6 +1809,7 @@ def _accept_prequote_purchase_order(request: "PurchaseOrderRequest", rfq: Any, r
             "sales", recipient, f"PO {po_number} received for {rfq_reference} (pending review)", body,
             reply_to=None, entity_id=rfq_reference,
             deduplication_key=f"po-prequote:{rfq_reference}:{po_number.upper()}",
+            attachments=attachments,
         )
     except Exception:
         logger.exception("Could not queue the pre-quote purchase order notification for %s", rfq_reference)
@@ -1856,6 +1893,8 @@ async def submit_purchase_order(
             raise HTTPException(status_code=400, detail="Upload accepted documents (PDF, Word, JPG or PNG) before submitting the purchase order.")
         if attachment_service._detect_type(document_path.suffix.lower(), document_path.read_bytes()) is None:
             raise HTTPException(status_code=400, detail="Each purchase-order document must be a valid PDF, Word, JPG or PNG file.")
+    po_attachments = _load_po_attachments(request.attachment_ids)
+    po_attachments = _load_po_attachments(request.attachment_ids)
     previous_po_number = None
     previous_quote_id = None
     if rfq.status and rfq.status != "Intake":
@@ -1933,6 +1972,7 @@ async def submit_purchase_order(
             quote_id=request.quote_id,
             items=internal_items,
             review_url=review_url,
+            attachments=po_attachments,
         )
         await session.commit()
     else:
@@ -1960,6 +2000,7 @@ async def submit_purchase_order(
                 quote_id=request.quote_id,
                 items=internal_items,
                 review_url=review_url,
+                attachments=po_attachments,
             )
             orchestration_service.mark_purchase_order_received(rfq.id, request.po_number, request.attachment_ids)
     if repositories is None:

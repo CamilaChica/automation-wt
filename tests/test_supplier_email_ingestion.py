@@ -1,6 +1,7 @@
 import asyncio
 import os
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from agents.supplier_discovery_agent import SupplierDiscoveryAgent
@@ -56,14 +57,17 @@ class TestSupplierEmailIngestion(unittest.TestCase):
         """
 
         service = SupplierEmailIngestionService()
-        result = service.ingest_email(email_text)
+        source_received_at = datetime.now(timezone.utc)
+        result = service.ingest_email(email_text, source_received_at=source_received_at)
 
         self.assertTrue(result["success"])
         offers = db_service.get_supplier_offers_for_part("060-1234-00")
         self.assertGreater(len(offers), 0)
-        self.assertEqual(offers[0]["supplier_name"], "Apex Aero Components LLC")
-        self.assertEqual(offers[0]["part_number"], "060-1234-00")
-        self.assertEqual(offers[0]["unit_cost"], 1100.0)
+        offer = next(item for item in offers if item["source_email_id"] == result["source_email_id"])
+        self.assertEqual(offer["supplier_name"], "Apex Aero Components LLC")
+        self.assertEqual(offer["part_number"], "060-1234-00")
+        self.assertEqual(offer["unit_cost"], 1100.0)
+        self.assertEqual(offer["source_received_at"], source_received_at.isoformat())
 
     @patch("services.supplier_ingestion_service.extract_email_intelligence", side_effect=RuntimeError("LLM disabled in test"))
     @patch("services.supplier_ingestion_service.build_email_context")
@@ -102,6 +106,7 @@ class TestSupplierEmailIngestion(unittest.TestCase):
             lead_time_days=7,
             approval_status="Approved",
             condition_code="NE",
+            source_received_at=datetime.now(timezone.utc),
         )
 
         agent = SupplierDiscoveryAgent()

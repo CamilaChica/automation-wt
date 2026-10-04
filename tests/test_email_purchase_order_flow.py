@@ -71,6 +71,14 @@ class TestEmailPurchaseOrderFlow(unittest.TestCase):
         ))
         notify.assert_called_once()
         self.assertIn("camila@", notify.call_args.kwargs["recipient"])
+        self.assertEqual(
+            notify.call_args.kwargs["attachments"],
+            [{
+                "filename": "WT-PO-555.pdf",
+                "content_type": "application/pdf",
+                "content": b"pdf",
+            }],
+        )
         mark_received.assert_called_once_with("RFQ-PO-1", "WT-PO-555", ["WT-PO-555.pdf"])
 
 

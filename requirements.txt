@@ -21,7 +21,6 @@ pillow>=10,<12
 boto3>=1.35,<2
 python-multipart>=0.0.9,<1
 imageio-ffmpeg>=0.6,<1
-pytest>=8,<9
 tiktoken>=0.7,<1
 langchain-text-splitters>=0.2,<2
 playwright>=1.45,<2
