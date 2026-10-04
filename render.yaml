@@ -262,6 +262,7 @@ services:
   - type: worker
     name: winged-inventory-ingestion
     runtime: python
+    plan: standard
     buildCommand: pip install -r requirements.txt
     startCommand: python -m services.inventory_ingestion_worker
     disk:
