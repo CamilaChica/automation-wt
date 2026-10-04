@@ -12,7 +12,11 @@ from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, PrivateAttr
 
-from schemas.extraction import ExtractedField, ExtractionTaskContract, RFQExtractionResult
+from schemas.extraction import (
+    ExtractedField,
+    ExtractionTaskContract,
+    RFQExtractionResult,
+)
 from services.llm_provider import LLMRequest, LLMRouter, StructuredOutputError
 from services.document_parser import build_email_context
 from services.operations_store import operations_store

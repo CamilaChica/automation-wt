@@ -4,7 +4,7 @@ SUPPLIER_DISCOUNT_TOOL_CONTRACT = {
     "name": "request_supplier_discount",
     "description": (
         "Queue one non-binding request for an approved supplier to consider a discount "
-        "of up to 5% on a verified USD offer. It cannot accept an offer or place an order."
+        "of up to '5%' on a verified USD offer. It cannot accept an offer or place an order."
     ),
     "permission_tier": "Tier_2",
     "idempotency_required": True,
