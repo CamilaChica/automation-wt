@@ -68,6 +68,21 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
         self.assertEqual(results[0]["result"]["imports"][0]["rows_imported"], 1)
         self.assertEqual(loader.email_text, "")
 
+    def test_inventory_worker_bounds_live_and_backfill_fetch_batches(self):
+        requested_limits = []
+
+        def fetch_messages(_mailbox, *, limit):
+            requested_limits.append(limit)
+            return []
+
+        worker = InventoryIngestionWorker(fetch_messages=fetch_messages)
+
+        worker.poll_once()
+        worker.poll_once(limit=100)
+
+        self.assertEqual(requested_limits, [5, 5])
+        self.assertEqual(worker.backfill_page_size, 5)
+
     def test_inventory_worker_claim_and_business_processing_share_transaction(self):
         events = []
 

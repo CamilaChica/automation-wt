@@ -2,10 +2,38 @@ import unittest
 import base64
 from unittest.mock import Mock, patch
 
-from services.mailbox_service import _send_graph_message, fetch_inbox_headers, send_message
+from services.mailbox_service import _send_graph_message, fetch_inbox_headers, html_to_text, send_message
 
 
 class MailboxServiceTests(unittest.TestCase):
+    def test_html_email_preserves_supplier_table_row_and_column_boundaries(self):
+        content = """
+        <html><head><style>.hidden { display: none; }</style></head>
+        <body>
+          <p>Current supplier availability</p>
+          <table>
+            <tr><th>Part Number</th><th>Quantity</th><th>Unit Price</th></tr>
+            <tr><td>PN-100</td><td>4</td><td>USD 100</td></tr>
+            <tr><td>PN-200</td><td>8</td><td>EUR 200</td></tr>
+          </table>
+          <script>ignore this</script>
+        </body></html>
+        """
+
+        text = html_to_text(content)
+
+        self.assertEqual(
+            text.splitlines(),
+            [
+                "Current supplier availability",
+                "Part Number\tQuantity\tUnit Price",
+                "PN-100\t4\tUSD 100",
+                "PN-200\t8\tEUR 200",
+            ],
+        )
+        self.assertNotIn("ignore this", text)
+        self.assertNotIn(".hidden", text)
+
     @patch("services.mailbox_service._client")
     def test_maps_graph_message_headers(self, client_factory):
         client = Mock()

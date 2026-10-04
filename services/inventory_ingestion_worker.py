@@ -40,6 +40,7 @@ WAITING_STATUSES = (
     "No_Quote",
     "Supplier_Confirmation_Requested",
 )
+MAX_INGESTION_BATCH_SIZE = 10
 
 
 class _NullSavepoint:
@@ -62,6 +63,10 @@ class InventoryIngestionWorker:
         self.negotiation_service = SupplierNegotiationService()
         self.mailbox = os.getenv("INVENTORY_INGESTION_MAILBOX", "purchasing")
         self.poll_interval_seconds = int(os.getenv("INVENTORY_INGESTION_POLL_INTERVAL_SECONDS", "60"))
+        self.batch_size = min(
+            MAX_INGESTION_BATCH_SIZE,
+            max(1, int(os.getenv("INVENTORY_INGESTION_BATCH_SIZE", "5"))),
+        )
         # Historical backfill walks the whole purchasing inbox page by page so older supplier quotes
         # and inventory lists are loaded too; the default fetcher is the only one that supports paging.
         self.backfill_enabled = (
@@ -69,7 +74,10 @@ class InventoryIngestionWorker:
             and os.getenv("INVENTORY_INGESTION_BACKFILL_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
         )
         self.backfill_days = int(os.getenv("INVENTORY_INGESTION_BACKFILL_DAYS", "3650"))
-        self.backfill_page_size = int(os.getenv("INVENTORY_INGESTION_BACKFILL_PAGE_SIZE", "25"))
+        self.backfill_page_size = min(
+            self.batch_size,
+            max(1, int(os.getenv("INVENTORY_INGESTION_BACKFILL_PAGE_SIZE", str(self.batch_size)))),
+        )
         self.backfill_offset = 0
         self.backfill_stats: dict[str, Any] | None = None
         self.backfill_progress_loaded = False
@@ -640,8 +648,11 @@ class InventoryIngestionWorker:
             response["persistence_warning"] = mirror_warning
         return response
 
-    def poll_once(self, limit: int = 25) -> list[dict[str, Any]]:
-        messages = self.fetch_messages(self.mailbox, limit=limit)
+    def poll_once(self, limit: int | None = None) -> list[dict[str, Any]]:
+        requested_limit = self.batch_size if limit is None else int(limit)
+        if requested_limit < 1:
+            raise ValueError("Inventory poll limit must be positive.")
+        messages = self.fetch_messages(self.mailbox, limit=min(requested_limit, self.batch_size))
         results = self._process_batch(messages)
         if self.backfill_enabled:
             results.extend(self.backfill_once())

@@ -8,7 +8,6 @@ authentication is disabled by Microsoft 365.
 
 import email
 import base64
-import html
 import imaplib
 import logging
 import mimetypes
@@ -20,6 +19,7 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Any, Optional
 
+from bs4 import BeautifulSoup, NavigableString
 import requests
 from services.graph_client import GraphClient, GraphClientError
 
@@ -39,16 +39,30 @@ def html_to_text(content: str) -> str:
     text = str(content or "")
     if not _HTML_HINT.search(text):
         return text.strip()
-    text = re.sub(r"<!--.*?-->", " ", text, flags=re.DOTALL)
-    text = re.sub(r"<(style|script|head|title)\b.*?</\1\s*>", " ", text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"</(p|div|tr|li|h[1-6]|table)\s*>", "\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"</t[dh]\s*>", " \t ", text, flags=re.IGNORECASE)
-    text = re.sub(r"<[^>]+>", " ", text, flags=re.DOTALL)
-    text = html.unescape(text).replace("\xa0", " ").replace("\ufeff", " ")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\s*\n\s*", "\n", text)
-    return text.strip()
+    soup = BeautifulSoup(text, "html.parser")
+    for hidden in soup(["head", "script", "style", "title"]):
+        hidden.decompose()
+    for table in soup.find_all("table"):
+        rows = []
+        for row in table.find_all("tr"):
+            cells = row.find_all(["th", "td"])
+            if cells:
+                rows.append("\t".join(cell.get_text(" ", strip=True) for cell in cells))
+        table.replace_with(NavigableString("\n" + "\n".join(rows) + "\n"))
+    for line_break in soup.find_all("br"):
+        line_break.replace_with(NavigableString("\n"))
+    for block in soup.find_all(["div", "li", "p", "h1", "h2", "h3", "h4", "h5", "h6"]):
+        block.insert_before(NavigableString("\n"))
+        block.insert_after(NavigableString("\n"))
+
+    rendered = soup.get_text(separator=" ", strip=False).replace("\xa0", " ").replace("\ufeff", " ")
+    lines = []
+    for line in rendered.splitlines():
+        columns = [re.sub(r"\s+", " ", cell).strip() for cell in line.split("\t")]
+        normalized = "\t".join(columns).strip()
+        if normalized:
+            lines.append(normalized)
+    return "\n".join(lines)
 
 
 def _extract_body_from_message(message: email.message.Message) -> str:
