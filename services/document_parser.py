@@ -21,6 +21,10 @@ def _ocr_engine():
     return RapidOCR(params={
         "EngineConfig.onnxruntime.intra_op_num_threads": 1,
         "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+        "Det.limit_type": "max",
+        "Det.limit_side_len": 960,
+        "Cls.cls_batch_num": 1,
+        "Rec.rec_batch_num": 1,
     })
 
 

@@ -1,11 +1,12 @@
 import unittest
 import io
+from unittest.mock import Mock, patch
 from zipfile import ZipFile
 from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, DecodedStreamObject
 from PIL import Image, ImageDraw, ImageFont
 
-from services.document_parser import build_email_context, extract_attachment_text
+from services.document_parser import _ocr_engine, build_email_context, extract_attachment_text
 
 
 def certificate_pdf(part_number="PN-123", serial_number="SN-1", extra=""):
@@ -34,6 +35,22 @@ def certificate_pdf(part_number="PN-123", serial_number="SN-1", extra=""):
 
 
 class DocumentParserTests(unittest.TestCase):
+    def test_ocr_detector_bounds_long_side_instead_of_upscaling_short_side(self):
+        from rapidocr.ch_ppocr_det.utils import DetPreProcess
+        import numpy as np
+
+        _ocr_engine.cache_clear()
+        with patch("rapidocr.RapidOCR", return_value=Mock()) as engine:
+            _ocr_engine()
+        _ocr_engine.cache_clear()
+        params = engine.call_args.kwargs["params"]
+        resize = DetPreProcess(
+            limit_side_len=params["Det.limit_side_len"], limit_type=params["Det.limit_type"],
+        )
+        image = resize.resize(np.zeros((300, 2000, 3), dtype=np.uint8))
+        self.assertLessEqual(max(image.shape[:2]), 960)
+        self.assertEqual(params["Rec.rec_batch_num"], 1)
+
     def test_text_attachment_is_added_to_llm_context(self):
         context = build_email_context(
             "Supplier email body",
