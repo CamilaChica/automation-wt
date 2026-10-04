@@ -1,6 +1,6 @@
 # Render Shell: Read-Only Verification
 
-**Production DDL is not a pending task.** The canonical Render database was verified read-only at migration revision `0009_prompt_rag_storage`. Production `/ready` remains HTTP 503, so this runbook must not be used to enable runtime, deploy, seed data, or resume workers. Follow [PRODUCTION_AUTOMATION_PLAN.md](PRODUCTION_AUTOMATION_PLAN.md) for the remaining release gates and approvals.
+**This runbook is read-only.** The production `/ready` check on 2026-10-04 confirmed revision `0012_supplier_offer_received_at` and healthy shared persistence. The production integration release targets additive migration `0013_database_business_policies`. Do not use this runbook to deploy or apply DDL; deployment uses the existing Render API pre-deploy command.
 
 ## Safety
 
@@ -23,7 +23,7 @@ ROLLBACK;
 SQL
 ```
 
-Expected current production revision: `0009_prompt_rag_storage`. If the database identity or revision differs, stop and ask the database owner to reconcile it; do not apply migrations from this runbook.
+Do not assume a current production revision from this document. If the database identity or revision is not confirmed through the authorized read-only check, stop and ask the database owner to reconcile it; do not apply migrations from this runbook.
 
 ## Service Health
 

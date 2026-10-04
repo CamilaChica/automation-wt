@@ -139,6 +139,29 @@ class SupplierEmailIngestionService:
         try:
             attachment_context = build_email_context(email_text, attachments)
             source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
+            from services.document_verification import compare_documents
+
+            document_report = compare_documents(attachments or [])
+            if document_report["documents"]:
+                operations_store.record_automation_event(
+                    event_type="supplier_document_comparison", entity_type="email",
+                    entity_id=source_email_id, status=document_report["status"],
+                    result=json.dumps(document_report),
+                    idempotency_key=f"supplier-documents:{source_email_id}",
+                )
+            if document_report["discrepancies"]:
+                review_id = operations_store.enqueue_operator_review(
+                    idempotency_key=f"supplier-email-review:{source_email_id}",
+                    task="supplier_quote_extraction", source_text=attachment_context,
+                    extraction={"document_comparison": document_report},
+                    reason="supplier_document_evidence_requires_review",
+                    hold_flags=document_report["discrepancies"], entity_id=source_email_id,
+                )
+                return {
+                    "success": False, "status": "Pending_Human_Review",
+                    "pending_human_review": True, "source_email_id": source_email_id,
+                    "review_event_id": review_id, "document_comparison": document_report,
+                }
             try:
                 extracted = self.extractor.extract(attachment_context)
             except ValueError as exc:
@@ -382,11 +405,35 @@ class SupplierEmailIngestionService:
         mailbox: str = "purchasing",
         message_id: Optional[str] = None,
         source_received_at: datetime | None = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Persist plain supplier-email extraction through the async repositories."""
         try:
-            attachment_context = build_email_context(email_text, None)
+            attachment_context = await asyncio.to_thread(build_email_context, email_text, attachments)
             source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
+            from services.document_verification import compare_documents
+
+            document_report = await asyncio.to_thread(compare_documents, attachments or [])
+            if document_report["documents"]:
+                await repositories.records.record_automation_event(
+                    event_type="supplier_document_comparison", entity_type="email",
+                    entity_id=source_email_id, status=document_report["status"],
+                    result=json.dumps(document_report),
+                    idempotency_key=f"supplier-documents:{source_email_id}",
+                )
+            if document_report["discrepancies"]:
+                review_id = await repositories.records.enqueue_operator_review(
+                    idempotency_key=f"supplier-email-review:{source_email_id}",
+                    task="supplier_quote_extraction", source_text=attachment_context,
+                    extraction={"document_comparison": document_report},
+                    reason="supplier_document_evidence_requires_review",
+                    hold_flags=document_report["discrepancies"], entity_id=source_email_id,
+                )
+                return {
+                    "success": False, "status": "Pending_Human_Review",
+                    "pending_human_review": True, "source_email_id": source_email_id,
+                    "review_event_id": review_id, "document_comparison": document_report,
+                }
             try:
                 extracted = await asyncio.to_thread(self.extractor.extract, attachment_context)
             except ValueError as exc:
@@ -426,6 +473,7 @@ class SupplierEmailIngestionService:
                     task="supplier_quote_extraction",
                     router=self.llm_router,
                     persist=False,
+                    attachments=attachments,
                 )
             except Exception:
                 llm_data = None

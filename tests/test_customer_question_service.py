@@ -9,6 +9,7 @@ from services.communication_service import (
     communication_service,
 )
 from services.customer_question_service import CustomerQuestionService
+from tests.test_document_parser import certificate_pdf
 
 
 class CustomerQuestionServiceTests(unittest.TestCase):
@@ -33,7 +34,7 @@ class CustomerQuestionServiceTests(unittest.TestCase):
         message = EmailMessage()
         message.set_content("Supplier quote")
         message.add_attachment(
-            b"verified certificate",
+            certificate_pdf(),
             maintype="application",
             subtype="pdf",
             filename="FAA_8130_certificate.pdf",
@@ -45,19 +46,20 @@ class CustomerQuestionServiceTests(unittest.TestCase):
             attachments = _source_documents_for_customer_request(
                 "Please send the certificate for this part.",
                 [{
+                    "part_number": "PN-123",
                     "source_email_id": "supplier-message-1",
                     "trace_documents": '["FAA_8130_certificate.pdf"]',
                 }],
             )
 
         self.assertEqual(attachments[0]["filename"], "FAA_8130_certificate.pdf")
-        self.assertEqual(attachments[0]["content"], b"verified certificate")
+        self.assertEqual(attachments[0]["content"], certificate_pdf())
 
     def test_async_customer_document_reply_queues_attachment_bytes(self):
         message = EmailMessage()
         message.set_content("Supplier quote")
         message.add_attachment(
-            b"verified certificate",
+            certificate_pdf(),
             maintype="application",
             subtype="pdf",
             filename="FAA_8130_certificate.pdf",
@@ -92,8 +94,35 @@ class CustomerQuestionServiceTests(unittest.TestCase):
         self.assertIsNotNone(queued_payload["html_body"])
         self.assertEqual(
             queued_payload["attachments"][0]["content_base64"],
-            base64.b64encode(b"verified certificate").decode("ascii"),
+            base64.b64encode(certificate_pdf()).decode("ascii"),
         )
+
+    def test_other_parts_and_supplier_prices_are_not_attached(self):
+        message = EmailMessage()
+        message.set_content("Supplier quote")
+        for name, content in [
+            ("cert-right.pdf", certificate_pdf()),
+            ("cert-other.pdf", certificate_pdf(part_number="PN-999")),
+            ("cert-priced.pdf", certificate_pdf(extra="Unit Price: USD 1000")),
+        ]:
+            message.add_attachment(content, maintype="application", subtype="pdf", filename=name)
+        with patch("services.communication_service.operations_store.get_raw_email_mime", return_value=message.as_bytes()):
+            attachments = _source_documents_for_customer_request(
+                "Please send the certificate for PN-123.",
+                [{"part_number": "PN-123", "source_email_id": "supplier-message-1"}],
+            )
+        self.assertEqual([attachment["filename"] for attachment in attachments], ["cert-right.pdf"])
+
+    def test_unreadable_supplier_certificate_is_not_released(self):
+        message = EmailMessage()
+        message.set_content("Supplier quote")
+        message.add_attachment(b"invalid", maintype="application", subtype="pdf", filename="cert.pdf")
+        with patch("services.communication_service.operations_store.get_raw_email_mime", return_value=message.as_bytes()):
+            with self.assertRaisesRegex(ValueError, "requested_document_unavailable"):
+                _source_documents_for_customer_request(
+                    "Please send the certificate.",
+                    [{"part_number": "PN-123", "source_email_id": "supplier-message-1"}],
+                )
 
     def test_async_purchase_order_notification_queues_real_file(self):
         repositories = Mock()

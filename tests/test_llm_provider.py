@@ -39,6 +39,19 @@ class TestLLMProvider(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "OPENAI_API_KEY"):
                 provider.complete(LLMRequest("rfq_extraction", "system", "user"))
 
+    def test_openai_uses_configured_bearer_token(self):
+        provider = OpenAIProvider(api_key="test-openai-key")
+        response = {
+            "choices": [{"message": {"content": "{\"ok\": true}"}}],
+        }
+        with patch("services.llm_provider._post_json", return_value=response) as post_json:
+            provider.complete(LLMRequest("rfq_extraction", "system", "user"))
+
+        self.assertEqual(
+            post_json.call_args.args[1]["Authorization"],
+            "Bearer test-openai-key",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

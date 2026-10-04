@@ -57,6 +57,17 @@ class TestCustomerReplyPipeline(unittest.TestCase):
         record_sentiment.assert_called_once()
         self.assertTrue(any(log.action_type == "customer_detail_response" for log in db_service.get_audit_logs(self.rfq.id)))
 
+    def test_unknown_catalog_part_is_resolved_to_requested_number_for_sourcing(self):
+        item = db_service.get_rfq_items(self.rfq.id)[0]
+
+        resolved = db_service.resolve_rfq_item(item.id, item.requested_part_number)
+
+        self.assertEqual(resolved.resolved_part_number, item.requested_part_number)
+        self.assertEqual(
+            db_service.get_rfq_items(self.rfq.id)[0].resolved_part_number,
+            item.requested_part_number,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

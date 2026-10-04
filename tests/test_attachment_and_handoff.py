@@ -14,6 +14,7 @@ class TestAttachmentAndHandoff(unittest.TestCase):
             self.assertEqual(record.status, "ACCEPTED")
             self.assertTrue(Path(record.stored_path).exists())
             self.assertEqual(len(record.sha256), 64)
+            self.assertEqual(AttachmentService(directory).get_original_filename(record.attachment_id), "cert.pdf")
 
     def test_unsupported_attachment_is_rejected(self):
         record = AttachmentService().validate_and_store("payload.exe", "application/octet-stream", io.BytesIO(b"bad"))

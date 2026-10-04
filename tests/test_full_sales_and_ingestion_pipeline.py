@@ -131,6 +131,9 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
                     "RFQ-MATCH": {"id": "RFQ-MATCH", "status": "Supplier_Sourcing"},
                     "RFQ-NO-MATCH": {"id": "RFQ-NO-MATCH", "status": "Supplier_Sourcing"},
                 },
+                ("rfqs", "Sourcing_Failed"): {
+                    "RFQ-FAILED": {"id": "RFQ-FAILED", "status": "Sourcing_Failed"},
+                },
                 ("rfqs", "Supplier_Confirmation_Requested"): {
                     "RFQ-STALE": {
                         "id": "RFQ-STALE",
@@ -138,6 +141,7 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
                     },
                 },
                 ("rfq_items", "RFQ-MATCH"): {"ITEM-MATCH": {"resolved_part_number": "PN-1"}},
+                ("rfq_items", "RFQ-FAILED"): {"ITEM-FAILED": {"resolved_part_number": "PN-1"}},
                 ("rfq_items", "RFQ-STALE"): {"ITEM-STALE": {"resolved_part_number": "PN-1"}},
                 ("rfq_items", "RFQ-NO-MATCH"): {"ITEM-OTHER": {"requested_part_number": "PN-2"}},
             }.get((domain, value), {})),
@@ -180,20 +184,24 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
             records.list_by_payload_value.await_args_list,
             [
                 unittest.mock.call("rfqs", "status", "Supplier_Sourcing"),
+                unittest.mock.call("rfqs", "status", "Sourcing_Failed"),
                 unittest.mock.call("rfqs", "status", "No_Quote"),
                 unittest.mock.call("rfqs", "status", "Supplier_Confirmation_Requested"),
                 unittest.mock.call("rfq_items", "rfq_id", "RFQ-MATCH"),
                 unittest.mock.call("rfq_items", "rfq_id", "RFQ-NO-MATCH"),
+                unittest.mock.call("rfq_items", "rfq_id", "RFQ-FAILED"),
                 unittest.mock.call("rfq_items", "rfq_id", "RFQ-STALE"),
             ],
         )
         rfq_repository.list_by_status.assert_not_awaited()
         records.has_domain.assert_not_awaited()
-        self.assertEqual(len(events), 2)
+        self.assertEqual(len(events), 3)
         self.assertEqual(events[0]["entity_id"], "RFQ-MATCH")
         self.assertEqual(events[0]["idempotency_key"], "rfq-resume:RFQ-MATCH:PN-1")
-        self.assertEqual(events[1]["entity_id"], "RFQ-STALE")
-        self.assertEqual(events[1]["idempotency_key"], "rfq-resume:RFQ-STALE:PN-1")
+        self.assertEqual(events[1]["entity_id"], "RFQ-FAILED")
+        self.assertEqual(events[1]["idempotency_key"], "rfq-resume:RFQ-FAILED:PN-1")
+        self.assertEqual(events[2]["entity_id"], "RFQ-STALE")
+        self.assertEqual(events[2]["idempotency_key"], "rfq-resume:RFQ-STALE:PN-1")
         self.assertTrue(engine.disposed)
 
         events.clear()
@@ -209,6 +217,7 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
             [SimpleNamespace(id="RFQ-RELATIONAL", status="Supplier_Sourcing")],
             [],
             [],
+            [],
         ])
         with (
             patch("services.inventory_ingestion_worker.operations_store", StoreStub()),
@@ -222,6 +231,7 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
             rfq_repository.list_by_status.await_args_list,
             [
                 unittest.mock.call("Supplier_Sourcing"),
+                unittest.mock.call("Sourcing_Failed"),
                 unittest.mock.call("No_Quote"),
                 unittest.mock.call("Supplier_Confirmation_Requested"),
             ],
@@ -334,6 +344,14 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
                 "filename": "purchase-order.pdf",
                 "content_type": "application/pdf",
                 "content": b"%PDF-test",
+            }, {
+                "filename": "export-certificate.pdf",
+                "content_type": "application/pdf",
+                "content": b"%PDF-export",
+            }, {
+                "filename": "kyc.docx",
+                "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "content": b"PK-supporting-doc",
             }],
         ))
 
@@ -343,6 +361,48 @@ class TestFullSalesAndIngestionPipeline(unittest.TestCase):
         self.assertEqual(
             base64.b64decode(queued_attachment["content_base64"]),
             b"%PDF-test",
+        )
+        self.assertEqual(len(captured["attachments"]), 3)
+        self.assertEqual(base64.b64decode(captured["attachments"][1]["content_base64"]), b"%PDF-export")
+        self.assertEqual(base64.b64decode(captured["attachments"][2]["content_base64"]), b"PK-supporting-doc")
+
+    def test_inventory_table_does_not_bypass_certificate_review(self):
+        from tests.test_document_parser import certificate_pdf
+
+        records = SimpleNamespace(
+            claim_inbound_message=AsyncMock(return_value=True),
+            archive_raw_email=AsyncMock(),
+            mark_inbound_message_processed=AsyncMock(),
+            set_raw_email_processing_status=AsyncMock(),
+        )
+        repositories = SimpleNamespace(records=records)
+
+        @asynccontextmanager
+        async def fake_session_scope(_engine):
+            yield object()
+
+        worker = InventoryIngestionWorker(fetch_messages=lambda _mailbox, limit: [])
+        with (
+            patch("services.inventory_ingestion_worker.session_scope", fake_session_scope),
+            patch("repositories.runtime.create_operational_repositories", return_value=repositories),
+            patch.object(worker.loader.ingestion_service, "ingest_email_async", new_callable=AsyncMock) as ingest,
+            patch("services.inventory_ingestion_worker.import_inventory_attachments_async", new_callable=AsyncMock) as import_table,
+        ):
+            ingest.return_value = {"success": False, "status": "Pending_Human_Review"}
+            result = asyncio.run(worker._process_inventory_table_message_async({
+                "message_id": "inventory-doc-review",
+                "body": "Inventory attached",
+                "attachments": [
+                    {"filename": "inventory.csv", "content": b"PN,Quantity\nPN-123,1"},
+                    {"filename": "cert-a.pdf", "content": certificate_pdf(serial_number="SN-1")},
+                    {"filename": "cert-b.pdf", "content": certificate_pdf(serial_number="SN-2")},
+                ],
+            }, engine=object()))
+        self.assertFalse(result["success"])
+        import_table.assert_not_awaited()
+        ingest.assert_awaited_once()
+        records.set_raw_email_processing_status.assert_awaited_once_with(
+            "purchasing", "inventory-doc-review", "pending_human_review",
         )
 
 

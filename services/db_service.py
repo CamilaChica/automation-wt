@@ -720,6 +720,24 @@ class MockDatabaseService:
             return [item for item in self._pg_list("rfq_items", RFQItem) if item.rfq_id == rfq_id]
         return self.rfq_items.get(rfq_id, [])
 
+    def resolve_rfq_item(self, item_id: str, resolved_part_number: str) -> Optional[RFQItem]:
+        part_number = str(resolved_part_number or "").strip().upper()
+        if not part_number:
+            raise ValueError("Resolved part number is required.")
+        if self._production:
+            item = self._pg_get("rfq_items", item_id, RFQItem)
+            if item is None:
+                return None
+            item.resolved_part_number = part_number
+            return self._pg_record("rfq_items", item_id, item)
+        for items in self.rfq_items.values():
+            for item in items:
+                if item.id == item_id:
+                    item.resolved_part_number = part_number
+                    self._persist_state()
+                    return item
+        return None
+
     def replace_rfq_items(self, rfq_id: str, items: List[Dict[str, Any]]) -> List[RFQItem]:
         if self._production:
             if not self.get_rfq(rfq_id):

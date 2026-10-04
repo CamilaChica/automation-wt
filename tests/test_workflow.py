@@ -88,14 +88,14 @@ class TestRFQQuoteWorkflow(unittest.TestCase):
             
         asyncio.run(run_scenario())
 
-    def test_unknown_part_starts_supplier_outreach(self):
+    def test_unknown_part_dry_run_does_not_claim_supplier_delivery(self):
         async def run_scenario():
             raw_email = "Part Number: 999-UNKNOWN-01 | Qty: 2. Please source this item."
             rfq = db_service.create_rfq("Delta MRO Services", "procurement@deltamro.com", raw_email)
 
             pipeline_res = await orchestration_service.process_rfq_pipeline(rfq.id)
 
-            self.assertEqual(pipeline_res["status"], "Supplier_Request_Sent")
+            self.assertEqual(pipeline_res["status"], "Supplier_Sourcing")
             self.assertGreaterEqual(pipeline_res["supplier_request_count"], 0)
             self.assertEqual(db_service.get_rfq(rfq.id).status, "Supplier_Sourcing")
             logs = db_service.get_audit_logs(rfq.id)

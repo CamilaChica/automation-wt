@@ -88,6 +88,8 @@ services:
         value: "openai"
       - key: LLM_LIVE_ENABLED
         value: "true"
+      - key: DSPY_ENABLED
+        value: "true"
       - key: LLM_TASK_PROVIDERS
         value: '{"customer_communication":"openai"}'
       - key: LLM_RETRY_ATTEMPTS
@@ -230,6 +232,8 @@ services:
         value: "openai"
       - key: LLM_LIVE_ENABLED
         value: "true"
+      - key: DSPY_ENABLED
+        value: "true"
       - key: LLM_TASK_PROVIDERS
         value: '{"customer_communication":"openai"}'
       - key: LLM_RETRY_ATTEMPTS
@@ -265,6 +269,22 @@ services:
       mountPath: /var/data
       sizeGB: 10
     envVars:
+      - key: WT_ENV
+        value: "production"
+      - key: WT_AUTH_ENV
+        value: "production"
+      - key: OPERATIONAL_POSTGRES_RUNTIME_ENABLED
+        value: "true"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: LLM_DEFAULT_PROVIDER
+        value: "openai"
+      - key: LLM_LIVE_ENABLED
+        value: "true"
+      - key: DSPY_ENABLED
+        value: "true"
+      - key: EMAIL_SEND_ENABLED
+        value: "true"
       - key: INVENTORY_INGESTION_POSTGRES_ENABLED
         value: "true"
       - key: INVENTORY_INGESTION_MAILBOX
@@ -351,6 +371,10 @@ services:
         value: "openai"
       - key: LLM_LIVE_ENABLED
         value: "true"
+      - key: DSPY_ENABLED
+        value: "true"
+      - key: CUSTOMER_PORTAL_ORIGIN
+        value: "https://portal.wingedtycoons.com"
       - key: EMAIL_SEND_ENABLED
         value: "true"
       - key: SALES_EMAIL_USERNAME

@@ -1782,7 +1782,7 @@ def _load_po_attachments(attachment_ids: List[str]) -> List[Dict[str, Any]]:
         if content_type is None:
             raise HTTPException(status_code=400, detail="A purchase-order attachment is not a valid supported document.")
         files.append({
-            "filename": document_path.name,
+            "filename": attachment_service.get_original_filename(attachment_id),
             "content_type": content_type,
             "content": content,
         })
@@ -1893,7 +1893,6 @@ async def submit_purchase_order(
             raise HTTPException(status_code=400, detail="Upload accepted documents (PDF, Word, JPG or PNG) before submitting the purchase order.")
         if attachment_service._detect_type(document_path.suffix.lower(), document_path.read_bytes()) is None:
             raise HTTPException(status_code=400, detail="Each purchase-order document must be a valid PDF, Word, JPG or PNG file.")
-    po_attachments = _load_po_attachments(request.attachment_ids)
     po_attachments = _load_po_attachments(request.attachment_ids)
     previous_po_number = None
     previous_quote_id = None

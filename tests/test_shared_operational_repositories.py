@@ -476,7 +476,7 @@ async def test_async_quote_approval_coordinator_drafts_and_queues_atomically(mon
     repositories = SimpleNamespace(
         records=records,
         quote=SimpleNamespace(approve_for_dispatch=approve),
-        rfq=SimpleNamespace(session=SimpleNamespace(flush=AsyncMock())),
+        rfq=SimpleNamespace(session=SimpleNamespace(flush=AsyncMock()), add_audit_log=AsyncMock()),
     )
     draft = AgentResponse(success=True, data={
         "subject": "Quotation QTE-ASYNC-COORDINATOR",
@@ -493,6 +493,10 @@ async def test_async_quote_approval_coordinator_drafts_and_queues_atomically(mon
     )
     monkeypatch.setattr("services.orchestration_service.db_service.get_rfq_async", AsyncMock(return_value=rfq))
     monkeypatch.setattr(orchestration_service.comm_agent, "execute", generate)
+    monkeypatch.setattr(
+        "services.orchestration_service.email_program_runtime.evaluate_policy",
+        AsyncMock(return_value={"status": "available", "decision": "review"}),
+    )
     monkeypatch.setattr("services.orchestration_service.communication_service.enqueue_customer_quote_async", enqueue)
     monkeypatch.setattr("services.orchestration_service.communication_service.schedule_customer_followups_async", followups)
 
@@ -521,6 +525,8 @@ async def test_async_quote_approval_coordinator_drafts_and_queues_atomically(mon
     records.record_automation_event.assert_awaited_once()
     enqueue.assert_awaited_once()
     followups.assert_awaited_once()
+    repositories.rfq.add_audit_log.assert_awaited_once()
+    assert repositories.rfq.add_audit_log.await_args.kwargs["action_type"] == "quote_policy_advisory"
 
 
 async def test_quote_repository_loads_operational_quote_payload():

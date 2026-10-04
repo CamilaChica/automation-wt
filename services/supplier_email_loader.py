@@ -26,8 +26,11 @@ class SupplierEmailLoader:
         subject = message.get("Subject", "")
         body = self._extract_body(message)
         email_text = f"From: {sender}\nSubject: {subject}\n\n{body}"
+        from services.mailbox_service import _extract_attachments_from_message
+
         return self.ingestion_service.ingest_email(
             email_text,
+            attachments=_extract_attachments_from_message(message),
             message_id=str(message.get("Message-ID") or "").strip() or None,
             source_received_at=_received_at(message.get("Date")),
         )

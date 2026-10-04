@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from services.async_database import create_engine_from_environment, preflight_database, session_scope, upsert_aviation_part, upsert_supplier_quote
 from services.document_parser import build_email_context
+from services.document_verification import compare_documents
 from services.mailbox_service import fetch_inbox_messages
 from services.inbound_email_archive import archive_inbound_message, _received_at
 from services.supplier_database import supplier_db
@@ -35,6 +36,7 @@ logger = logging.getLogger("winged-tycoons-inventory-ingestion")
 
 WAITING_STATUSES = (
     "Supplier_Sourcing",
+    "Sourcing_Failed",
     "No_Quote",
     "Supplier_Confirmation_Requested",
 )
@@ -301,7 +303,23 @@ class InventoryIngestionWorker:
                         attachments=attachments,
                         processing_status="received",
                     )
-                result = await import_inventory_attachments_async(message, self.mailbox, repositories)
+                document_report = await asyncio.to_thread(compare_documents, message.get("attachments") or [])
+                if document_report["discrepancies"]:
+                    result = await self.loader.ingestion_service.ingest_email_async(
+                        str(message.get("body") or ""), repositories,
+                        mailbox=self.mailbox, message_id=message_id or None,
+                        attachments=message.get("attachments") or [],
+                        source_received_at=_received_at(message.get("date")),
+                    )
+                else:
+                    if document_report["documents"]:
+                        await repositories.records.record_automation_event(
+                            event_type="supplier_document_comparison", entity_type="email",
+                            entity_id=message_id, status=document_report["status"],
+                            result=json.dumps(document_report),
+                            idempotency_key=f"supplier-documents:{message_id}",
+                        )
+                    result = await import_inventory_attachments_async(message, self.mailbox, repositories)
                 if result is None:
                     if message_id:
                         await repositories.records.mark_inbound_message_processed(message_id)
@@ -312,6 +330,10 @@ class InventoryIngestionWorker:
                     await self._enqueue_waiting_rfqs_async(repositories, str(part_number))
                 if message_id:
                     await repositories.records.mark_inbound_message_processed(message_id)
+                    if result.get("status") == "Pending_Human_Review":
+                        await repositories.records.set_raw_email_processing_status(
+                            self.mailbox, message_id, "pending_human_review",
+                        )
                 return {"message_id": message_id, "result": result, "success": bool(result.get("success"))}
         except Exception as exc:
             return await self._record_failed_message_async(message, engine, exc)
@@ -374,15 +396,24 @@ class InventoryIngestionWorker:
                         body=str(message.get("body") or ""),
                         raw_mime=message.get("raw_mime"),
                         headers=message.get("headers") or [],
-                        attachments=[],
+                        attachments=[{
+                            "filename": str(item.get("filename") or "attachment"),
+                            "content_type": str(item.get("content_type") or ""),
+                            "size": len(item.get("content") or b""),
+                        } for item in message.get("attachments") or []],
                         processing_status="processing",
                     )
                 result = await self.loader.ingestion_service.ingest_email_async(
-                    self._email_text(message),
+                    (
+                        f"From: {message.get('from', '')}\n"
+                        f"Subject: {message.get('subject', '')}\n\n"
+                        f"{message.get('body', '')}"
+                    ),
                     repositories,
                     mailbox=self.mailbox,
                     message_id=message_id or None,
                     source_received_at=_received_at(message.get("date")),
+                    attachments=message.get("attachments") or [],
                 )
                 if not result.get("success") and "no part number" in str(result.get("error", "")).lower():
                     pdf_attachments = [
@@ -468,6 +499,26 @@ class InventoryIngestionWorker:
         if not body and not message.get("attachments"):
             return {"success": False, "skipped": True, "error": "Message has no body or attachments."}
 
+        def import_with_document_check():
+            if not has_inventory_table_attachments(message):
+                return None
+            document_report = compare_documents(message.get("attachments") or [])
+            certificate_documents = [document for document in document_report["documents"] if document["certificate_candidate"]]
+            if certificate_documents and document_report["discrepancies"]:
+                return self.loader.load_raw_email_text(
+                    self._email_text(message), mailbox=self.mailbox,
+                    message_id=message_id or None, attachments=message.get("attachments") or [],
+                    source_received_at=_received_at(message.get("date")),
+                )
+            if certificate_documents:
+                operations_store.record_automation_event(
+                    event_type="supplier_document_comparison", entity_type="email",
+                    entity_id=message_id, status=document_report["status"],
+                    result=json.dumps(document_report),
+                    idempotency_key=f"supplier-documents:{message_id}",
+                )
+            return import_inventory_attachments(message, self.mailbox)
+
         if postgres_mode and message_id:
             with operations_store.transaction() as connection:
                 if not operations_store.claim_inbound_message(message_id, self.mailbox, internet_message_id):
@@ -476,7 +527,7 @@ class InventoryIngestionWorker:
                 savepoint = connection.begin_nested() if hasattr(connection, "begin_nested") else _NullSavepoint()
                 try:
                     archive_inbound_message(message, self.mailbox)
-                    result = import_inventory_attachments(message, self.mailbox)
+                    result = import_with_document_check()
                     if result is None:
                         result = self.loader.load_raw_email_text(
                             self._email_text(message),
@@ -503,7 +554,7 @@ class InventoryIngestionWorker:
             if message_id and not operations_store.claim_inbound_message(message_id, self.mailbox, internet_message_id):
                 return {"success": True, "skipped": True, "message_id": message_id}
             archive_inbound_message(message, self.mailbox)
-            result = import_inventory_attachments(message, self.mailbox)
+            result = import_with_document_check()
             if result is None:
                 result = self.loader.load_raw_email_text(
                     self._email_text(message),

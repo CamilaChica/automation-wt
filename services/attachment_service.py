@@ -63,7 +63,18 @@ class AttachmentService:
             return AttachmentRecord(attachment_id=attachment_id, filename=safe_name, content_type=content_type, size_bytes=len(content), sha256=digest, status="REJECTED", warning="Unsupported or invalid file. Please upload a PDF, Word (.docx/.doc), CSV, Excel (.xlsx/.xls), JPG or PNG file.")
         target = self.storage_dir / f"{attachment_id}{suffix}"
         target.write_bytes(content)
+        target.with_suffix(suffix + ".name").write_text(safe_name, encoding="utf-8")
         return AttachmentRecord(attachment_id=attachment_id, filename=safe_name, content_type=detected_type, size_bytes=len(content), sha256=digest, stored_path=str(target), status="ACCEPTED")
+
+    def get_original_filename(self, attachment_id: str) -> str:
+        path = self.get_stored_path(attachment_id)
+        if path is None:
+            raise ValueError("Attachment is no longer available.")
+        metadata = path.with_suffix(path.suffix + ".name")
+        if not metadata.is_file():
+            return path.name
+        name = metadata.read_text(encoding="utf-8").strip()
+        return re.sub(r"[^A-Za-z0-9._ -]", "_", Path(name).name)[:200] or path.name
 
     @staticmethod
     def _detect_type(suffix: str, content: bytes) -> str | None:

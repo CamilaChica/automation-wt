@@ -14,7 +14,8 @@ from urllib.parse import urlsplit
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import or_, select, text
+from sqlalchemy import create_engine, or_, select, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -48,6 +49,24 @@ def create_engine_from_environment() -> AsyncEngine:
         url, os.getenv("WT_ENV", os.getenv("WT_AUTH_ENV", "development"))
     )
     return create_async_engine(url, pool_pre_ping=True, pool_recycle=1800)
+
+
+def create_sync_engine_from_environment() -> Engine:
+    url = _database_url()
+    if not url:
+        raise RuntimeError("DATABASE_URL is required for the PostgreSQL persistence layer.")
+    if url.startswith("postgresql+asyncpg://"):
+        url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+    elif url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    elif url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql+psycopg2://", 1)
+    else:
+        raise RuntimeError("Business policy retrieval requires a PostgreSQL DATABASE_URL.")
+    validate_development_database_target(
+        url, os.getenv("WT_ENV", os.getenv("WT_AUTH_ENV", "development"))
+    )
+    return create_engine(url, pool_pre_ping=True, pool_recycle=1800)
 
 
 async def preflight_database(engine: AsyncEngine | None = None) -> None:

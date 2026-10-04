@@ -19,6 +19,7 @@ from services.storage import storage_service
 from services.agents.prompts import AgentPipelineState
 from services.operations_store import operations_store
 from services.supplier_database import supplier_db
+from services.email_program_runtime import email_program_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,89 @@ class OrchestrationService:
         if "8130" in text:
             return "FAA 8130-3"
         return None
+
+    async def _request_partsbase_quote(self, rfq_id: str, part_number: str, quantity: int) -> Dict[str, Any]:
+        from services import partsbase_service
+
+        part = str(part_number or "").strip().upper()
+        if not part or quantity < 1:
+            raise ValueError("PartsBase sourcing requires a part number and positive requested quantity.")
+        request_key = f"{part}:{quantity}"
+        state = self._load_pipeline_state(rfq_id)
+        submissions = dict(state.get("partsbase_submissions") or {})
+        previous = submissions.get(request_key)
+        if previous:
+            return {**previous, "reused": True}
+
+        if not partsbase_service.credentials_configured():
+            result = {
+                "part_number": part,
+                "quantity": quantity,
+                "status": "not_configured",
+                "error": "PartsBase credentials are not configured.",
+            }
+            db_service.add_audit_log(
+                rfq_id, "PartsBase", "rfq_submission",
+                "Automatic PartsBase RFQ was not sent because server credentials are not configured.",
+                "WARNING", json.dumps(result),
+            )
+            operations_store.enqueue_operator_review(
+                idempotency_key=f"partsbase-config:{rfq_id}:{request_key}",
+                task="partsbase_configuration",
+                source_text=part,
+                extraction={"rfq_id": rfq_id, "part_number": part, "quantity": quantity},
+                reason=result["error"],
+                entity_id=rfq_id,
+            )
+            return result
+
+        submissions[request_key] = {
+            "part_number": part,
+            "quantity": quantity,
+            "status": "submitting",
+        }
+        self._save_pipeline_state(rfq_id, partsbase_submissions=submissions)
+        try:
+            response = await partsbase_service.request_partsbase_quote(
+                [part], quantities={part: quantity}
+            )
+        except Exception as exc:
+            result = {
+                "part_number": part,
+                "quantity": quantity,
+                "status": "submission_unknown",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            logger.exception("PartsBase RFQ submission failed rfq=%s part=%s", rfq_id, part)
+            operations_store.enqueue_operator_review(
+                idempotency_key=f"partsbase-submit:{rfq_id}:{request_key}",
+                task="partsbase_rfq_submission",
+                source_text=part,
+                extraction={"rfq_id": rfq_id, "part_number": part, "quantity": quantity},
+                reason=result["error"],
+                entity_id=rfq_id,
+            )
+            status = "FAILURE"
+        else:
+            result = {
+                "part_number": part,
+                "quantity": quantity,
+                "status": "sent",
+                "response": response,
+            }
+            status = "PENDING"
+        submissions[request_key] = result
+        self._save_pipeline_state(rfq_id, partsbase_submissions=submissions)
+        db_service.add_audit_log(
+            rfq_id, "PartsBase", "rfq_submission",
+            (
+                f"PartsBase RFQ submitted for {part}, quantity {quantity}; awaiting a supplier response."
+                if status == "PENDING"
+                else f"PartsBase submission outcome is unknown for {part}, quantity {quantity}; operator review is required."
+            ),
+            status, json.dumps(result),
+        )
+        return result
 
     @classmethod
     def calculate_pricing(
@@ -413,7 +497,7 @@ class OrchestrationService:
                 "rfq_id": rfq_id,
                 "reason": rfq.pause_reason or "Paused by an operator.",
             }
-        if rfq.status == "Supplier_Confirmation_Requested":
+        if rfq.status in {"Supplier_Confirmation_Requested", "Sourcing_Failed"}:
             db_service.update_rfq_status(rfq_id, "Supplier_Sourcing")
             rfq = db_service.get_rfq(rfq_id)
 
@@ -550,6 +634,7 @@ class OrchestrationService:
                                     self._requested_certification(rfq.raw_text)
                                     or "Applicable airworthiness certification"
                                 ),
+                                rfq_id=rfq_id,
                             )
                             db_service.add_audit_log(
                                 rfq_id, "SupplierCommunicationAgent", "supplier_rfq_dispatch",
@@ -557,11 +642,32 @@ class OrchestrationService:
                                 "PENDING" if operations_store.storage_engine == "postgresql" else "SUCCESS" if request_results else "WARNING",
                                 json.dumps(request_results),
                             )
+                        db_service.resolve_rfq_item(item.id, item.requested_part_number)
+                        partsbase_request = await self._request_partsbase_quote(
+                            rfq_id, item.requested_part_number, item.quantity
+                        )
+                        contact_queued = any(
+                            result.get("transmission_status") in {"SENT", "PENDING", "QUEUED"}
+                            for result in request_results
+                        ) or partsbase_request.get("status") == "sent"
+                        communication_service.send_rfq_sourcing_update(
+                            recipient=rfq.customer_email,
+                            customer_name=rfq.customer_name,
+                            rfq_id=rfq_id,
+                            part_number=item.requested_part_number,
+                            reply_to=rfq.thread_id,
+                            supplier_contact_queued=contact_queued,
+                        )
                         return {
-                            "status": "Supplier_Request_Sent",
-                            "message": f"Part '{item.requested_part_number}' is not in the internal catalog. Supplier outreach was initiated.",
+                            "status": "Supplier_Request_Sent" if contact_queued else "Supplier_Sourcing",
+                            "message": (
+                                f"Part '{item.requested_part_number}' is not in the internal catalog. "
+                                + ("Supplier outreach was queued or submitted." if contact_queued else
+                                   "No supplier request was queued; sourcing configuration requires review.")
+                            ),
                             "supplier_request_count": len(request_results),
                             "supplier_requests": request_results,
+                            "partsbase_request": partsbase_request,
                         }
                     db_service.update_rfq_status(rfq_id, "Verification_Halted")
                     db_service.add_audit_log(
@@ -643,8 +749,12 @@ class OrchestrationService:
                                         part_number=item.resolved_part_number,
                                         quantity=shortage_qty,
                                         reply_to=offer.get("source_email_id"),
+                                        rfq_id=rfq_id,
                                     )
                                 )
+                            partsbase_request = await self._request_partsbase_quote(
+                                rfq_id, item.resolved_part_number, item.quantity
+                            )
                             db_service.add_audit_log(
                                 rfq_id, "SupplierCommunicationAgent", "supplier_availability_confirmation",
                                 f"Requested current availability from {len(confirmations)} supplier(s) using previous quote threads.",
@@ -667,13 +777,15 @@ class OrchestrationService:
                                 supplier_contact_queued=any(
                                     result.get("transmission_status") in {"SENT", "PENDING", "QUEUED"}
                                     for result in confirmations
-                                ),
+                                ) or partsbase_request.get("status") == "sent",
                             )
+                            db_service.update_rfq_status(rfq_id, "Supplier_Confirmation_Requested")
                             return {
                                 "status": "Supplier_Confirmation_Requested",
                                 "error": f"All stored supplier quotes for '{item.resolved_part_number}' are older than 30 days.",
                                 "supplier_confirmation_count": len(confirmations),
                                 "supplier_confirmations": confirmations,
+                                "partsbase_request": partsbase_request,
                             }
                         transaction = operations_store.transaction() if operations_store.storage_engine == "postgresql" else nullcontext()
                         with transaction:
@@ -682,6 +794,7 @@ class OrchestrationService:
                                 shortage_qty,
                                 condition_requested=item.condition_preference or "NE",
                                 certification_requested=self._requested_certification(rfq.raw_text),
+                                rfq_id=rfq_id,
                             )
                             db_service.update_rfq_status(rfq_id, "Sourcing_Failed")
                             db_service.add_audit_log(
@@ -695,6 +808,9 @@ class OrchestrationService:
                                 "PENDING" if operations_store.storage_engine == "postgresql" else "SUCCESS" if request_results else "WARNING",
                                 json.dumps(request_results),
                             )
+                        partsbase_request = await self._request_partsbase_quote(
+                            rfq_id, item.resolved_part_number, item.quantity
+                        )
                         communication_service.send_rfq_sourcing_update(
                             recipient=rfq.customer_email,
                             customer_name=rfq.customer_name,
@@ -704,13 +820,14 @@ class OrchestrationService:
                             supplier_contact_queued=any(
                                 result.get("transmission_status") in {"SENT", "PENDING", "QUEUED"}
                                 for result in request_results
-                            ),
+                            ) or partsbase_request.get("status") == "sent",
                         )
                         return {
                             "status": "Sourcing_Failed",
                             "error": f"Sourcing failed: {sup_res.error_message}",
                             "supplier_request_count": len(request_results),
                             "supplier_requests": request_results,
+                            "partsbase_request": partsbase_request,
                             "escalation": sup_res.escalation_triggered
                         }
 
@@ -1037,8 +1154,51 @@ class OrchestrationService:
             )
             return {"status": status, "quote_id": quote.id, "email_body": communication_result.data.get("formatted_body")}
 
+    async def _record_quote_policy_advisory(
+        self, rfq_id: str, quote: Any, items: list, *, repositories=None,
+        operator_name: str | None = None,
+    ) -> dict:
+        def value(record, name):
+            return record.get(name) if isinstance(record, dict) else getattr(record, name, None)
+
+        facts = {
+            "quote_id": value(quote, "id"),
+            "total_amount": value(quote, "total_amount"),
+            "quote_status": value(quote, "status"),
+            "operator_name": operator_name,
+            "dispatch_authority": "existing_backend_approval_workflow",
+            "items": [{
+                "part_number": value(item, "part_number"),
+                "quantity": value(item, "quantity"),
+                "unit_cost": value(item, "unit_cost"),
+                "unit_price": value(item, "unit_price"),
+                "margin_percent": value(item, "margin_percent"),
+                "compliance_status": value(item, "compliance_status"),
+            } for item in items],
+            "extraction_confidence": value(quote, "extraction_confidence"),
+            "sanctions_clear": value(quote, "sanctions_clear"),
+        }
+        advisory = await email_program_runtime.evaluate_policy(facts)
+        audit = {
+            "rfq_id": rfq_id,
+            "agent_name": "PolicyEvaluation",
+            "action_type": "quote_policy_advisory",
+            "message": f"Advisory policy evaluation: {advisory['status']}; dispatch authority is unchanged.",
+            "status": "WARNING" if advisory["status"] == "unavailable" else "INFO",
+            "payload_json": json.dumps(advisory),
+        }
+        if repositories is None:
+            db_service.add_audit_log(
+                rfq_id, audit["agent_name"], audit["action_type"], audit["message"],
+                audit["status"], audit["payload_json"],
+            )
+        else:
+            await repositories.rfq.add_audit_log(**audit)
+        return advisory
+
     async def _dispatch_customer_quote(self, rfq: Any, quote: Any) -> AgentResponse:
         quote_items = db_service.get_quote_items(quote.id)
+        await self._record_quote_policy_advisory(rfq.id, quote, quote_items)
         try:
             transmission = communication_service.send_customer_quote(
                 recipient=rfq.customer_email,
@@ -1178,6 +1338,10 @@ class OrchestrationService:
                 payload_json=json.dumps({"error": draft_result.error_message}),
             )
 
+        await self._record_quote_policy_advisory(
+            rfq_id, {**quote_payload, "id": quote_id}, updated_items,
+            repositories=repositories, operator_name=operator_name,
+        )
         if not await repositories.quote.approve_for_dispatch(
             quote_id=quote_id,
             rfq_id=rfq_id,
@@ -1294,6 +1458,9 @@ class OrchestrationService:
         # Render commercial details only from the persisted quote record.
         rfq = db_service.get_rfq(rfq_id)
         quote_items = db_service.get_quote_items(quote_id)
+        await self._record_quote_policy_advisory(
+            rfq_id, quote, quote_items, operator_name=operator_name,
+        )
         try:
             transmission = communication_service.send_customer_quote(
                 recipient=rfq.customer_email,

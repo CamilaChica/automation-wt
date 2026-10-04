@@ -2,7 +2,7 @@
 
 The single ordered release plan is [PRODUCTION_AUTOMATION_PLAN.md](PRODUCTION_AUTOMATION_PLAN.md). This file contains operational guidance only; do not maintain a separate launch checklist here.
 
-Production is currently blocked by `/ready` HTTP 503. The production schema is verified at `0009_prompt_rag_storage`; do not run migrations or seed commands as routine deployment steps. Use [RENDER_SHELL_RUNBOOK.md](RENDER_SHELL_RUNBOOK.md) for authorized read-only checks.
+The production `/ready` read-only check on 2026-10-04 confirmed healthy PostgreSQL at `0012_supplier_offer_received_at` with full operational persistence. This release adds the reviewed, additive migration `0013_database_business_policies`; it creates and seeds an advisory-policy table without changing existing business records. Render's existing API pre-deploy command runs `alembic upgrade head`. Confirm successful rollout from `/ready` current/expected revision `0013_database_business_policies` and each existing service's deployed commit. Preserve managed database backups and the previous release for recovery. Use [RENDER_SHELL_RUNBOOK.md](RENDER_SHELL_RUNBOOK.md) for read-only checks.
 
 ## Rollback Procedure
 

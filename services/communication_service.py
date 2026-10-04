@@ -36,6 +36,8 @@ from services.email_templates import (
 from services.mailbox_service import MAILBOXES, ensure_staging_recipient_allowed, send_message
 from services.operations_store import operations_store
 from services.supplier_database import supplier_db
+from services.email_program_runtime import email_program_runtime
+from services.document_verification import compare_documents
 
 logger = logging.getLogger(__name__)
 
@@ -89,29 +91,29 @@ def _source_documents_for_customer_request(question: str, items: list[Any]) -> l
     from services.mailbox_service import _extract_attachments_from_message
 
     allowed_extensions = {".pdf", ".doc", ".docx", ".jpg", ".jpeg", ".png"}
-    document_terms = re.compile(
-        r"(certificate|cert|trace|8130|easa|form.?1|release|conformity|logbook|back.?to.?birth)",
-        re.I,
-    )
     selected: list[dict[str, Any]] = []
     seen: set[str] = set()
     total_bytes = 0
-    for item in items:
+    def item_value(item, key):
+        return item.get(key) if isinstance(item, dict) else getattr(item, key, None)
+
+    specifically_requested = [
+        item for item in items
+        if str(item_value(item, "part_number") or "").strip()
+        and re.search(
+            r"(?<![A-Z0-9._/-])" + re.escape(str(item_value(item, "part_number")).strip())
+            + r"(?![A-Z0-9._/-])", question, re.I,
+        )
+    ]
+    for item in specifically_requested or items:
         source_message_id = item.get("source_email_id") if isinstance(item, dict) else getattr(item, "source_email_id", None)
-        document_names = item.get("trace_documents") if isinstance(item, dict) else getattr(item, "trace_documents", None)
-        if isinstance(document_names, str):
-            try:
-                document_names = json.loads(document_names)
-            except json.JSONDecodeError:
-                document_names = [document_names]
-        if not isinstance(document_names, (list, tuple)):
-            document_names = []
         if not source_message_id:
-            continue
+            raise ValueError("requested_document_unavailable_from_verified_supplier_source")
         raw_mime = operations_store.get_raw_email_mime(str(source_message_id), mailbox="purchasing")
         if not raw_mime:
-            continue
+            raise ValueError("requested_document_unavailable_from_verified_supplier_source")
         message = email.message_from_bytes(raw_mime)
+        candidates = []
         for attachment in _extract_attachments_from_message(message):
             filename = str(attachment.get("filename") or "")
             content = attachment.get("content")
@@ -119,12 +121,34 @@ def _source_documents_for_customer_request(question: str, items: list[Any]) -> l
             if (
                 not content
                 or os.path.splitext(normalized_name)[1] not in allowed_extensions
-                or not (
-                    document_terms.search(normalized_name)
-                    or any(str(name).casefold() in normalized_name for name in document_names)
-                )
             ):
                 continue
+            candidates.append(attachment)
+        expected_part = str(item_value(item, "part_number") or "").strip()
+        if not expected_part:
+            raise ValueError("requested_document_unavailable_from_verified_supplier_source")
+        comparison = compare_documents(
+            candidates, expected_part_number=expected_part,
+            expected_serial_number=item_value(item, "serial_number"),
+        )
+        item_selected = False
+        for attachment, document in zip(candidates, comparison["documents"]):
+            if (
+                document["read_status"] != "READABLE"
+                or document["facts"].get("part_number") != expected_part.upper()
+                or document["ambiguous_fields"]
+                or document["document_type"] == "UNKNOWN"
+                or any(discrepancy.startswith(document["filename"] + ":") for discrepancy in comparison["discrepancies"])
+                or any(discrepancy.startswith(expected_part.upper() + ":") for discrepancy in comparison["discrepancies"])
+                or re.search(
+                    r"(?:unit\s*(?:price|cost)|total\s*(?:price|amount)|quotation|\$\s*\d)",
+                    document["text"], re.I,
+                )
+            ):
+                logger.warning("supplier_document_not_released filename=%s part=%s", document["filename"], expected_part)
+                continue
+            content = attachment["content"]
+            item_selected = True
             digest = hashlib.sha256(content).hexdigest()
             if digest in seen:
                 continue
@@ -133,6 +157,8 @@ def _source_documents_for_customer_request(question: str, items: list[Any]) -> l
                 raise ValueError("Requested supplier documents exceed the 25 MB email attachment limit.")
             selected.append(attachment)
             seen.add(digest)
+        if not item_selected:
+            raise ValueError("requested_document_unavailable_from_verified_supplier_source")
     if not selected:
         raise ValueError("requested_document_unavailable_from_verified_supplier_source")
     return selected
@@ -294,6 +320,8 @@ class CommunicationService:
         reply_to: Optional[str] = None,
         condition_requested: str = "NE",
         certification_requested: str = "FAA 8130-3",
+        *,
+        rfq_id: str | None = None,
     ) -> List[Dict[str, Any]]:
         suppliers = (
             operations_store.list_suppliers()
@@ -322,15 +350,37 @@ class CommunicationService:
                 part_number=part_number.upper(),
                 quantity=quantity,
                 condition_requested=condition_requested,
-                certification_requested=certification_requested,
+                certification_requested=certification_requested or "Applicable airworthiness certification",
             ))
             prepare_and_validate_email(
-                rfq_id=f"RFQ-{part_number.upper()}",
+                rfq_id=rfq_id or f"RFQ-{part_number.upper()}",
                 recipient_email=recipient,
                 subject=template.subject,
                 part_rows=[{"part_number": part_number, "description": part_number, "quantity": quantity, "unit_price": None}],
             )
-            results.append(self._send("purchasing", recipient, template.subject, template.body, reply_to=reply_to))
+            fields = list(SUPPLIER_QUOTE_FIELDS)
+            draft = email_program_runtime.draft_supplier_request(
+                template.subject, template.body, part_number, fields,
+            )
+            outreach_key = hashlib.sha256(json.dumps({
+                "rfq_id": rfq_id,
+                "part_number": part_number.strip().upper(),
+                "recipient": recipient.strip().lower(),
+                "quantity": quantity,
+                "condition": condition_requested,
+                "certification": certification_requested,
+            }, sort_keys=True).encode("utf-8")).hexdigest() if rfq_id else None
+            result = self._send(
+                "purchasing", recipient, draft["subject"], draft["body"], reply_to=reply_to,
+                entity_id=rfq_id,
+                deduplication_key=f"supplier-rfq:{outreach_key}" if outreach_key else None,
+            )
+            result["draft_generation"] = {
+                key: value for key, value in draft.items() if key not in {"subject", "body"}
+            }
+            results.append(result)
+        if not recipients:
+            logger.warning("supplier_outreach_has_no_configured_recipients rfq=%s part=%s", rfq_id, part_number)
         return results
 
     def request_missing_supplier_fields(
@@ -342,10 +392,13 @@ class CommunicationService:
     ) -> Dict[str, Any]:
         subject = f"Re: RFQ request: {part_number.upper()} - information needed"
         body = self._missing_fields_request(part_number, missing_fields)
-        return self._send(
-            "purchasing", recipient, subject, body, reply_to=reply_to,
+        draft = email_program_runtime.draft_supplier_request(subject, body, part_number, missing_fields)
+        result = self._send(
+            "purchasing", recipient, draft["subject"], draft["body"], reply_to=reply_to,
             deduplication_key=self._supplier_info_key(recipient, part_number),
         )
+        result["draft_generation"] = {key: value for key, value in draft.items() if key not in {"subject", "body"}}
+        return result
 
     @staticmethod
     def _supplier_info_key(recipient: str, part_number: str) -> str:
@@ -368,14 +421,26 @@ class CommunicationService:
         subject = f"Re: RFQ request: {part_number.upper()} - information needed"
         body = self._missing_fields_request(part_number, missing_fields)
         key = self._supplier_info_key(recipient, part_number)
+        draft = await asyncio.to_thread(
+            email_program_runtime.draft_supplier_request, subject, body, part_number, missing_fields
+        )
         queued = await repositories.records.enqueue_outbox_message(
             deduplication_key=key,
             mailbox="purchasing",
             recipient=recipient,
-            subject=subject,
-            body=body,
+            subject=draft["subject"],
+            body=draft["body"],
             reply_to=reply_to,
             entity_id=entity_id,
+        )
+        draft_generation = {key: value for key, value in draft.items() if key not in {"subject", "body"}}
+        await repositories.records.record_automation_event(
+            idempotency_key=f"{key}:draft",
+            event_type="supplier_email_draft",
+            entity_type="supplier_communication",
+            entity_id=entity_id or queued["id"],
+            status=draft["status"],
+            result=json.dumps(draft_generation),
         )
         return {
             "mailbox": "purchasing",
@@ -385,6 +450,7 @@ class CommunicationService:
             "transmission_status": queued["status"],
             "communication_id": queued["id"],
             "outbox_id": queued["id"],
+            "draft_generation": draft_generation,
         }
 
     def request_stale_supplier_confirmation(
@@ -394,6 +460,8 @@ class CommunicationService:
         part_number: str,
         quantity: int,
         reply_to: Optional[str] = None,
+        *,
+        rfq_id: str | None = None,
     ) -> Dict[str, Any]:
         subject = f"Re: Quote confirmation request - {part_number.upper()}"
         body = (
@@ -404,7 +472,22 @@ class CommunicationService:
             "If any detail has changed, please provide the updated value and attach the applicable trace documentation.\n\n"
             "Best regards,\nWinged Tycoons Purchasing Team"
         )
-        return self._send("purchasing", recipient, subject, body, reply_to=reply_to)
+        draft = email_program_runtime.draft_supplier_request(
+            subject, body, part_number,
+            ["availability", "price", "condition", "certification", "lead time", "quote validity"],
+        )
+        key = hashlib.sha256(json.dumps(
+            [rfq_id, recipient.strip().lower(), part_number.strip().upper(), quantity, reply_to],
+        ).encode("utf-8")).hexdigest() if rfq_id else None
+        result = self._send(
+            "purchasing", recipient, draft["subject"], draft["body"], reply_to=reply_to,
+            entity_id=rfq_id,
+            deduplication_key=f"supplier-confirm:{key}" if key else None,
+        )
+        result["draft_generation"] = {
+            key: value for key, value in draft.items() if key not in {"subject", "body"}
+        }
+        return result
 
     def request_supplier_body_quote(
         self,

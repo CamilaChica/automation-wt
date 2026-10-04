@@ -122,7 +122,12 @@ class OpenAIProvider(LLMProvider):
         }
         if request.response_format == "json":
             payload["response_format"] = {"type": "json_object"}
-        data = _post_json(f"{self.base_url}/chat/completions", {"Authorization": f"Bearer {self._key()}"}, payload, request.timeout_seconds)
+        data = _post_json(
+            f"{self.base_url}/chat/completions",
+            {"Authorization": f"Bearer {self._key()}"},
+            payload,
+            request.timeout_seconds,
+        )
         return LLMResponse(self.name, model, data["choices"][0]["message"]["content"], data)
 
     def _key(self) -> str:
@@ -244,6 +249,50 @@ class LLMRouter:
         provider_override: str | None = None,
     ) -> tuple[StructuredModel, LLMResponse]:
         """Return validated structured output together with provider telemetry."""
+        if (
+            request.task in {
+                "rfq_extraction",
+                "supplier_quote_extraction",
+                "customer_communication",
+                "supplier_communication",
+                "policy_evaluation",
+            }
+            and os.getenv("DSPY_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+        ):
+            from services.dspy_email_programs import predict_structured
+
+            current_request = request
+            last_response: LLMResponse | None = None
+            last_error: Exception | None = None
+            for _attempt in range(max_attempts):
+                try:
+                    raw_result, last_response = predict_structured(
+                        self,
+                        current_request,
+                        schema,
+                        provider_override=provider_override,
+                    )
+                    return schema.model_validate(raw_result), last_response
+                except (ValueError, ValidationError, TypeError) as exc:
+                    last_error = exc
+                    current_request = LLMRequest(
+                        task=request.task,
+                        system_prompt=request.system_prompt,
+                        user_prompt=json.dumps({
+                            "original_untrusted_request": request.user_prompt,
+                            "schema_validation_diagnostic": str(exc),
+                        }, ensure_ascii=False),
+                        model=request.model,
+                        temperature=request.temperature,
+                        timeout_seconds=request.timeout_seconds,
+                        top_p=request.top_p,
+                        max_tokens=request.max_tokens,
+                        response_format=request.response_format,
+                    )
+            raise StructuredOutputError(
+                f"DSPy structured extraction failed after {max_attempts} attempts: {last_error}",
+                last_response,
+            ) from last_error
         last_error: Exception | None = None
         current_request = _with_structured_contract(request, schema)
         last_response: LLMResponse | None = None

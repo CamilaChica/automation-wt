@@ -18,6 +18,25 @@ class ResolutionHypothesis(BaseModel):
     source_snippets: List[str] = Field(default_factory=list)
 
 
+class PolicyEvaluationRecommendation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["approve", "reject", "review"]
+    rationale: str = Field(min_length=1)
+    policy_keys: List[str] = Field(default_factory=list)
+    missing_evidence: List[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class SupplierEmailDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    subject: str = Field(min_length=5, max_length=200)
+    body_text: str = Field(min_length=20)
+    requested_fields: List[str] = Field(default_factory=list)
+    confidence_score: float = Field(ge=0.0, le=1.0)
+
+
 class RFQExtractionResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

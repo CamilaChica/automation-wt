@@ -7,6 +7,7 @@ contacts OpenAI, Anthropic, or Google.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import unittest
@@ -14,6 +15,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 from pydantic import BaseModel, Field
+from core.policy_engine import AutonomousPolicyGate, QuotePayload
+from services.communication_service import CommunicationService
+from services.email_program_runtime import EmailProgramRuntime
 
 from services.llm_provider import (
     AnthropicProvider,
@@ -292,6 +296,36 @@ def test_configured_provider_can_be_reached():
 
     assert response.provider == provider_name
     assert response.text.strip()
+
+
+@pytest.mark.live_llm
+def test_real_dspy_database_policy_evaluation_keeps_backend_authority():
+    assert os.getenv("DSPY_ENABLED", "").lower() in {"true", "1", "yes", "on"}
+    quote = QuotePayload(
+        extraction_confidence=0.99, gross_margin=0.10, total_amount=1000,
+        compliance_status="APPROVED", sanctions_clear=True,
+    )
+    backend_decision = AutonomousPolicyGate().evaluate_auto_dispatch(quote)
+    result = asyncio.run(EmailProgramRuntime(LLMRouter()).evaluate_policy({
+        **quote.model_dump(), "backend_decision": backend_decision.model_dump(),
+    }))
+    assert result["status"] == "available", result
+    assert result["decision"] in {"review", "reject"}
+    assert "automatic_quote_dispatch" in result["policy_keys"]
+    assert backend_decision.can_auto_dispatch is False
+
+
+@pytest.mark.live_llm
+def test_real_dspy_supplier_draft_preserves_synthetic_business_facts():
+    assert os.getenv("DSPY_ENABLED", "").lower() in {"true", "1", "yes", "on"}
+    fields = ["release certificate", "quantity available"]
+    body = CommunicationService()._missing_fields_request("SYNTHETIC-001", fields)
+    result = EmailProgramRuntime(LLMRouter()).draft_supplier_request(
+        "Synthetic supplier information request", body, "SYNTHETIC-001", fields,
+    )
+    assert result["status"] == "available", result
+    assert "SYNTHETIC-001" in result["body"]
+    assert all(field in result["body"] for field in fields)
 
 
 if __name__ == "__main__":

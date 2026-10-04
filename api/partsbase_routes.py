@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 from api.auth import require_roles
 from services import partsbase_service
+from services.db_service import db_service
 
 router = APIRouter()
 
@@ -11,6 +12,7 @@ PARTSBASE_ROLES = ("ROLE_INTERNAL", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_PURCHASI
 
 class PartsBaseQuoteRequest(BaseModel):
     part_numbers: list[str] | str
+    quantities: dict[str, int] | None = None
 
 
 @router.post("/api/internal/rfqs/{rfq_id}/partsbase-quote", status_code=202)
@@ -22,11 +24,30 @@ async def request_partsbase_quote(
 ):
     try:
         parts = partsbase_service.normalize_part_numbers(request.part_numbers)
+        requested_quantities = request.quantities
+        if requested_quantities is None:
+            quantities_by_part: dict[str, list[int]] = {part: [] for part in parts}
+            for item in db_service.get_rfq_items(rfq_id):
+                item_parts = {
+                    str(item.requested_part_number or "").strip().upper(),
+                    str(item.resolved_part_number or "").strip().upper(),
+                }
+                for part in parts:
+                    if part in item_parts:
+                        quantities_by_part[part].append(item.quantity)
+            if any(len(values) != 1 for values in quantities_by_part.values()):
+                raise ValueError(
+                    "Provide a quantity for each part unless it matches exactly one part on the RFQ."
+                )
+            requested_quantities = {
+                part: values[0] for part, values in quantities_by_part.items()
+            }
+        quantities = partsbase_service.normalize_quantities(parts, requested_quantities)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not partsbase_service.credentials_configured():
         raise HTTPException(status_code=503, detail="PartsBase login is not configured on the server.")
-    job = partsbase_service.start_job(rfq_id, parts, user.get("email", ""))
+    job = partsbase_service.start_job(rfq_id, parts, quantities, user.get("email", ""))
     background_tasks.add_task(partsbase_service.run_job, job["job_id"])
     return job
 

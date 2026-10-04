@@ -6,6 +6,8 @@ from core.orchestrator.event_bus import SwarmEventBus
 from core.policy_engine import AutonomousPolicyGate, QuotePayload
 from schemas.events import SwarmEvent
 from services.hitl_queue import HumanEscalationQueue
+from services.llm_provider import LLMRouter
+from services.email_program_runtime import EmailProgramRuntime
 
 
 class PolicyEventHandler:
@@ -16,10 +18,12 @@ class PolicyEventHandler:
         event_bus: SwarmEventBus,
         hitl_queue: HumanEscalationQueue,
         policy_gate: Optional[AutonomousPolicyGate] = None,
+        llm_router: LLMRouter | None = None,
     ) -> None:
         self.event_bus = event_bus
         self.hitl_queue = hitl_queue
         self.policy_gate = policy_gate or AutonomousPolicyGate()
+        self.email_programs = EmailProgramRuntime(llm_router)
         event_bus.subscribe("event.quote.generated", self.handle)
 
     async def handle(self, event: SwarmEvent) -> None:
@@ -46,6 +50,17 @@ class PolicyEventHandler:
             "escalation_reasons": decision.escalation_reasons,
             "quote_id": quote_data.get("quote_id"),
             "source_event_id": event.event_id,
+            "advisory_policy_recommendation": await self._evaluate_policy_advisory({
+                **quote_data,
+                "extraction_confidence": quote_payload.extraction_confidence,
+                "gross_margin": quote_payload.gross_margin,
+                "total_amount": quote_payload.total_amount,
+                "compliance_status": quote_payload.compliance_status,
+                "sanctions_hits": quote_payload.sanctions_hits,
+                "sanctions_clear": quote_payload.sanctions_clear,
+                "compliance_checks": quote_payload.compliance_checks,
+                "backend_decision": decision.model_dump(),
+            }),
         }
         decision_event = SwarmEvent(
             event_type="event.policy.decided",
@@ -74,6 +89,9 @@ class PolicyEventHandler:
             )
             await self.hitl_queue.enqueue(escalation)
             await self.event_bus.publish(escalation)
+
+    async def _evaluate_policy_advisory(self, case_data: dict[str, Any]) -> dict[str, Any]:
+        return await self.email_programs.evaluate_policy(case_data)
 
 
 class DispatchSafetyHandler:
