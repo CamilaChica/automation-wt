@@ -5,6 +5,7 @@ import base64
 import email
 import html as html_lib
 import logging
+import math
 import os
 import re
 import json
@@ -1138,13 +1139,19 @@ class CommunicationService:
         part_number: str,
         reply_to: Optional[str] = None,
         historical_offer_date: str | None = None,
+        indicative_unit_price: float | None = None,
         supplier_contact_queued: bool = True,
     ) -> Dict[str, Any]:
         part = safe_display_text(part_number)
+        if indicative_unit_price is not None and (
+            not math.isfinite(indicative_unit_price) or indicative_unit_price <= 0
+        ):
+            raise ValueError("Indicative customer price must be a finite, positive USD amount.")
         historical_note = (
-            f"Our records include a supplier offer dated {safe_display_text(historical_offer_date)}, "
-            "but it is older than 30 days and is not being represented as current pricing or availability. "
-            if historical_offer_date else ""
+            f"For budgeting only, the indicative unit price is USD {indicative_unit_price:,.2f}. "
+            "This is a non-binding reference, subject to current supplier confirmation; "
+            "it is not a firm quotation or confirmed availability. "
+            if indicative_unit_price is not None else ""
         )
         supplier_update = (
             "We have asked the supplier(s) to reconfirm current price, quantity, condition, release "
@@ -1170,7 +1177,7 @@ class CommunicationService:
             body,
             reply_to=reply_to,
             entity_id=rfq_id,
-            deduplication_key=f"rfq-sourcing-update:{rfq_id}",
+            deduplication_key=f"rfq-sourcing-update:{rfq_id}:{part_number}",
         )
 
     def send_customer_information_response(
@@ -1363,6 +1370,42 @@ class CommunicationService:
             reply_to=reply_to,
             entity_id=rfq_id,
             deduplication_key=f"rfq-update:{rfq_id}:{inbound_message_id}",
+        )
+
+    @staticmethod
+    def _customer_receipt_email(customer_name: str, original_subject: str, purchase_order: bool) -> tuple[str, str]:
+        context = (
+            "We have received your purchase order and any attached supporting documents. "
+            "Our team is validating the order; this acknowledgement is not order acceptance or a shipment confirmation."
+            if purchase_order else
+            "We have received your message. Our team is reviewing it and will respond in this email thread."
+        )
+        subject = re.sub(r"^\s*(?:re\s*:\s*)+", "", original_subject, flags=re.IGNORECASE).strip()
+        body = enforce_customer_email_policy(
+            f"Dear {safe_display_text(customer_name)},\n\n{context}\n\n"
+            "Kind regards,\nWinged Tycoons Sales Team", customer_name,
+        )
+        return f"Re: {subject or 'Your message to Winged Tycoons'}", body
+
+    def send_customer_receipt(self, *, recipient: str, customer_name: str, original_subject: str,
+                              inbound_message_id: str, reply_to: str | None,
+                              purchase_order: bool = False) -> Dict[str, Any]:
+        subject, body = self._customer_receipt_email(customer_name, original_subject, purchase_order)
+        return self._send(
+            "sales", recipient, subject, body, reply_to=reply_to,
+            entity_id=inbound_message_id,
+            deduplication_key=f"customer-receipt:{inbound_message_id}",
+        )
+
+    async def send_customer_receipt_async(self, repositories, *, recipient: str, customer_name: str,
+                                         original_subject: str, inbound_message_id: str,
+                                         reply_to: str | None, purchase_order: bool = False) -> Dict[str, Any]:
+        if not self._is_valid_email(recipient):
+            raise ValueError("Customer email is invalid. Email dispatch aborted.")
+        subject, body = self._customer_receipt_email(customer_name, original_subject, purchase_order)
+        return await self._enqueue_customer_reply_async(
+            repositories, recipient, subject, body, reply_to, inbound_message_id,
+            deduplication_key=f"customer-receipt:{inbound_message_id}",
         )
 
     async def send_rfq_update_reply_async(

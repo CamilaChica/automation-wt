@@ -32,6 +32,7 @@ from services.customer_reply_routing import (
     find_recent_valid_quote,
     find_rfq_for_reply,
 )
+from services.no_quote_service import confirmed_part_numbers
 from services.email_intelligence import analyze_communication_sentiment
 from services.communication_service import communication_service
 from services.supplier_database import supplier_db
@@ -46,6 +47,70 @@ from repositories.review_telemetry_repository import inbound_dedupe_key
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("winged-tycoons-email-worker")
+
+
+def _automated_sender(message: dict[str, Any]) -> bool:
+    sender = parseaddr(str(message.get("from") or ""))[1].lower()
+    if sender.startswith(("mailer-daemon@", "postmaster@", "noreply@", "no-reply@")) or sender == "sales@wingedtycoons.com":
+        return True
+    for header in message.get("headers") or []:
+        if str(header.get("name") or "").lower() == "list-id":
+            return True
+        if str(header.get("name") or "").lower() == "precedence":
+            if str(header.get("value") or "").strip().lower() in {"bulk", "list", "junk"}:
+                return True
+        if str(header.get("name") or "").lower() == "auto-submitted":
+            if str(header.get("value") or "").lower() != "no":
+                return True
+    return False
+
+
+def _pn_closure_answer(parts: list[str], closes_request: bool) -> str:
+    answer = (
+        f"Thank you for confirming P/N {', '.join(parts)}. "
+        "We have no verified offer for this part and are processing it as No Quote. "
+        "This does not mean the part does not exist."
+    )
+    if not closes_request:
+        answer += " The other lines of your request remain under review."
+    return answer
+
+
+def _confirm_catalog_miss(message: dict[str, Any], rfq, body: str) -> bool:
+    state = orchestration_service._load_pipeline_state(rfq.id)
+    confirmed = confirmed_part_numbers(state.get("pn_confirmation_required") or [], body)
+    if not confirmed:
+        return False
+    for part in confirmed:
+        if db_service.get_supplier_offers_for_part(part):
+            return False
+        if any(record.part_number.upper() == part.upper() and record.quantity_available > 0
+               for record in db_service.inventory.values()):
+            return False
+    items = db_service.get_rfq_items(rfq.id)
+    all_parts = {item.resolved_part_number or item.requested_part_number for item in items}
+    no_quote_parts = set(state.get("no_quote_parts") or []) | set(confirmed)
+    closes_request = bool(all_parts) and all_parts.issubset(no_quote_parts)
+    communication_service.send_rfq_update_reply(
+        recipient=rfq.customer_email, customer_name=rfq.customer_name, rfq_id=rfq.id,
+        customer_text=body, original_subject=str(message.get("subject") or ""),
+        reply_to=message.get("message_id") or rfq.thread_id,
+        inbound_message_id=str(message.get("internet_message_id") or message.get("message_id")),
+        quote_answer=_pn_closure_answer(confirmed, closes_request),
+    )
+    orchestration_service._save_pipeline_state(
+        rfq.id, no_quote_parts=sorted(no_quote_parts),
+        pn_confirmation_required=[part for part in state.get("pn_confirmation_required", []) if part not in confirmed],
+    )
+    if closes_request:
+        db_service.update_rfq_status(rfq.id, "No_Quote")
+    else:
+        db_service.set_rfq_automation_paused(
+            rfq.id, True, "Confirmed No Quote line in a mixed RFQ; remaining lines require operator review."
+        )
+        _review_inbound_customer_message(message, "mixed_rfq_confirmed_no_quote_line", rfq.id)
+    db_service.add_audit_log(rfq.id, "CatalogInquiryProtocol", "PN_CONFIRMED_NO_QUOTE", ", ".join(confirmed))
+    return True
 
 
 async def queue_due_communication_tasks(engine=None) -> dict[str, int]:
@@ -190,10 +255,13 @@ def _reply_to_rfq_update(message: dict[str, Any], rfq, sender: str, body: str) -
     except Exception as exc:
         logger.warning("customer_update_reply_failed rfq=%s error=%s", rfq.id, type(exc).__name__)
         _review_inbound_customer_message(message, f"customer_update_reply_failed:{type(exc).__name__}", rfq.id)
+        raise
 
 
 async def _ingest_sales_message(message: dict[str, str]) -> bool:
     """Create and process a customer RFQ received by the sales mailbox."""
+    if _automated_sender(message):
+        return True
     sender = (message.get("from") or "").strip()
     if "@" not in sender:
         logger.warning("Sales message %s has no valid sender; skipped", message.get("message_id", "unknown"))
@@ -209,6 +277,12 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
     all_rfqs = db_service.list_rfqs()
     existing = find_rfq_for_reply(all_rfqs, sender_email, message.get("subject", ""), body)
     quote = db_service.get_quote_by_rfq(existing.id) if existing else None
+    if existing and getattr(existing, "automation_paused", False) and str(getattr(existing, "pause_reason", "")).startswith("Critical "):
+        _review_inbound_customer_message(message, "critical_infrastructure_fault_customer_reply_held", existing.id)
+        return True
+    if existing and not existing.automation_paused and existing.status in {"Supplier_Sourcing", "Sourcing_Failed"}:
+        if _confirm_catalog_miss(message, existing, body):
+            return True
     if quote:
         communication_service.cancel_customer_followups(quote.id)
 
@@ -245,6 +319,13 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
 
     classification = classify_inbound_customer_message(message, has_related_quote=bool(quote))
     if classification["category"] == "purchase_order":
+        communication_service.send_customer_receipt(
+            recipient=parseaddr(sender)[1] or sender,
+            customer_name=existing.customer_name if existing else company_name_for_sender(all_rfqs, sender),
+            original_subject=str(message.get("subject") or ""),
+            inbound_message_id=str(message.get("internet_message_id") or message.get("message_id")),
+            reply_to=message.get("message_id"), purchase_order=True,
+        )
         if not existing or not quote:
             _review_inbound_customer_message(message, "email_po_could_not_be_linked_to_an_active_quote")
             return True
@@ -291,6 +372,14 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
     if classification["category"] == "other":
         if existing:
             _reply_to_rfq_update(message, existing, sender, body)
+        else:
+            communication_service.send_customer_receipt(
+                recipient=parseaddr(sender)[1] or sender,
+                customer_name=company_name_for_sender(all_rfqs, sender),
+                original_subject=str(message.get("subject") or ""),
+                inbound_message_id=str(message.get("internet_message_id") or message.get("message_id")),
+                reply_to=message.get("message_id"),
+            )
         _review_inbound_customer_message(message, "inbound_message_not_identified_as_an_rfq", existing.id if existing else None)
         return True
     if _resend_existing_quote_sync(message, all_rfqs, (parseaddr(sender)[1] or sender).lower(), body):
@@ -345,7 +434,7 @@ def _resend_existing_quote_sync(message: dict[str, Any], all_rfqs, sender: str, 
         return True
     except Exception as exc:
         logger.warning("duplicate_request_shield_sync_failed error=%s", type(exc).__name__)
-        return False
+        raise
 
 
 async def _reply_to_rfq_update_async(message: dict[str, Any], rfq, sender: str, body: str, rfqs, repositories) -> None:
@@ -379,6 +468,54 @@ async def _ingest_existing_sales_message_async(message: dict[str, Any], reposito
     body = html_to_text(str(message.get("body") or ""))
     rfqs = await db_service.list_rfqs_async(repositories)
     existing = find_rfq_for_reply(rfqs, sender, str(message.get("subject") or ""), body)
+    if existing and getattr(existing, "automation_paused", False) and str(getattr(existing, "pause_reason", "")).startswith("Critical "):
+        await repositories.records.enqueue_operator_review(
+            idempotency_key=f"customer-email-review:{message_id}",
+            task="catalog_infrastructure_fault", source_text=body,
+            extraction={"rfq_id": existing.id, "severity": "CRITICAL"},
+            reason="critical_infrastructure_fault_customer_reply_held",
+            hold_flags=["critical_infrastructure_fault"], entity_id=existing.id,
+        )
+        return True
+    if existing and not existing.automation_paused and existing.status in {"Supplier_Sourcing", "Sourcing_Failed"}:
+        state = await repositories.rfq.get_operational_record("rfq_pipeline_state", existing.id)
+        if isinstance(state, dict):
+            confirmed = confirmed_part_numbers(state.get("pn_confirmation_required") or [], body)
+            if confirmed:
+                offers = [await repositories.supplier.offers_for_part(
+                    part, 1, include_unapproved=True
+                ) for part in confirmed]
+                inventory = await repositories.rfq.list_operational_records("inventory")
+                in_stock = any(
+                    str(item.get("part_number") or "").upper() in {part.upper() for part in confirmed}
+                    and int(item.get("quantity_available") or 0) > 0 for item in inventory.values()
+                )
+                if not any(offers) and not in_stock:
+                    item_payloads = await repositories.rfq.list_operational_records("rfq_items")
+                    all_parts = {
+                        item.get("resolved_part_number") or item.get("requested_part_number")
+                        for item in item_payloads.values() if item.get("rfq_id") == existing.id
+                    }
+                    no_quote_parts = set(state.get("no_quote_parts") or []) | set(confirmed)
+                    closes_request = bool(all_parts) and all_parts.issubset(no_quote_parts)
+                    await repositories.rfq.record_pn_confirmation(existing.id, confirmed, closes_request)
+                    if not closes_request:
+                        await repositories.records.enqueue_operator_review(
+                            idempotency_key=f"mixed-no-quote:{existing.id}:{message_id}",
+                            task="mixed_rfq_no_quote", source_text=body,
+                            extraction={"rfq_id": existing.id, "no_quote_parts": confirmed},
+                            reason="mixed_rfq_confirmed_no_quote_line",
+                            hold_flags=["partial_no_quote"], entity_id=existing.id,
+                        )
+                    await communication_service.send_rfq_update_reply_async(
+                        repositories, recipient=sender, customer_name=existing.customer_name,
+                        rfq_id=existing.id, customer_text=body,
+                        original_subject=str(message.get("subject") or ""),
+                        reply_to=message_id or existing.thread_id,
+                        inbound_message_id=str(message.get("internet_message_id") or message_id),
+                        quote_answer=_pn_closure_answer(confirmed, closes_request),
+                    )
+                    return True
     quote = None
     quote_items = []
     if existing is not None:
@@ -403,6 +540,12 @@ async def _ingest_existing_sales_message_async(message: dict[str, Any], reposito
     category = classification.get("category")
     if category == "purchase_order":
         message_key = str(message.get("internet_message_id") or message_id or sender)
+        await communication_service.send_customer_receipt_async(
+            repositories, recipient=sender,
+            customer_name=existing.customer_name if existing else company_name_for_sender(rfqs, sender),
+            original_subject=str(message.get("subject") or ""),
+            inbound_message_id=message_key, reply_to=message_id or None, purchase_order=True,
+        )
         if existing is None or quote is None:
             reason = "email_po_could_not_be_linked_to_an_active_quote"
         elif existing.status in {"Pending_PO_Review", "Purchase_Order_Received"}:
@@ -542,6 +685,13 @@ async def _ingest_existing_sales_message_async(message: dict[str, Any], reposito
         reason = "inbound_message_not_identified_as_an_rfq"
         if existing is not None:
             await _reply_to_rfq_update_async(message, existing, sender, body, rfqs, repositories)
+        else:
+            await communication_service.send_customer_receipt_async(
+                repositories, recipient=sender, customer_name=company_name_for_sender(rfqs, sender),
+                original_subject=str(message.get("subject") or ""),
+                inbound_message_id=str(message.get("internet_message_id") or message_id),
+                reply_to=message_id or None,
+            )
         await repositories.records.enqueue_operator_review(
             idempotency_key=f"customer-email-review:{message_id or sender}",
             task="customer_email_classification",
@@ -588,7 +738,7 @@ async def _resend_existing_quote_async(message: dict[str, Any], repositories) ->
         match = find_recent_valid_quote(rfqs, quotes, items, sender, text, window=_duplicate_window())
     except Exception as exc:
         logger.warning("duplicate_request_shield_lookup_failed error=%s", type(exc).__name__)
-        return False
+        raise
     if match is None:
         return False
     rfq, quote, matched, qty_changed = match
@@ -639,6 +789,8 @@ async def _ingest_new_sales_message_async(message: dict[str, Any], repositories)
 async def _process_sales_message_async(
     message: dict[str, Any], mailbox: str = "sales", engine=None
 ) -> bool:
+    if _automated_sender(message):
+        return True
     owns_engine = engine is None
     engine = engine or create_engine_from_environment()
     message_id = str(message.get("message_id") or "").strip()

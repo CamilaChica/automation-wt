@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from agents.supplier_discovery_agent import SupplierDiscoveryAgent
@@ -54,6 +55,29 @@ def test_supplier_discovery_excludes_quotes_older_than_30_days():
         "stale@example.com",
         "unknown@example.com",
     }
+
+
+def test_exact_30_day_boundary_uses_source_email_timestamp():
+    now = datetime(2026, 1, 31, 12, tzinfo=timezone.utc)
+    at_boundary = _offer("boundary@example.com", now.isoformat(), 1400, "boundary",
+                         (now - timedelta(days=30)).isoformat())
+    expired = _offer("expired@example.com", now.isoformat(), 1300, "expired",
+                     (now - timedelta(days=30, microseconds=1)).isoformat())
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+
+    with (
+        patch("agents.supplier_discovery_agent.datetime", FrozenDateTime),
+        patch("agents.supplier_discovery_agent.operations_store", SimpleNamespace(storage_engine="sqlite")),
+        patch("agents.supplier_discovery_agent.supplier_db.find_supplier_offers",
+              return_value=[expired, at_boundary]),
+    ):
+        agent = SupplierDiscoveryAgent()
+        results = agent.search_suppliers("822-1287-121", 2)
+    assert [result["supplier_email"] for result in results] == ["boundary@example.com"]
+    assert agent.last_stale_offers == [expired]
 
 
 def test_sqlite_offer_history_is_idempotent_per_source_email(tmp_path):

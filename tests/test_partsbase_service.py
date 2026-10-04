@@ -26,6 +26,8 @@ class FakeLocator:
         return FakeLocator(self.page, f"{self.selector} {selector}", self.index)
 
     async def count(self):
+        if self.selector.startswith("text=re.compile"):
+            return int(self.page.explicit_empty)
         if self.selector == "div.floating-bar-selected-item-div":
             return len(self.page.found)
         if self.selector.endswith("input.floating-bar-selected-item-box-quantity-input"):
@@ -63,8 +65,9 @@ class FakeLocator:
 
 
 class FakePage:
-    def __init__(self, found=("ABC123", "XYZ9")):
+    def __init__(self, found=("ABC123", "XYZ9"), explicit_empty=False):
         self.found = set(found)
+        self.explicit_empty = explicit_empty
         self.actions = []
         self.quantity_values = {part: "1" for part in self.found}
 
@@ -108,6 +111,17 @@ class NormalizeTests(unittest.TestCase):
 
 
 class FlowTests(unittest.TestCase):
+    def test_only_explicit_empty_search_proves_no_results(self):
+        with self.assertRaises(pb.PartsBaseNoResults):
+            asyncio.run(pb.run_partsbase_flow(
+                FakePage(found=(), explicit_empty=True), ["NOPE1"], "user", "pw", {"NOPE1": 1}
+            ))
+        with self.assertRaises(pb.PartsBaseError) as failure:
+            asyncio.run(pb.run_partsbase_flow(
+                FakePage(found=()), ["NOPE1"], "user", "pw", {"NOPE1": 1}
+            ))
+        self.assertNotIsInstance(failure.exception, pb.PartsBaseNoResults)
+
     def test_flow_searches_and_sends_only_needed_parts(self):
         page = FakePage()
         asyncio.run(pb.run_partsbase_flow(

@@ -252,6 +252,47 @@ class RFQRepository:
         )
         return dict(record.payload) if record else None
 
+    async def record_pn_confirmation(self, rfq_id: str, confirmed: list[str], close_request: bool) -> None:
+        record = await self.session.get(
+            OperationalRecord, {"domain": "rfqs", "record_id": rfq_id}, with_for_update=True
+        )
+        if record is None:
+            raise ValueError("RFQ not found for part-number confirmation.")
+        rfq = RFQ.model_validate(record.payload)
+        if rfq.automation_paused:
+            raise ValueError("RFQ automation is paused; confirmation requires operator review.")
+        state_record = await self.session.get(
+            OperationalRecord, {"domain": "rfq_pipeline_state", "record_id": rfq_id},
+            with_for_update=True,
+        )
+        if state_record is None:
+            raise ValueError("Part-number confirmation state is missing.")
+        state = dict(state_record.payload)
+        if not set(confirmed).issubset(set(state.get("pn_confirmation_required") or [])):
+            raise ValueError("Part-number confirmation is no longer pending.")
+        state["pn_confirmation_required"] = [
+            part for part in state.get("pn_confirmation_required", []) if part not in confirmed
+        ]
+        state["no_quote_parts"] = sorted(set(state.get("no_quote_parts", [])) | set(confirmed))
+        state_record.payload = state
+        if close_request:
+            validate_transition(rfq.status, "No_Quote")
+            rfq.status = "No_Quote"
+            rfq.workflow_state = canonical_state("No_Quote")
+            rfq.version += 1
+            record.payload = rfq.model_dump(mode="json")
+            relational = await self.session.get(RFQRecord, rfq_id)
+            if relational is not None:
+                relational.status = "No_Quote"
+        else:
+            rfq.automation_paused = True
+            rfq.pause_reason = "Confirmed No Quote line in a mixed RFQ; remaining lines require operator review."
+            record.payload = rfq.model_dump(mode="json")
+        await self.add_audit_log(
+            rfq_id=rfq_id, agent_name="CatalogInquiryProtocol", action_type="PN_CONFIRMED_NO_QUOTE",
+            message=f"Customer confirmed part number(s): {', '.join(confirmed)}; no offer is available.",
+        )
+
     async def reset_failed_intake(self, rfq_id: str, audit_message: str) -> bool:
         result = await self.session.scalars(
             select(OperationalRecord)

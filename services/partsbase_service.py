@@ -27,6 +27,10 @@ class PartsBaseError(RuntimeError):
     pass
 
 
+class PartsBaseNoResults(PartsBaseError):
+    """A completed search explicitly reported no matching listings, not a provider failure."""
+
+
 def normalize_part_numbers(raw: Any) -> list[str]:
     if isinstance(raw, str):
         items = re.split(r"[,\n;]+", raw)
@@ -133,6 +137,12 @@ async def run_partsbase_flow(
     await page.click("div#All.ccOption")
     await page.wait_for_timeout(1500)
 
+    empty_results = page.get_by_text(
+        re.compile(r"^\s*No (?:results|records|matches)(?: were)? found[.!]?\s*$", re.IGNORECASE)
+    )
+    if await empty_results.count():
+        raise PartsBaseNoResults("PartsBase explicitly reported no matching listings.")
+
     header = page.locator("tr.table-tr:not(.floatingHeaderNotDisplayed)").filter(has_text="PART NUMBER").first
     header_box = header.locator("input[type=checkbox]").first
     if not await header_box.is_checked():
@@ -150,7 +160,7 @@ async def run_partsbase_flow(
             await box.first.check()
             selected += 1
     if not selected:
-        raise PartsBaseError("None of the requested parts were found on PartsBase.")
+        raise PartsBaseError("Requested parts could not be selected; search outcome requires review.")
 
     await _set_requested_quantities(page, quantities)
     await _click_text(page, "Send RFQ")

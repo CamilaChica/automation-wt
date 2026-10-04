@@ -8,7 +8,7 @@ from services.agents.prompts import SUPPLIER_COMMUNICATION_PROMPT
 
 
 class SupplierDiscoveryAgent(BaseAgent):
-    """Agent responsible for matching RFQ parts to real supplier offers stored in SQLite.
+    """Agent responsible for matching RFQ parts to persisted supplier offers.
 
     This version uses persistent supplier records rather than hard-coded mock supplier
     rankings. The agent filters offers by part_number, quantity, approval status, and
@@ -19,7 +19,7 @@ class SupplierDiscoveryAgent(BaseAgent):
         metadata = AgentMetadata(
             name="SupplierDiscoveryAgent",
             role="Strategic Supplier Sourcing Agent",
-            objective="Query mock supplier networks to source parts and obtain pricing, availability, and certification details.",
+            objective="Query persisted supplier offers to source parts and obtain pricing, availability, and certification details.",
             system_instruction=SUPPLIER_COMMUNICATION_PROMPT,
             input_schema={
                 "type": "object",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 
 from sqlalchemy import func, or_, select, text
@@ -63,9 +64,15 @@ class SupplierRepository:
             for record in result
         ]
 
-    async def offers_for_part(self, part_number: str, quantity_needed: int = 1) -> list[dict]:
+    async def offers_for_part(self, part_number: str, quantity_needed: int = 1, *,
+                              include_unapproved: bool = False) -> list[dict]:
         normalized_part = part_number.strip().upper()
         quantity = max(1, int(quantity_needed))
+        part_match = (
+            func.regexp_replace(func.upper(SupplierPartRecord.part_number), "[^A-Z0-9]", "", "g")
+            == re.sub(r"[^A-Z0-9]", "", normalized_part)
+            if include_unapproved else func.upper(SupplierPartRecord.part_number) == normalized_part
+        )
         statement = (
             select(
                 SupplierPartRecord.id.label("supplier_part_id"),
@@ -73,6 +80,7 @@ class SupplierRepository:
                 SupplierPartRecord.part_number,
                 SupplierPartRecord.quantity_available,
                 SupplierPartRecord.unit_cost,
+                SupplierPartRecord.currency,
                 SupplierPartRecord.certificate_type,
                 SupplierPartRecord.lead_time_days,
                 SupplierPartRecord.condition_code,
@@ -89,9 +97,15 @@ class SupplierRepository:
             )
             .join(SupplierRecord, SupplierRecord.id == SupplierPartRecord.supplier_id)
             .where(
-                func.upper(SupplierPartRecord.part_number) == normalized_part,
+                part_match,
                 or_(SupplierPartRecord.quantity_available.is_(None), SupplierPartRecord.quantity_available >= quantity),
-                or_(SupplierPartRecord.approval_status == "Approved", SupplierRecord.approval_status == "Approved"),
+                (
+                    (func.coalesce(SupplierPartRecord.approval_status, "") != "Rejected")
+                    & (func.coalesce(SupplierRecord.approval_status, "") != "Rejected")
+                    & (SupplierPartRecord.unit_cost > 0)
+                    if include_unapproved else
+                    or_(SupplierPartRecord.approval_status == "Approved", SupplierRecord.approval_status == "Approved")
+                ),
             )
             .order_by(
                 SupplierPartRecord.source_received_at.desc().nulls_last(),

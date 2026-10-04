@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import re
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
@@ -144,6 +145,11 @@ class OrchestrationService:
             response = await partsbase_service.request_partsbase_quote(
                 [part], quantities={part: quantity}
             )
+            if response.get("status") != "sent":
+                raise RuntimeError("PartsBase did not confirm RFQ submission.")
+        except partsbase_service.PartsBaseNoResults:
+            result = {"part_number": part, "quantity": quantity, "status": "not_found"}
+            status = "WARNING"
         except Exception as exc:
             result = {
                 "part_number": part,
@@ -176,11 +182,66 @@ class OrchestrationService:
             (
                 f"PartsBase RFQ submitted for {part}, quantity {quantity}; awaiting a supplier response."
                 if status == "PENDING"
+                else f"No matching PartsBase listing found for {part}; customer verification is required."
+                if result["status"] == "not_found"
                 else f"PartsBase submission outcome is unknown for {part}, quantity {quantity}; operator review is required."
             ),
             status, json.dumps(result),
         )
         return result
+
+    def _halt_retrieval_fault(self, rfq_id: str, part_number: str, stage: str, error: Exception) -> Dict[str, Any]:
+        logger.error("critical_catalog_retrieval_fault rfq=%s part=%s stage=%s",
+                     rfq_id, part_number, stage, exc_info=error)
+        db_service.update_rfq_status(rfq_id, "Verification_Halted")
+        db_service.set_rfq_automation_paused(rfq_id, True, f"Critical {stage} retrieval failure")
+        operations_store.enqueue_operator_review(
+            idempotency_key=f"catalog-system-error:{rfq_id}:{stage}:{part_number}",
+            task="catalog_infrastructure_fault",
+            source_text=part_number,
+            extraction={"rfq_id": rfq_id, "part_number": part_number, "stage": stage,
+                        "diagnosis": "system_error", "severity": "CRITICAL", "error_type": type(error).__name__},
+            reason=f"Critical {stage} retrieval failure; automated customer responses halted.",
+            hold_flags=["critical_infrastructure_fault"],
+            entity_id=rfq_id,
+        )
+        return {"status": "Verification_Halted", "diagnosis": "system_error",
+                "error": f"{stage} retrieval failed; engineering review required."}
+
+    def _request_pn_verification(self, rfq: Any, part_number: str) -> Dict[str, Any]:
+        state = self._load_pipeline_state(rfq.id)
+        pending = list(state.get("pn_confirmation_required") or [])
+        if part_number not in pending:
+            pending.append(part_number)
+        self._save_pipeline_state(rfq.id, pn_confirmation_required=pending)
+        communication_service.send_rfq_update_reply(
+            recipient=rfq.customer_email, customer_name=rfq.customer_name,
+            rfq_id=rfq.id, customer_text="", original_subject=f"Request for quote {rfq.id}",
+            reply_to=rfq.thread_id, inbound_message_id=f"pn-verification:{part_number}",
+            quote_answer=(
+                f"We could not find a matching PartsBase listing for P/N {part_number}. "
+                "Please double-check the full part number, including its suffix, and confirm it in your reply. "
+                "If you confirm it is correct and we have no verified offer, we will close this item as No Quote."
+            ),
+        )
+        return {"status": "Supplier_Sourcing", "diagnosis": "pn_verification_required",
+                "part_number": part_number}
+
+    @classmethod
+    def _historical_reference_price(cls, offers: List[Dict[str, Any]], quantity: int) -> float | None:
+        eligible = [
+            offer for offer in offers
+            if str(offer.get("currency") or "").upper() == "USD"
+            and offer.get("approval_status") == "Approved"
+            and offer.get("certificate_type") in SupplierDiscoveryAgent.REQUIRED_TRACE_CERTIFICATES
+            and float(offer.get("unit_cost") or 0) > 0
+            and math.isfinite(float(offer["unit_cost"]))
+        ]
+        if not eligible:
+            return None
+        latest = max(eligible, key=lambda offer: str(offer.get("source_received_at") or ""))
+        pricing, low_margin = cls.calculate_pricing(float(latest["unit_cost"]), quantity)
+        return None if low_margin else pricing["suggested_unit_price"]
 
     @classmethod
     def calculate_pricing(
@@ -618,10 +679,16 @@ class OrchestrationService:
             items = db_service.get_rfq_items(rfq_id)
             
             for item in items:
-                res = await self.parts_intel_agent.execute({"requested_part_number": item.requested_part_number})
+                try:
+                    res = await self.parts_intel_agent.execute({"requested_part_number": item.requested_part_number})
+                except Exception as exc:
+                    return self._halt_retrieval_fault(rfq_id, item.requested_part_number, "catalog", exc)
                 
                 if not res.success:
-                    unknown_part = "unknown" in (res.error_message or "").lower() or "not found" in (res.error_message or "").lower()
+                    unknown_part = (
+                        res.escalation_triggered is not None
+                        and res.escalation_triggered.condition == "part_not_found"
+                    ) or res.data.get("match_type") == "none"
                     if unknown_part:
                         transaction = operations_store.transaction() if operations_store.storage_engine == "postgresql" else nullcontext()
                         with transaction:
@@ -646,6 +713,8 @@ class OrchestrationService:
                         partsbase_request = await self._request_partsbase_quote(
                             rfq_id, item.requested_part_number, item.quantity
                         )
+                        if partsbase_request.get("status") == "not_found":
+                            return self._request_pn_verification(rfq, item.requested_part_number)
                         contact_queued = any(
                             result.get("transmission_status") in {"SENT", "PENDING", "QUEUED"}
                             for result in request_results
@@ -669,14 +738,40 @@ class OrchestrationService:
                             "supplier_requests": request_results,
                             "partsbase_request": partsbase_request,
                         }
+                    invalid_format = (
+                        res.escalation_triggered is not None
+                        and res.escalation_triggered.condition == "invalid_part_format"
+                    )
+                    if not invalid_format:
+                        return self._halt_retrieval_fault(
+                            rfq_id, item.requested_part_number, "catalog",
+                            RuntimeError(res.error_message or "Catalog retrieval failed"),
+                        )
                     db_service.update_rfq_status(rfq_id, "Verification_Halted")
                     db_service.add_audit_log(
                         rfq_id, "PartsIntelligenceAgent", "part_validation",
                         f"Part verification halted for PN '{item.requested_part_number}': {res.error_message}",
                         "FAILURE", json.dumps(res.dict())
                     )
+                    communication_service.send_rfq_update_reply(
+                        recipient=rfq.customer_email, customer_name=rfq.customer_name, rfq_id=rfq_id,
+                        customer_text="", original_subject=f"Request for quote {rfq_id}",
+                        reply_to=rfq.thread_id,
+                        inbound_message_id=f"invalid-pn:{item.requested_part_number}",
+                        quote_answer=(
+                            f"Please double-check P/N {item.requested_part_number}, including its full suffix. "
+                            "We could not validate its format. Please provide the corrected part number "
+                            "or a document identifying it so our team can review the request."
+                        ),
+                    )
+                    operations_store.enqueue_operator_review(
+                        idempotency_key=f"invalid-pn:{rfq_id}:{item.requested_part_number}",
+                        task="catalog_part_validation", source_text=rfq.raw_text,
+                        extraction={"rfq_id": rfq_id, "part_number": item.requested_part_number},
+                        reason="invalid_part_number", entity_id=rfq_id,
+                    )
                     return {
-                        "status": "Verification_Halted", 
+                        "status": "Verification_Halted", "diagnosis": "invalid_part_number",
                         "error": f"Part verification failed: {res.error_message}",
                         "escalation": res.escalation_triggered
                     }
@@ -702,10 +797,15 @@ class OrchestrationService:
                     continue
 
                 # ── Query internal stock via InventoryAgent ──────────────────
-                inv_res = await self.inventory_agent.execute({
-                    "part_number": item.resolved_part_number,
-                    "requested_quantity": item.quantity
-                })
+                try:
+                    inv_res = await self.inventory_agent.execute({
+                        "part_number": item.resolved_part_number,
+                        "requested_quantity": item.quantity
+                    })
+                    if not inv_res.success:
+                        raise RuntimeError(inv_res.error_message or "Inventory retrieval failed")
+                except Exception as exc:
+                    return self._halt_retrieval_fault(rfq_id, item.resolved_part_number, "inventory", exc)
 
                 inv_data = inv_res.data
                 available_qty  = inv_data.get("available_quantity", 0)
@@ -727,10 +827,13 @@ class OrchestrationService:
 
                     # Transition to supplier discovery
                     rfq = db_service.update_rfq_status(rfq_id, "Supplier_Sourcing")
-                    sup_res = await self.supplier_agent.execute({
-                        "part_number": item.resolved_part_number,
-                        "quantity_needed": shortage_qty  # only the unmet quantity
-                    })
+                    try:
+                        sup_res = await self.supplier_agent.execute({
+                            "part_number": item.resolved_part_number,
+                            "quantity_needed": shortage_qty
+                        })
+                    except Exception as exc:
+                        return self._halt_retrieval_fault(rfq_id, item.resolved_part_number, "supplier", exc)
 
                     if not sup_res.success:
                         stale_offers = self.supplier_agent.last_stale_offers
@@ -774,6 +877,7 @@ class OrchestrationService:
                                 part_number=item.resolved_part_number,
                                 reply_to=rfq.thread_id,
                                 historical_offer_date=historical_offer_date,
+                                indicative_unit_price=self._historical_reference_price(stale_offers, item.quantity),
                                 supplier_contact_queued=any(
                                     result.get("transmission_status") in {"SENT", "PENDING", "QUEUED"}
                                     for result in confirmations
@@ -811,6 +915,9 @@ class OrchestrationService:
                         partsbase_request = await self._request_partsbase_quote(
                             rfq_id, item.resolved_part_number, item.quantity
                         )
+                        if partsbase_request.get("status") == "not_found":
+                            db_service.update_rfq_status(rfq_id, "Supplier_Sourcing")
+                            return self._request_pn_verification(rfq, item.resolved_part_number)
                         communication_service.send_rfq_sourcing_update(
                             recipient=rfq.customer_email,
                             customer_name=rfq.customer_name,

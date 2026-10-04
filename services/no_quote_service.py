@@ -13,6 +13,28 @@ SWEEP_STATUSES = {"Supplier_Sourcing", "Sourcing_Failed"}
 _AOG_PATTERN = re.compile(r"\bAOG\b|aircraft\s+on\s+ground", re.IGNORECASE)
 
 
+def confirmed_part_numbers(pending: list[str], customer_text: str) -> list[str]:
+    """Recognize explicit confirmation in the new reply, never in quoted message history."""
+    reply = re.split(r"(?im)^\s*(?:On .+wrote:|From:|>+|_{5,}|-{5,})", customer_text, maxsplit=1)[0].strip()
+    if "?" in reply:
+        return []
+    if re.search(r"\b(?:not|incorrect|wrong|mistake|change|instead|correction)\b", reply, re.IGNORECASE):
+        return []
+    if not re.search(r"\b(?:confirm(?:ed)?|correct|yes)\b", reply, re.IGNORECASE):
+        return []
+    explicit = [part for part in pending if re.search(
+        rf"(?<![A-Z0-9-]){re.escape(part)}(?![A-Z0-9-])", reply, re.IGNORECASE
+    )]
+    if explicit:
+        return explicit
+    if len(pending) == 1 and re.fullmatch(
+        r"(?:yes[,.\s]*)?(?:(?:that|it|the (?:pn|part number)) (?:is )?)?(?:correct|confirmed|yes)[.!\s]*",
+        reply, re.IGNORECASE,
+    ):
+        return pending
+    return []
+
+
 def _hours(name: str, default: float) -> float:
     try:
         return float(os.getenv(name, default))
@@ -67,13 +89,13 @@ def sweep_no_quote(now: datetime | None = None, db=None, comms=None) -> list[str
             continue
         if now < deadline_for(rfq):
             continue
+        from services.orchestration_service import orchestration_service
+
+        state = orchestration_service._load_pipeline_state(rfq.id)
+        if state.get("pn_confirmation_required"):
+            continue
         parts = _part_numbers(db, rfq)
         if _has_offers(db, parts):
-            continue
-        try:
-            db.update_rfq_status(rfq.id, "No_Quote")
-        except Exception:
-            logger.exception("No-quote transition failed rfq=%s", rfq.id)
             continue
         try:
             comms.send_rfq_no_quote(
@@ -85,9 +107,15 @@ def sweep_no_quote(now: datetime | None = None, db=None, comms=None) -> list[str
             )
         except Exception:
             logger.exception("No-quote email failed rfq=%s", rfq.id)
+            continue
+        try:
+            db.update_rfq_status(rfq.id, "No_Quote")
+        except Exception:
+            logger.exception("No-quote transition failed rfq=%s", rfq.id)
+            continue
         db.add_audit_log(
             rfq.id, "NoQuoteRule", "NO_QUOTE",
-            "No supplier offers and no stock before the deadline; customer notified in the original thread.",
+            "No supplier offers before the deadline; customer response accepted for delivery in the original thread.",
         )
         closed.append(rfq.id)
     return closed

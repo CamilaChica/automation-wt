@@ -12,6 +12,7 @@ from services.business_policy_retriever import (
 )
 from services.dspy_email_programs import (
     SIGNATURES,
+    load_communications_corpus,
     load_training_data,
     predict_structured,
 )
@@ -195,6 +196,20 @@ class TestBusinessPolicyRetriever(unittest.TestCase):
 
 
 class TestDspyEmailPrograms(unittest.TestCase):
+    def test_owner_corpus_is_loaded_without_using_unsupported_labels(self):
+        corpus = load_communications_corpus()
+        self.assertEqual(len(corpus), 400)
+        self.assertEqual(len({record["id"] for record in corpus}), 400)
+        examples = load_training_data()
+        supplier = next(
+            example for example in examples["supplier_quote_extraction"]
+            if getattr(example, "source_id", None) == "SUP-014"
+        )
+        item = supplier.structured_result["items"][0]
+        self.assertEqual(item["quantity"]["value"], "4")
+        self.assertEqual(item["quantity"]["source_snippet"], "Qty available: 4")
+        self.assertNotIn("Meggitt", str(supplier.structured_result))
+
     def test_synthetic_examples_validate_for_each_registered_task(self):
         examples = load_training_data()
 

@@ -2,6 +2,7 @@ from typing import Dict, Any
 from tools.base_tool import BaseTool, ToolMetadata
 from services.db_service import db_service
 from services.supplier_database import supplier_db
+from services.operations_store import operations_store
 
 class SearchPartsCatalogTool(BaseTool):
     def __init__(self):
@@ -56,7 +57,11 @@ class SearchPartsCatalogTool(BaseTool):
             record for record in db_service.inventory.values()
             if record.part_number.strip().upper() == part_number
         ]
-        supplier_offers = supplier_db.find_supplier_offers(part_number, quantity_needed=1)
+        supplier_offers = (
+            operations_store.get_supplier_offers(part_number, 1)
+            if operations_store.storage_engine == "postgresql"
+            else supplier_db.find_supplier_offers(part_number, quantity_needed=1)
+        )
         if not inventory_records and not supplier_offers:
             return {"found": False, "match_type": "none", "parts": []}
 

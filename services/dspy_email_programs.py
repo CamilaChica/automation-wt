@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+from html import escape
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,132 @@ TRAINING_DATA_PATH = (
 ADDITIONAL_TRAINING_DATA_PATH = TRAINING_DATA_PATH.with_name(
     "email_program_training_extra.jsonl"
 )
+COMMUNICATIONS_DATA_PATH = TRAINING_DATA_PATH.with_name("winged_tycoons_communications.json")
+
+
+@lru_cache(maxsize=1)
+def load_communications_corpus() -> tuple[dict[str, Any], ...]:
+    """Read the owner's synthetic corpus without importing business records or sending mail."""
+    with COMMUNICATIONS_DATA_PATH.open(encoding="utf-8") as source:
+        document = json.load(source)
+    if not isinstance(document, dict):
+        raise ValueError("Communications corpus must be a JSON object.")
+    records = []
+    identifiers = set()
+    for collection in ("client_communications", "supplier_communications"):
+        rows = document.get(collection)
+        if not isinstance(rows, list):
+            raise ValueError(f"Communications corpus needs {collection}.")
+        for row in rows:
+            if (
+                not isinstance(row, dict)
+                or not all(isinstance(row.get(key), str) and row[key].strip()
+                           for key in ("id", "scenario", "subject", "body"))
+                or row.get("direction") not in {"inbound", "outbound"}
+                or not isinstance(row.get("expected_extracted_data"), dict)
+            ):
+                raise ValueError(f"Invalid communications example in {collection}.")
+            if row["id"] in identifiers:
+                raise ValueError(f"Duplicate communications example: {row['id']}.")
+            identifiers.add(row["id"])
+            records.append(row)
+    return tuple(records)
+
+
+def _communications_examples() -> list[tuple[str, dspy.Example]]:
+    from services.email_intelligence import EmailIntelligenceExtraction
+
+    examples = []
+    extraction_scenarios = {
+        "rfq_single_line": "rfq_extraction",
+        "rfq_multi_line": "rfq_extraction",
+        "aog_request": "rfq_extraction",
+        "supplier_quote": "supplier_quote_extraction",
+        "supplier_unsolicited_offer": "supplier_quote_extraction",
+    }
+    draft_scenarios = {
+        "missing_info_request_to_client": "customer_communication",
+        "quote_followup_chase": "customer_communication",
+        "quote_expiry_reminder": "customer_communication",
+        "availability_check": "supplier_communication",
+        "documentation_request": "supplier_communication",
+        "inventory_feed_gap_request": "supplier_communication",
+        "request_missing_information": "supplier_communication",
+        "supplier_chase": "supplier_communication",
+    }
+    for row in load_communications_corpus():
+        task = extraction_scenarios.get(row["scenario"]) if row["direction"] == "inbound" else draft_scenarios.get(row["scenario"])
+        if task is None:
+            continue
+        records = f"From: {row.get('from', '')}\nSubject: {row['subject']}\n\n{row['body']}"
+        if task in {"rfq_extraction", "supplier_quote_extraction"}:
+            items = []
+            lines = row["expected_extracted_data"].get("lines") or []
+            for index, line in enumerate(lines):
+                part = str(line.get("part_number") or "")
+                start = row["body"].find(part) if part else -1
+                if start < 0:
+                    continue
+                end = row["body"].find(str(lines[index + 1].get("part_number") or ""), start + len(part)) if index + 1 < len(lines) else -1
+                section = row["body"][start:end if end > start else None]
+                fields = {}
+                patterns = {
+                    "quantity": r"(?i)\b(?:qty(?: available)?|quantity)\s*[:=]?\s*(\d+)\b",
+                    "condition_code": r"\b(NE|NS|OH|SV|AR)\b",
+                    "target_price": r"(?i)\b(?:price|unit price)\s*:\s*(?:USD|EUR|GBP|\$)\s*([\d,]+(?:\.\d+)?)",
+                    "currency": r"\b(USD|EUR|GBP)\b",
+                    "lead_time_days": r"(?i)\blead time\s*:\s*(\d+\s+days?)",
+                    "unit_of_measure": r"\b(EA)\b",
+                }
+                fields["part_number"] = {"value": part, "source_snippet": part}
+                for field, pattern in patterns.items():
+                    match = re.search(pattern, section)
+                    fields[field] = {
+                        "value": match.group(1) if match else None,
+                        "source_snippet": match.group(0) if match else None,
+                    }
+                missing = [field for field, value in fields.items() if value["value"] is None]
+                items.append({**fields, "missing_fields": missing, "needs_escalation": bool(missing)})
+            if not items:
+                continue
+            output = EmailIntelligenceExtraction(
+                email_type="customer_rfq" if task == "rfq_extraction" else "supplier_quote",
+                items=items,
+                missing_fields=sorted({field for item in items for field in item["missing_fields"]}),
+                confidence_score=0.9,
+                needs_escalation=True,
+                escalation_reason="synthetic_example_requires_backend_evidence_checks",
+            ).model_dump()
+            contract = "EmailIntelligenceExtraction"
+        else:
+            # No approved commercial context is provided for quotes, discounts or order commitments.
+            records = json.dumps({
+                "synthetic_style_example_only": True,
+                "scenario": row["scenario"],
+                "verified_template": {"subject": row["subject"], "body": row["body"]},
+            }, ensure_ascii=False)
+            output = {"subject": row["subject"], "body_text": row["body"], "confidence_score": 0.95}
+            if task == "customer_communication":
+                contract = "GeneratedEmailDraft"
+                output["body_html"] = f"<p>{escape(row['body']).replace(chr(10), '<br>')}</p>"
+                output["redacted_fields_applied"] = []
+            else:
+                contract = "SupplierEmailDraft"
+                output["requested_fields"] = row["expected_extracted_data"].get("missing_columns", [])
+        _validate_training_output(task, output, 0)
+        example = dspy.Example(
+            source_id=row["id"],
+            scenario=row["scenario"],
+            task_instructions=TASK_INSTRUCTIONS[task],
+            untrusted_records=records,
+            policy_context=_SYNTHETIC_POLICY_CONTEXT,
+            output_contract=contract,
+            structured_result=output,
+            must_include=[],
+            must_not_include=[],
+        ).with_inputs("task_instructions", "untrusted_records", "policy_context", "output_contract")
+        examples.append((task, example))
+    return examples
 
 TASK_INSTRUCTIONS = {
     "rfq_extraction": (
@@ -223,6 +351,8 @@ def load_training_data() -> dict[str, tuple[dspy.Example, ...]]:
                 )))
                 _validate_training_output(task, example.structured_result, line_number)
                 grouped[task].append(example)
+    for task, example in _communications_examples():
+        grouped[task].append(example)
     for task, examples in grouped.items():
         if len(examples) < 2:
             raise ValueError(
@@ -365,7 +495,16 @@ def predict_structured(
     )
     examples = load_training_data()
     predictor = dspy.Predict(SIGNATURES[request.task])
-    predictor.demos = list(examples[request.task])
+    task_examples = list(examples[request.task])
+    tokens = set(re.findall(r"[a-z]{4,}", request.user_prompt.lower()))
+    ranked = sorted(
+        task_examples,
+        key=lambda example: len(tokens & set(re.findall(
+            r"[a-z]{4,}", str(example.untrusted_records).lower()
+        ))),
+        reverse=True,
+    )
+    predictor.demos = ranked[:4]
     with dspy.context(lm=model, adapter=dspy.JSONAdapter()):
         prediction_inputs = {
             "task_instructions": f"{TASK_INSTRUCTIONS[request.task]}\n{request.system_prompt}",
