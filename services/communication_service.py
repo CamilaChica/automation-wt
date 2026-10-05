@@ -78,10 +78,43 @@ def _deserialize_email_attachments(attachments: list[dict[str, Any]] | None) -> 
     return decoded
 
 
-def _customer_html_from_text(body: str) -> str:
+def _customer_inquiry_body(customer_name: str, tone: str, quote_id: str, quote: Any, answer: str) -> str:
+    status = quote.get("status") if isinstance(quote, dict) else getattr(quote, "status", None)
+    status_text = str(status or "In Progress").replace("_", " ").title()
     return (
-        "<div style=\"font-family:Arial,sans-serif;color:#172033;line-height:1.6;max-width:760px\">"
-        + html_lib.escape(body).replace("\n", "<br>\n")
+        f"Hi {safe_display_text(customer_name)},\n\n"
+        f"Thanks for reaching out! {tone}\n"
+        "Here is the latest update regarding your inquiry:\n\n"
+        "**Quick Summary**\n"
+        f"- **Status:** {status_text}\n"
+        f"- **Reference:** `{quote_id}`\n\n"
+        "---\n\n"
+        "**Details & Answers**\n"
+        f"{answer}\n\n"
+        "---\n\n"
+        "**Next Steps:** To move forward, simply reply to this email with your PO, "
+        "or place it through our customer portal.\n\n"
+        "Please let me know if you need any additional details in the meantime!\n\n"
+        "Warm regards,\nCamila Chica\nWinged Tycoons Team"
+    )
+
+
+def _customer_html_from_text(body: str) -> str:
+    rendered = []
+    for line in html_lib.escape(body).split("\n"):
+        if line.strip() == "---":
+            rendered.append('<hr style="border:none;border-top:1px solid #d5dbe5;margin:14px 0">')
+            continue
+        line = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
+        line = re.sub(
+            r"`([^`]+)`",
+            r'<code style="font-family:Consolas,monospace;background:#eef2f7;padding:1px 4px;border-radius:3px">\1</code>',
+            line,
+        )
+        rendered.append(line + "<br>")
+    return (
+        "<div style=\"font-family:Montserrat,Arial,sans-serif;color:#172033;line-height:1.6;max-width:760px\">"
+        + "\n".join(rendered)
         + "</div>"
     )
 
@@ -394,7 +427,7 @@ class CommunicationService:
         missing_fields: List[str],
         reply_to: Optional[str] = None,
     ) -> Dict[str, Any]:
-        subject = f"Re: RFQ request: {part_number.upper()} - information needed"
+        subject = f"Re: RFQ: Part # {part_number.upper()} | Missing Tag & Trace Info"
         body = self._missing_fields_request(part_number, missing_fields)
         draft = email_program_runtime.draft_supplier_request(subject, body, part_number, missing_fields)
         result = self._send(
@@ -422,7 +455,7 @@ class CommunicationService:
         if not self._is_valid_email(recipient):
             raise ValueError("Recipient email is invalid. Email dispatch aborted.")
         ensure_staging_recipient_allowed(recipient)
-        subject = f"Re: RFQ request: {part_number.upper()} - information needed"
+        subject = f"Re: RFQ: Part # {part_number.upper()} | Missing Tag & Trace Info"
         body = self._missing_fields_request(part_number, missing_fields)
         key = self._supplier_info_key(recipient, part_number)
         draft = await asyncio.to_thread(
@@ -958,7 +991,7 @@ class CommunicationService:
             text_body, customer_name, satisfaction_question="Does this quotation meet your needs?"
         )
         html_body = (
-            "<div style=\"font-family:Arial,sans-serif;color:#172033;max-width:900px;margin:auto\">"
+            "<div style=\"font-family:Montserrat,Arial,sans-serif;color:#172033;max-width:900px;margin:auto\">"
             f"<p>Dear {html_lib.escape(name)},</p>"
             f"<p>Thank you for your request. Your quotation <strong>{html_lib.escape(quote_id)}</strong> is ready.</p>"
             "<h2 style=\"color:#8a6a19\">Quotation summary</h2>"
@@ -1251,12 +1284,9 @@ class CommunicationService:
             "mixed": "Thank you for the context. We will keep the details below clear and specific.",
             "neutral": "Thank you for your question.",
         }[sentiment_label]
-        body = enforce_customer_email_policy((
-            f"Dear {safe_display_text(customer_name)},\n\n"
-            f"{tone_acknowledgement} Regarding quotation {quote_id}, the approved quote records:\n\n"
-            f"{grounded_answer}\n\n"
-            "Kind regards,\nWinged Tycoons Aviation Team"
-        ), customer_name, satisfaction_question="Does this answer your question and provide everything you need?")
+        body = enforce_customer_email_policy(
+            _customer_inquiry_body(customer_name, tone_acknowledgement, quote_id, quote, grounded_answer),
+            customer_name, satisfaction_question="Does this answer your question and provide everything you need?")
         html_body = _customer_html_from_text(body)
         return self._send(
             "sales",
@@ -1297,12 +1327,9 @@ class CommunicationService:
             "mixed": "Thank you for the context. We will keep the details below clear and specific.",
             "neutral": "Thank you for your question.",
         }[sentiment_label]
-        body = enforce_customer_email_policy((
-            f"Dear {safe_display_text(customer_name)},\n\n"
-            f"{tone_acknowledgement} Regarding quotation {quote_id}, the approved quote records:\n\n"
-            f"{grounded_answer}\n\n"
-            "Kind regards,\nWinged Tycoons Aviation Team"
-        ), customer_name, satisfaction_question="Does this answer your question and provide everything you need?")
+        body = enforce_customer_email_policy(
+            _customer_inquiry_body(customer_name, tone_acknowledgement, quote_id, quote, grounded_answer),
+            customer_name, satisfaction_question="Does this answer your question and provide everything you need?")
         html_body = _customer_html_from_text(body)
         subject = f"Re: Quotation {quote_id} - requested details"
         return await self._enqueue_customer_reply_async(
@@ -2066,21 +2093,20 @@ class CommunicationService:
                 (str(field).strip().title(), "Please confirm"),
             )
             rows.setdefault(label, example)
-        width = max([len("Attribute"), *(len(label) for label in rows)])
-        table = "\n".join(
-            [f"{'Attribute'.ljust(width)} | Details Needed", f"{'-' * width}-|-{'-' * 32}"]
-            + [f"{label.ljust(width)} | {example}" for label, example in rows.items()]
-        )
+        bullets = "\n".join(f"- {label}: Pending – {example}" for label, example in rows.items())
         return (
-            "Hello,\n\n"
-            "Thank you so much for the quick response and competitive pricing on this unit"
-            f" ({part_number.upper()}) - we really appreciate working with your team.\n\n"
-            "To help us move forward with your unit, could you please confirm the following details in your reply?\n\n"
-            f"{table}\n\n"
-            "If a certificate, trace document, or shop report is available, please attach it to your reply in this same email thread.\n\n"
-            "While we review this unit, could you also send over your latest full inventory list? "
+            "Hi there,\n\n"
+            "Thank you so much for the quick response and competitive offer on this unit"
+            f" (P/N {part_number.upper()}) - we really appreciate working with your team!\n\n"
+            "To help us finalize this option for our client, could you quickly confirm the missing details below?\n\n"
+            f"{bullets}\n\n"
+            "Please attach any certificate, trace document, or shop report to this same email thread.\n\n"
+            "Once confirmed, we can move forward with presenting this to our end buyer.\n\n"
+            "---\n\n"
+            "While we review this unit, could you also send over your latest full stock list? "
             "We'd love to keep it on file for upcoming requirements.\n\n"
-            "Best regards,\nWinged Tycoons Purchasing Team"
+            "Thanks again for your excellent help!\n\n"
+            "Best regards,\nWinged Tycoons Sourcing Team"
         )
 
 

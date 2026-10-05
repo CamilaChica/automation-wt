@@ -93,12 +93,12 @@ class TestSupplierRFQTemplate(EmailTemplateAssertions):
         ))
 
         self.assertEqual(payload.message_type, "SUPPLIER_RFQ")
-        self.assertEqual(payload.subject, "RFQ - PN XYZ123 - Qty 2")
-        self.assertRegex(payload.body, r"1\. Unit Price \(USD\)")
-        self.assertRegex(payload.body, r"2\. Available Quantity")
-        self.assertRegex(payload.body, r"3\. Condition & Traceability/Certification")
-        self.assertRegex(payload.body, r"4\. Lead Time & Shipping Location")
-        self.assertRegex(payload.body, r"5\. Quote Expiration Date")
+        self.assertEqual(payload.subject, "RFQ: Part # XYZ123 – Urgent Requirement")
+        self.assertIn("Qty Needed: 2", payload.body)
+        self.assertRegex(payload.body, r"1\. Unit Price & Condition")
+        self.assertRegex(payload.body, r"2\. Tag / Documentation")
+        self.assertRegex(payload.body, r"3\. Traceability")
+        self.assertRegex(payload.body, r"4\. Lead Time & Location")
         self.assert_professional_layout(payload)
 
 

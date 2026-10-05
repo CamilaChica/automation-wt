@@ -93,7 +93,7 @@ class EmailProgramRuntime:
                 "supplier_communication",
                 "Draft this supplier clarification using the canonical subject and body. "
                 "Copy the subject, all business content, part numbers, quantities, requested fields "
-                "and paragraph breaks exactly. The ONLY permitted changes are replacing 'Hello,' "
+                "                and paragraph breaks exactly. The ONLY permitted changes are replacing the greeting line "
                 "with 'Dear Supplier Team,' or 'Dear Supplier,' and replacing 'Best regards,' "
                 "with 'Kind regards,'. Keep the signature unchanged. Return requested_fields "
                 "exactly as supplied. Never add prices, discounts, deadlines or order commitments.",
@@ -108,15 +108,14 @@ class EmailProgramRuntime:
                 request, SupplierEmailDraft, max_attempts=1,
             )
             normalized_body = draft.body_text.strip()
+            canonical_greeting = body.strip().split("\n", 1)[0]
             for greeting in ("Dear Supplier Team,", "Dear Supplier,"):
                 if normalized_body.startswith(greeting + "\n\n"):
-                    normalized_body = "Hello," + normalized_body[len(greeting):]
+                    normalized_body = canonical_greeting + normalized_body[len(greeting):]
                     break
-            signoff = "\n\nKind regards,\nWinged Tycoons Purchasing Team"
-            if normalized_body.endswith(signoff):
-                normalized_body = normalized_body[:-len(signoff)] + (
-                    "\n\nBest regards,\nWinged Tycoons Purchasing Team"
-                )
+            head, sep, tail = normalized_body.rpartition("\n\nKind regards,\n")
+            if sep and "\n" not in tail:
+                normalized_body = f"{head}\n\nBest regards,\n{tail}"
             if (
                 draft.subject != subject
                 or normalized_body != body.strip()

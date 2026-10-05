@@ -58,6 +58,7 @@ class SupplierRFQData(BaseModel):
     quantity: int = Field(..., gt=0)
     condition_requested: str
     certification_requested: str
+    description: str | None = None
 
 
 class SupplierDiscountData(BaseModel):
@@ -161,22 +162,28 @@ def customer_quote(data: CustomerQuoteData) -> EmailPayload:
 
 
 def supplier_rfq(data: SupplierRFQData) -> EmailPayload:
-    subject = f"RFQ - PN {data.part_number} - Qty {data.quantity}"
+    description = safe_display_text(data.description, fallback="")
+    subject = f"RFQ: Part # {data.part_number}" + (f" | {description}" if description else "") + " – Urgent Requirement"
+    condition = data.condition_requested if data.condition_requested and data.condition_requested.casefold() != "any" else "FN / OH / SV"
     body = (
-        f"Dear {data.supplier_contact},\n\n"
-        "Winged Tycoons is currently sourcing the following component and requesting availability and commercial pricing:\n\n"
+        f"Hi {data.supplier_contact},\n\n"
+        "Hope you're having a great week!\n\n"
+        "We have an active requirement and would appreciate your best pricing and availability for:\n\n"
         f"- Part Number: {data.part_number}\n"
-        f"- Requested Quantity: {data.quantity}\n"
-        f"- Requested Condition: {data.condition_requested}\n"
-        f"- Certification Required: {data.certification_requested}\n\n"
-        "Please reply with your best commercial offer including:\n"
-        "1. Unit Price (USD)\n"
-        "2. Available Quantity\n"
-        "3. Condition & Traceability/Certification\n"
-        "4. Lead Time & Shipping Location\n"
-        "5. Quote Expiration Date\n\n"
-        "Thank you for your prompt response.\n\n"
-        "Purchasing Team | Winged Tycoons"
+        + (f"- Description: {description}\n" if description else "")
+        + f"- Qty Needed: {data.quantity}\n"
+        f"- Preferred Condition: {condition}\n\n"
+        "Key Details Needed:\n"
+        "1. Unit Price & Condition\n"
+        "2. Tag / Documentation (e.g., FAA 8130-3, EASA Form 1, CoC)\n"
+        "3. Traceability (e.g., 121 / 135 / OEM Trace)\n"
+        "4. Lead Time & Location\n\n"
+        "---\n\n"
+        "Inventory Request: While reviewing this requirement, could you also attach your latest full stock list? "
+        "We'd love to keep your active inventory on file for upcoming orders.\n\n"
+        "Thank you as always for your quick support!\n\n"
+        "Best regards,\n"
+        "Winged Tycoons Sourcing Team"
     )
     return EmailPayload(message_type="SUPPLIER_RFQ", recipient_email=data.recipient_email, subject=subject, body=body)
 
