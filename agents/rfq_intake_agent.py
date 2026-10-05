@@ -238,7 +238,7 @@ def _extract_quantity(text: str) -> Optional[int]:
     ]
     for pat in patterns:
         m = re.search(pat, text, re.IGNORECASE)
-        if m:
+        if m and 0 < int(m.group(1)) <= 99999:
             return int(m.group(1))
     return None
 
@@ -578,9 +578,12 @@ class RFQIntakeAgent(BaseAgent):
         customer_name = str(inputs.get("customer_name") or customer_name or "").strip() or None
         customer_email = str(inputs.get("customer_email") or customer_email or "").strip().lower() or None
         extracted_items = _extract_line_items(raw_text)
+        parsed_items = list(extracted_items)
         part_number_raw = _extract_part_number(raw_text)
         part_number  = _normalize_part_number(part_number_raw) if part_number_raw else None
         extracted_quantity = _extract_quantity(raw_text)
+        if parsed_items and parsed_items[0].get("quantity"):
+            extracted_quantity = parsed_items[0]["quantity"]
         quantity     = extracted_quantity
         quantity_defaulted = extracted_quantity is None
         condition, is_ambiguous_condition = _extract_condition(raw_text)
@@ -632,6 +635,13 @@ class RFQIntakeAgent(BaseAgent):
                     for item in llm_data.items
                     if item.part_number.value and is_valid_extracted_part_number(item.part_number.value)
                 ]
+                parsed_qty = {i["requested_part_number"]: i.get("quantity") for i in parsed_items}
+                for item in extracted_items:
+                    qty = item["quantity"]
+                    part_digits = re.sub(r"\D", "", item["requested_part_number"] or "")
+                    if qty is not None and (qty > 99999 or (part_digits and str(qty) in part_digits)):
+                        item["quantity"] = parsed_qty.get(item["requested_part_number"])
+                        item["quantity_defaulted"] = item["quantity"] is None
                 if extracted_items:
                     part_number = _normalize_part_number(extracted_items[0]["requested_part_number"])
                 # Preserve an explicitly labelled quantity from the raw RFQ when
