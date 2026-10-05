@@ -63,7 +63,8 @@ class MailboxServiceTests(unittest.TestCase):
         client.request.assert_called_once()
         method, path, payload = client.request.call_args.args
         self.assertEqual(("POST", "/users/purchasing@wingedtycoons.com/sendMail"), (method, path))
-        self.assertEqual("Please quote.", payload["message"]["body"]["content"])
+        self.assertIn("Please quote.", payload["message"]["body"]["content"])
+        self.assertEqual("HTML", payload["message"]["body"]["contentType"])
         self.assertEqual("message-1", payload["message"]["replyTo"][0]["emailAddress"]["address"])
 
     def _graph_patches(self):
