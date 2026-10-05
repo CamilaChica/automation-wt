@@ -174,12 +174,16 @@ def is_valid_extracted_part_number(value: str) -> bool:
     """Reject quote, RFQ, and internal tracking identifiers as part numbers."""
     normalized = re.sub(r"\s*[-]\s*", "-", str(value or "")).strip().upper()
     rejected_prefixes = ("QTE", "QUOTE", "RFQ", "READY-QU-", "PO-", "ORDER-", "EMAIL-", "MSG-")
+    if not normalized or normalized.startswith(rejected_prefixes) or len(normalized) > 40:
+        return False
+    if not re.search(r"\d", normalized):
+        return False
+    if re.search(r"[A-Z0-9]+-[A-Z0-9]+", normalized):
+        return True
+    # Hyphen-less aviation P/Ns (e.g. 772292, 4170003630, BACR15CE5D5); reject years.
     return bool(
-        normalized
-        and not normalized.startswith(rejected_prefixes)
-        and len(normalized) <= 40
-        and re.search(r"[A-Z0-9]+-[A-Z0-9]+", normalized)
-        and re.search(r"\d", normalized)
+        re.fullmatch(r"[A-Z0-9]{4,20}", normalized)
+        and not re.fullmatch(r"(?:19|20)\d{2}", normalized)
     )
 
 

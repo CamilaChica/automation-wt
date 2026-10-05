@@ -66,6 +66,7 @@ LEGACY_TO_CANONICAL = {
 LEGACY_TRANSITIONS = {
     "Intake": {"Validating", "Intake_Failed", "Supplier_Sourcing", "Pending_Internal_Review", "Blocked_Compliance_Review"},
     "Intake_Failed": {"Intake"},
+    "Pending_Internal_Review": {"Validating", "Rejected"},
     "Validating": {"Inventory_Lookup", "Supplier_Sourcing", "Verification_Halted"},
     "Inventory_Lookup": {"Supplier_Sourcing", "Compliance_Check", "Verification_Halted"},
     "Supplier_Sourcing": {"Sourcing_Failed", "Compliance_Check", "Supplier_Sourcing", "No_Quote", "Verification_Halted"},

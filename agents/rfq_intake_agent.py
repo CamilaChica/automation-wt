@@ -127,6 +127,26 @@ def _normalize_part_number(raw: str) -> str:
     return re.sub(r"\s+", "", normalized).upper()
 
 
+_TABLE_HEADER_WORDS = r"(?:Part\s+)?(?:Description|Desc\.?|Des|Tail|Qty|Quantity|Condition|Cond|Urgency|Destination|UOM|Alt|Cert)"
+_TABLE_ROW_RE = re.compile(
+    r"(?:Part\s*(?:Number|No\.?|#)|P/?N|PN)(?:\s+" + _TABLE_HEADER_WORDS + r")+"
+    r"\s+(?:\d{1,2}\s+)?([A-Z0-9][A-Z0-9\-]{3,30})\b",
+    re.IGNORECASE,
+)
+_SUBJECT_PN_RE = re.compile(
+    r"Subject:\s*(?:(?:RFQ|RFQ/URGENT|Request\s+for\s+Quot\w*)\s*(?:for|:|-)?\s*)?([A-Z0-9][A-Z0-9\-]{3,30})\b",
+    re.IGNORECASE,
+)
+
+
+def _plausible_part_number(raw: str) -> bool:
+    """Validate a raw candidate; hyphen-less P/Ns must be a single token."""
+    normalized = _normalize_part_number(raw)
+    if "-" not in normalized and re.search(r"\s", raw.strip()):
+        return False
+    return is_valid_extracted_part_number(normalized)
+
+
 def _extract_email(text: str) -> Optional[str]:
     """Extract the first e-mail address found in text."""
     m = re.search(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", text)
@@ -145,17 +165,15 @@ def _extract_part_number(text: str) -> Optional[str]:
         "UTF-8", "UTF8", "ISO-8859-1", "US-ASCII", "TEXT-HTML", "TEXT-PLAIN",
     }
 
-    def valid_candidate(value: str) -> bool:
+    def valid_candidate(value: str, raw: Optional[str] = None) -> bool:
         normalized = _normalize_part_number(value)
         segments = normalized.split("-")
         digit_count = len(re.findall(r"\d", normalized))
         return (
-            is_valid_extracted_part_number(normalized)
+            _plausible_part_number(raw if raw is not None else value)
             and normalized not in metadata_tokens
             and not normalized.startswith(("RT-PBILL", "PBILL"))
-            and bool(re.search(r"\d", normalized))
             and len(normalized) <= 40
-            and bool(re.search(r"[A-Z0-9]+-[A-Z0-9]+", normalized))
             and not (any(len(segment) > 10 for segment in segments) and digit_count < 3)
         )
 
@@ -167,8 +185,29 @@ def _extract_part_number(text: str) -> Optional[str]:
     m = label_re.search(text)
     if m:
         candidate = _normalize_part_number(m.group(1))
-        if valid_candidate(candidate):
+        if valid_candidate(candidate, m.group(1)):
             return candidate
+
+    # Tab-separated tables: read the value under the P/N column header
+    lines = text.splitlines()
+    for idx, line in enumerate(lines[:-1]):
+        cols = [c.strip() for c in line.split("\t")]
+        if len(cols) < 2:
+            continue
+        pn_idx = next(
+            (i for i, c in enumerate(cols) if re.fullmatch(r"(?:Part\s*(?:Number|No\.?|#)|P/?N|PN)", c, re.IGNORECASE)),
+            None,
+        )
+        if pn_idx is None:
+            continue
+        row = [c.strip() for c in lines[idx + 1].split("\t")]
+        if pn_idx < len(row) and valid_candidate(row[pn_idx]):
+            return _normalize_part_number(row[pn_idx])
+
+    # Tabular RFQs: "Part Number Description Qty 1 772292 ..."
+    table = _TABLE_ROW_RE.search(text)
+    if table and valid_candidate(table.group(1)):
+        return _normalize_part_number(table.group(1))
 
     # General token: contains at least one digit and one hyphen, e.g. 060-1234-00
     general_re = re.compile(r"\b([A-Z0-9]{2,}(?:-[A-Z0-9]+){1,5})\b", re.IGNORECASE)
@@ -179,6 +218,11 @@ def _extract_part_number(text: str) -> Optional[str]:
             continue
         if len(c) >= 5 and valid_candidate(c):
             return _normalize_part_number(c)
+
+    # Subject-line P/N, e.g. "Subject: RFQ for 569670 FLAP HYDRAULIC MOTOR"
+    subject = _SUBJECT_PN_RE.search(text)
+    if subject and re.search(r"\d", subject.group(1)) and valid_candidate(subject.group(1)):
+        return _normalize_part_number(subject.group(1))
 
     return None
 
@@ -318,6 +362,8 @@ def _extract_line_items(text: str) -> List[Dict[str, Any]]:
     for index, match in enumerate(matches):
         candidate = _normalize_part_number(match.group(1))
         if not candidate or len(candidate) > 40 or candidate.startswith(("RT-PBILL", "PBILL")):
+            continue
+        if not _plausible_part_number(match.group(1)):
             continue
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         segment = text[match.start():end]
