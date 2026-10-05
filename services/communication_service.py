@@ -955,9 +955,12 @@ class CommunicationService:
             certificate = safe_display_text(value(item, "certificate_type") or "Not specified")
             lead_time = value(item, "lead_time_days")
             lead_text = f"{int(lead_time)} days" if lead_time is not None else "To be confirmed"
+            location = safe_display_text(
+                value(item, "availability_location") or value(item, "unit_location") or "To be confirmed by supplier"
+            )
             text_rows.append(
                 f"{part_number} — {description}; Qty {quantity}; Condition {condition}; "
-                f"Release document {certificate}; Lead time {lead_text}; "
+                f"Release document {certificate}; Lead time {lead_text}; Unit location {location}; "
                 f"Unit price ${unit_price:,.2f}; Line total ${line_total:,.2f}"
             )
             rows.append(
@@ -965,6 +968,7 @@ class CommunicationService:
                 f"<td>{html_lib.escape(part_number)}<br><span>{html_lib.escape(description)}</span></td>"
                 f"<td>{quantity}</td><td>{html_lib.escape(condition)}</td>"
                 f"<td>{html_lib.escape(certificate)}</td><td>{html_lib.escape(lead_text)}</td>"
+                f"<td>{html_lib.escape(location)}</td>"
                 f"<td>${unit_price:,.2f}</td><td>${line_total:,.2f}</td>"
                 "</tr>"
             )
@@ -977,7 +981,9 @@ class CommunicationService:
             f"Thank you for your request. Your quotation {quote_id} is ready.\n\n"
             "QUOTATION SUMMARY\n"
             f"Quote reference: {quote_id}\n"
-            f"Valid through: {valid_until}\n\n"
+            f"Valid through: {valid_until}\n"
+            "Payment terms: Prepayment\n"
+            "Notes: Unit ships same day upon PO and payment receipt.\n\n"
             "ITEMIZED PRICING\n"
             + "\n".join(text_rows)
             + f"\n\nSubtotal: ${subtotal:,.2f}\nShipping: ${shipping:,.2f}\nTotal: ${total:,.2f}\n\n"
@@ -996,13 +1002,15 @@ class CommunicationService:
             f"<p>Thank you for your request. Your quotation <strong>{html_lib.escape(quote_id)}</strong> is ready.</p>"
             "<h2 style=\"color:#8a6a19\">Quotation summary</h2>"
             f"<p><strong>Quote reference:</strong> {html_lib.escape(quote_id)}<br>"
-            f"<strong>Valid through:</strong> {html_lib.escape(valid_until)}</p>"
+            f"<strong>Valid through:</strong> {html_lib.escape(valid_until)}<br>"
+            "<strong>Payment terms:</strong> Prepayment<br>"
+            "<strong>Notes:</strong> Unit ships same day upon PO and payment receipt.</p>"
             "<h2 style=\"color:#8a6a19\">Itemized pricing</h2>"
             "<table style=\"border-collapse:collapse;width:100%\">"
             "<thead><tr>"
             + "".join(
                 f"<th style=\"text-align:left;border-bottom:2px solid #d7dde5;padding:8px\">{label}</th>"
-                for label in ("Part / description", "Qty", "Condition", "Release document", "Lead time", "Unit price", "Line total")
+                for label in ("Part / description", "Qty", "Condition", "Release document", "Lead time", "Unit location", "Unit price", "Line total")
             )
             + "</tr></thead><tbody>"
             + "".join(rows)
