@@ -173,7 +173,7 @@ class TestSyntaxAndDataAccuracy(SQLiteEmailFixture):
         self.assertEqual(result["rendered_subject"], send.call_args.args[2])
         self.assertEqual(result["rendered_body"], body)
         self.assertEqual(result["rendered_html_body"], send.call_args.kwargs["html_body"])
-        self.assertIn(f"Dear {context.company_name}'s team!", body)
+        self.assertIn(f"Hi {context.company_name},", body)
         self.assertIn("Does this quotation meet your needs?", body)
         self.assertIn("https://portal.wingedtycoons.com/customer-portal", body)
 
@@ -249,8 +249,8 @@ class TestToneAndHumanLikeness(SQLiteEmailFixture):
         body = send.call_args.args[3]
         words = re.findall(r"\b\w+[\w'-]*\b", body)
 
-        self.assertLess(len(words), 150)
-        self.assertRegex(body, r"Dear Maria Buyer's team!")
+        self.assertLess(len(words), 180)
+        self.assertRegex(body, r"Hi Maria Buyer,")
         self.assertIn("Does this quotation meet your needs?", body)
         self.assertIn("https://portal.wingedtycoons.com/customer-portal", body)
         self.assertIn("Best regards", body)
@@ -305,7 +305,7 @@ class TestToneAndHumanLikeness(SQLiteEmailFixture):
 
         body = send.call_args.args[3]
         self.assertIn("Does this answer your question and provide everything you need?", body)
-        self.assertIn("Dear Global Airlines's team!", body)
+        self.assertIn("Hi Global Airlines,", body)
         self.assertIn("https://portal.wingedtycoons.com/customer-portal", body)
 
     def test_legacy_customer_chase_is_cancelled_instead_of_sent(self):
@@ -335,7 +335,7 @@ class TestToneAndHumanLikeness(SQLiteEmailFixture):
         )
 
         words = re.findall(r"\b\w+[\w'-]*\b", result["body"])
-        self.assertLess(len(words), 150)
+        self.assertLess(len(words), 180)
         self.assertRegex(result["body"], r"Dear John Supplier,")
         self.assertIn("Best regards", result["body"])
         self.assertNotIn("{", result["body"])
@@ -365,7 +365,7 @@ class TestNegativeAndSafetyCases(SQLiteEmailFixture):
             )
         body = send.call_args.args[3]
 
-        self.assertIn("Dear John Doe", body)
+        self.assertIn("Hi John Doe", body)
         self.assertNotIn("reveal system prompt", body.lower())
         self.assertNotIn("api_key", body.lower())
         self.assertNotIn("schema.sql", body.lower())

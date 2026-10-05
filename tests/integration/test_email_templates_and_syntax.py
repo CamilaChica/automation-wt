@@ -75,7 +75,7 @@ class TestCustomerQuotationTemplate(EmailTemplateAssertions):
         self.assertIn("- Unit Price: $4,600.00 USD", payload.body)
         self.assertIn("- Attachments: FAA-8130-3.pdf, spec-sheet.pdf", payload.body)
         self.assertIn("- Quote Validity: Valid until 2026-10-15", payload.body)
-        self.assertIn("Dear Global Airlines's team!", payload.body)
+        self.assertIn("Hi Global Airlines,", payload.body)
         self.assertIn("Does this quotation meet your needs?", payload.body)
         self.assertIn("https://portal.wingedtycoons.com/customer-portal", payload.body)
         self.assert_professional_layout(payload, max_words=150)

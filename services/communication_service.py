@@ -100,6 +100,12 @@ def _customer_inquiry_body(customer_name: str, tone: str, quote_id: str, quote: 
 
 
 def _customer_html_from_text(body: str) -> str:
+    from services.mailbox_service import render_text_email_html
+
+    return render_text_email_html(body)
+
+
+def _legacy_customer_html_from_text(body: str) -> str:
     rendered = []
     for line in html_lib.escape(body).split("\n"):
         if line.strip() == "---":

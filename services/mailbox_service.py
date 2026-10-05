@@ -416,6 +416,78 @@ def ensure_staging_recipient_allowed(recipient: str) -> None:
         )
 
 
+def _inline_markdown(text: str) -> str:
+    text = re.sub(
+        r"`([^`]+)`",
+        r'<code style="font-family:Consolas,monospace;background:#eef2f7;padding:1px 5px;border-radius:3px">\1</code>',
+        text,
+    )
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    text = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<em>\1</em>", text)
+    text = re.sub(
+        r'(?<!["=])(https?://[^\s<]+)',
+        r'<a href="\1" style="color:#0b4f9c;font-weight:600">\1</a>',
+        text,
+    )
+    return text
+
+
+def render_text_email_html(body: str) -> str:
+    """Render the Markdown-style plain-text email bodies as clean HTML for Outlook/Gmail."""
+    import html as html_lib
+
+    blocks: list[str] = []
+    list_tag: str | None = None
+    paragraph: list[str] = []
+
+    def flush_paragraph() -> None:
+        if paragraph:
+            blocks.append('<p style="margin:0 0 12px">' + "<br>".join(paragraph) + "</p>")
+            paragraph.clear()
+
+    def close_list() -> None:
+        nonlocal list_tag
+        if list_tag:
+            blocks.append(f"</{list_tag}>")
+            list_tag = None
+
+    for raw_line in html_lib.escape(body or "", quote=False).replace("\r\n", "\n").split("\n"):
+        line = raw_line.strip()
+        bullet = re.match(r"^[-•]\s+(.*)$", line)
+        numbered = re.match(r"^\d+[.)]\s+(.*)$", line)
+        if not line:
+            flush_paragraph()
+            close_list()
+        elif re.fullmatch(r"-{3,}|_{3,}", line):
+            flush_paragraph()
+            close_list()
+            blocks.append('<hr style="border:none;border-top:1px solid #d5dbe5;margin:16px 0">')
+        elif bullet or numbered:
+            flush_paragraph()
+            tag = "ul" if bullet else "ol"
+            if list_tag != tag:
+                close_list()
+                blocks.append(f'<{tag} style="margin:0 0 12px;padding-left:22px">')
+                list_tag = tag
+            blocks.append(f'<li style="margin:0 0 4px">{_inline_markdown((bullet or numbered).group(1))}</li>')
+        elif re.match(r"^#{1,4}\s+", line):
+            flush_paragraph()
+            close_list()
+            blocks.append(
+                '<p style="margin:4px 0 8px;font-size:16px;font-weight:700;color:#0b2545">'
+                + _inline_markdown(re.sub(r"^#{1,4}\s+", "", line)) + "</p>"
+            )
+        else:
+            close_list()
+            paragraph.append(_inline_markdown(line))
+    flush_paragraph()
+    close_list()
+    return (
+        '<div style="font-family:Montserrat,Segoe UI,Arial,sans-serif;font-size:14px;color:#172033;'
+        'line-height:1.6;max-width:680px">' + "\n".join(blocks) + "</div>"
+    )
+
+
 def send_message(
     mailbox: str,
     recipient: str,
@@ -428,6 +500,8 @@ def send_message(
 ) -> bool:
     """Send an email. Returns False when a reply was requested but the original thread was not found."""
     ensure_staging_recipient_allowed(recipient)
+    if not html_body and body:
+        html_body = render_text_email_html(body)
     if _use_legacy_graph_client():
         config = MAILBOXES.get(mailbox)
         if not config:

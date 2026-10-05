@@ -112,7 +112,7 @@ def enforce_customer_email_policy(
 
     content = str(body or "").strip()
     content = re.sub(r"^(?:Dear|Hi|Hello)\b[^\n]*\n+", "", content, count=1, flags=re.IGNORECASE)
-    greeting = "Dear Customer," if "@" in company else f"Dear {company}'s team!"
+    greeting = "Hi there," if "@" in company else f"Hi {company},"
 
     additions = []
     if satisfaction_question and satisfaction_question.casefold() not in content.casefold():
