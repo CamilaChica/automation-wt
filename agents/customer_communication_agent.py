@@ -86,10 +86,13 @@ class CustomerCommunicationAgent(BaseAgent):
 
     def _emergency_template(self, name: str, quote_id: str, summary: str) -> GeneratedEmailDraft:
         quantity_question = "\n\nHow many do you need?" if self._quantity_was_defaulted else ""
+        from services.mailbox_service import render_text_email_html
+
+        body_text = (f"Hi {name},\n\nPlease find your approved quotation {quote_id} below.\n\n{summary}{quantity_question}\n\nPlease reply in our customer portal with any questions or a purchase order.\n\nBest regards,\nWinged Tycoons Sales Team")
         return GeneratedEmailDraft(
             subject=f"Winged Tycoons quotation {quote_id}",
-            body_text=(f"Dear {name}'s team!\n\nPlease find your approved quotation {quote_id} below.\n\n{summary}{quantity_question}\n\nPlease reply in our customer portal with any questions or a purchase order.\n\nBest regards,\nWinged Tycoons Sales Team"),
-            body_html="<p>Approved quotation details are included in the plain-text version of this message.</p>",
+            body_text=body_text,
+            body_html=render_text_email_html(body_text),
             redacted_fields_applied=["supplier costs", "internal margins", "supplier identities", "warehouse locations"],
             confidence_score=1.0,
         )

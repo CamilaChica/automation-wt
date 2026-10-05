@@ -133,7 +133,9 @@ def _communications_examples() -> list[tuple[str, dspy.Example]]:
             output = {"subject": row["subject"], "body_text": row["body"], "confidence_score": 0.95}
             if task == "customer_communication":
                 contract = "GeneratedEmailDraft"
-                output["body_html"] = f"<p>{escape(row['body']).replace(chr(10), '<br>')}</p>"
+                from services.mailbox_service import render_text_email_html
+
+                output["body_html"] = render_text_email_html(row["body"])
                 output["redacted_fields_applied"] = []
             else:
                 contract = "SupplierEmailDraft"
