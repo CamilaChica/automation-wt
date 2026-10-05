@@ -108,20 +108,86 @@ function ExtractionReviewDialog({
   onDone: (message: string) => void;
 }) {
   const decideReview = useDecideExtractionReview();
+  const rawExtraction = (review.extraction || {}) as Record<string, unknown>;
+  const [editorMode, setEditorMode] = useState<'form' | 'json'>('form');
+
+  // Structured fields
+  const [partNumber, setPartNumber] = useState(String(rawExtraction.part_number || rawExtraction.requested_part_number || ''));
+  const [description, setDescription] = useState(String(rawExtraction.description || ''));
+  const [quantity, setQuantity] = useState(Number(rawExtraction.quantity || 1));
+  const [condition, setCondition] = useState(String(rawExtraction.condition_requested || rawExtraction.condition || 'NE'));
+  const [certification, setCertification] = useState(String(rawExtraction.certification_requested || rawExtraction.certificate_type || 'FAA 8130-3'));
+  const [targetPrice, setTargetPrice] = useState(String(rawExtraction.target_price || rawExtraction.unit_price || ''));
+  const [urgency, setUrgency] = useState(String(rawExtraction.urgency || 'Standard'));
+
   const [extractionJson, setExtractionJson] = useState(() => JSON.stringify(review.extraction || {}, null, 2));
   const [comments, setComments] = useState('');
   const [error, setError] = useState('');
+
+  const syncFormToJson = () => {
+    try {
+      const existing = JSON.parse(extractionJson || '{}') as Record<string, unknown>;
+      const updated = {
+        ...existing,
+        part_number: partNumber.trim().toUpperCase(),
+        description: description.trim(),
+        quantity: Math.max(1, Number(quantity) || 1),
+        condition_requested: condition.trim(),
+        certification_requested: certification.trim(),
+        ...(targetPrice ? { target_price: Number(targetPrice) || 0 } : {}),
+        urgency: urgency.trim(),
+      };
+      setExtractionJson(JSON.stringify(updated, null, 2));
+    } catch {
+      // Keep existing json if parsing failed
+    }
+  };
+
+  const handleFieldChange = (setter: (val: any) => void, val: any) => {
+    setter(val);
+    // sync to json
+    try {
+      const existing = JSON.parse(extractionJson || '{}') as Record<string, unknown>;
+      const updated = {
+        ...existing,
+        part_number: partNumber.trim().toUpperCase(),
+        description: description.trim(),
+        quantity: Math.max(1, Number(quantity) || 1),
+        condition_requested: condition.trim(),
+        certification_requested: certification.trim(),
+        ...(targetPrice ? { target_price: Number(targetPrice) || 0 } : {}),
+        urgency: urgency.trim(),
+      };
+      setExtractionJson(JSON.stringify(updated, null, 2));
+    } catch {
+      // ignore
+    }
+  };
 
   const submit = async (decision: 'approve' | 'reject') => {
     setError('');
     let approvedExtraction: Record<string, unknown> | undefined;
     if (decision === 'approve') {
       try {
-        const parsed: unknown = JSON.parse(extractionJson);
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          throw new Error('Enter a JSON object to continue.');
+        if (editorMode === 'form') {
+          syncFormToJson();
+          approvedExtraction = {
+            ...(typeof rawExtraction === 'object' ? rawExtraction : {}),
+            part_number: partNumber.trim().toUpperCase(),
+            description: description.trim() || undefined,
+            quantity: Math.max(1, Number(quantity) || 1),
+            condition_requested: condition.trim(),
+            certification_requested: certification.trim(),
+            ...(targetPrice ? { target_price: Number(targetPrice) || 0 } : {}),
+            urgency: urgency.trim(),
+          };
+        } else {
+          const parsed: unknown = JSON.parse(extractionJson);
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('Enter a JSON object to continue.');
+          }
+          approvedExtraction = parsed as Record<string, unknown>;
         }
-        approvedExtraction = parsed as Record<string, unknown>;
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : 'Extraction must be valid JSON.');
         return;
@@ -145,27 +211,141 @@ function ExtractionReviewDialog({
   };
 
   return (
-    <DialogFrame title="Review Parsed Request" onClose={onClose}>
+    <DialogFrame title="Review Parsed RFQ Request" onClose={onClose}>
       <div className="ops-dialog-body">
-        <p className="ops-dialog-copy">{review.reason || 'Confirm the extracted request fields before the workflow continues.'}</p>
+        <p className="ops-dialog-copy">{review.reason || 'Verify and confirm the extracted request fields before autonomous sourcing continues.'}</p>
+        
         {review.source_text && (
-          <div className="ops-source-text">
-            <span className="ops-field-label">SOURCE EMAIL</span>
-            <p>{review.source_text}</p>
+          <div className="ops-source-text" style={{ maxHeight: '140px', overflowY: 'auto' }}>
+            <span className="ops-field-label">SOURCE EMAIL / CONTEXT</span>
+            <p style={{ whiteSpace: 'pre-wrap', margin: '4px 0' }}>{review.source_text}</p>
           </div>
         )}
-        <label className="ops-field-label" htmlFor="ops-extraction-json">Extracted Fields (JSON)</label>
-        <textarea
-          id="ops-extraction-json"
-          name="approved-extraction"
-          autoComplete="off"
-          spellCheck={false}
-          value={extractionJson}
-          onChange={event => setExtractionJson(event.target.value)}
-          rows={8}
-          className="ops-textarea ops-json-editor"
-        />
-        <label className="ops-field-label" htmlFor="ops-review-comments">Review Notes</label>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+          <span className="ops-field-label">STRUCTURED RFQ FIELDS</span>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button
+              type="button"
+              className={`ops-button ${editorMode === 'form' ? 'ops-button-primary' : 'ops-button-muted'}`}
+              style={{ padding: '3px 8px', fontSize: '11px' }}
+              onClick={() => setEditorMode('form')}
+            >
+              Visual Form
+            </button>
+            <button
+              type="button"
+              className={`ops-button ${editorMode === 'json' ? 'ops-button-primary' : 'ops-button-muted'}`}
+              style={{ padding: '3px 8px', fontSize: '11px' }}
+              onClick={() => {
+                syncFormToJson();
+                setEditorMode('json');
+              }}
+            >
+              Raw JSON
+            </button>
+          </div>
+        </div>
+
+        {editorMode === 'form' ? (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '6px' }}>
+            <div>
+              <label className="ops-field-label" htmlFor="ops-form-pn">Part Number (P/N)</label>
+              <input
+                id="ops-form-pn"
+                className="ops-input"
+                autoComplete="off"
+                spellCheck={false}
+                value={partNumber}
+                onChange={e => handleFieldChange(setPartNumber, e.target.value)}
+                placeholder="e.g. 060-0012-00"
+              />
+            </div>
+            <div>
+              <label className="ops-field-label" htmlFor="ops-form-qty">Quantity</label>
+              <input
+                id="ops-form-qty"
+                type="number"
+                min="1"
+                className="ops-input"
+                value={quantity}
+                onChange={e => handleFieldChange(setQuantity, Number(e.target.value) || 1)}
+              />
+            </div>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <label className="ops-field-label" htmlFor="ops-form-desc">Description</label>
+              <input
+                id="ops-form-desc"
+                className="ops-input"
+                value={description}
+                onChange={e => handleFieldChange(setDescription, e.target.value)}
+                placeholder="e.g. Fuel Control Unit"
+              />
+            </div>
+            <div>
+              <label className="ops-field-label" htmlFor="ops-form-cond">Condition</label>
+              <input
+                id="ops-form-cond"
+                className="ops-input"
+                value={condition}
+                onChange={e => handleFieldChange(setCondition, e.target.value)}
+                placeholder="NE / OH / SV / AR"
+              />
+            </div>
+            <div>
+              <label className="ops-field-label" htmlFor="ops-form-cert">Certification</label>
+              <input
+                id="ops-form-cert"
+                className="ops-input"
+                value={certification}
+                onChange={e => handleFieldChange(setCertification, e.target.value)}
+                placeholder="FAA 8130-3 / EASA Dual"
+              />
+            </div>
+            <div>
+              <label className="ops-field-label" htmlFor="ops-form-target">Target Unit Price (USD, Optional)</label>
+              <input
+                id="ops-form-target"
+                type="number"
+                step="0.01"
+                min="0"
+                className="ops-input"
+                value={targetPrice}
+                onChange={e => handleFieldChange(setTargetPrice, e.target.value)}
+                placeholder="e.g. 14500.00"
+              />
+            </div>
+            <div>
+              <label className="ops-field-label" htmlFor="ops-form-urgency">Urgency / Priority</label>
+              <select
+                id="ops-form-urgency"
+                className="ops-input"
+                value={urgency}
+                onChange={e => handleFieldChange(setUrgency, e.target.value)}
+              >
+                <option value="Standard">Standard Routine</option>
+                <option value="Expedited">Expedited (Critical)</option>
+                <option value="AOG">AOG (Aircraft On Ground)</option>
+              </select>
+            </div>
+          </div>
+        ) : (
+          <>
+            <textarea
+              id="ops-extraction-json"
+              name="approved-extraction"
+              autoComplete="off"
+              spellCheck={false}
+              value={extractionJson}
+              onChange={event => setExtractionJson(event.target.value)}
+              rows={8}
+              className="ops-textarea ops-json-editor"
+              style={{ marginTop: '6px' }}
+            />
+          </>
+        )}
+
+        <label className="ops-field-label" htmlFor="ops-review-comments" style={{ marginTop: '10px' }}>Review Notes & Audit Trail</label>
         <textarea
           id="ops-review-comments"
           name="review-comments"
@@ -173,17 +353,17 @@ function ExtractionReviewDialog({
           value={comments}
           onChange={event => setComments(event.target.value)}
           rows={2}
-          placeholder="Add a note for the audit trail…"
+          placeholder="Add operator notes for the compliance audit trail…"
           className="ops-textarea"
         />
         {error && <p className="ops-form-error" role="alert">{error}</p>}
-        <div className="ops-dialog-actions">
+        <div className="ops-dialog-actions" style={{ marginTop: '14px' }}>
           <button type="button" className="ops-button ops-button-muted" disabled={decideReview.isPending} onClick={() => void submit('reject')}>
-            Reject
+            Reject RFQ
           </button>
           <button type="button" className="ops-button ops-button-primary" disabled={decideReview.isPending} onClick={() => void submit('approve')}>
             {decideReview.isPending ? <Loader2 size={15} className="ops-spin" aria-hidden="true" /> : <CheckCircle2 size={15} aria-hidden="true" />}
-            Approve Edited Fields
+            Confirm & Progress RFQ
           </button>
         </div>
       </div>

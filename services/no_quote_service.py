@@ -75,6 +75,24 @@ def _has_offers(db, parts: list[str]) -> bool:
             return True  # never no-quote on uncertain data
     return False
 
+def _enqueue_resume(rfq_id: str, parts: list[str]) -> None:
+    """Stock exists for a waiting RFQ: queue a resume so the customer gets a quote instead of waiting."""
+    try:
+        from services.operations_store import operations_store
+
+        hour = datetime.now(timezone.utc).strftime("%Y%m%d%H")
+        operations_store.record_automation_event(
+            event_type="resume_waiting_rfq",
+            entity_type="rfq",
+            entity_id=rfq_id,
+            status="QUEUED",
+            result=None,
+            idempotency_key=f"rfq-resume-sweep:{rfq_id}:{','.join(sorted(parts))}:{hour}",
+            max_attempts=3,
+        )
+    except Exception:
+        logger.exception("Resume enqueue failed rfq=%s", rfq_id)
+
 
 def sweep_no_quote(now: datetime | None = None, db=None, comms=None) -> list[str]:
     """Mark overdue RFQs with no supplier offers as No_Quote and send the polite same-thread email."""
@@ -96,6 +114,7 @@ def sweep_no_quote(now: datetime | None = None, db=None, comms=None) -> list[str
             continue
         parts = _part_numbers(db, rfq)
         if _has_offers(db, parts):
+            _enqueue_resume(rfq.id, parts)
             continue
         try:
             comms.send_rfq_no_quote(

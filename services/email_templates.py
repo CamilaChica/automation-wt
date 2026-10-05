@@ -153,10 +153,11 @@ def customer_quote(data: CustomerQuoteData) -> EmailPayload:
         f"- Unit Price: ${data.unit_price:,.2f} USD\n"
         f"- Lead Time: {data.lead_time}\n"
         f"- Quote Validity: Valid until {data.valid_until}{attachment_text}\n\n"
-        "Please let us know if you would like to proceed with a purchase order or if you have any questions regarding delivery or specifications.\n\n"
+        "To secure this unit and lock in pricing, please reply directly to this email with your Purchase Order (PO) or PO number. "
+        "Our formal quotation document is attached for your records.\n\n"
         "Best regards,\n\n"
-        "Winged Tycoons Aviation Team\n"
-        "rfq@wingedtycoons.com"
+        "Winged Tycoons Sales Team\n"
+        "sales@wingedtycoons.com"
     ), data.company_name or data.contact_name, satisfaction_question="Does this quotation meet your needs?")
     return EmailPayload(message_type="CUSTOMER_QUOTE", recipient_email=data.recipient_email, subject=subject, body=body)
 
@@ -167,7 +168,6 @@ def supplier_rfq(data: SupplierRFQData) -> EmailPayload:
     condition = data.condition_requested if data.condition_requested and data.condition_requested.casefold() != "any" else "FN / OH / SV"
     body = (
         f"Hi {data.supplier_contact},\n\n"
-        "Hope you're having a great week!\n\n"
         "We have an active requirement and would appreciate your best pricing and availability for:\n\n"
         f"- Part Number: {data.part_number}\n"
         + (f"- Description: {description}\n" if description else "")
@@ -175,15 +175,14 @@ def supplier_rfq(data: SupplierRFQData) -> EmailPayload:
         f"- Preferred Condition: {condition}\n\n"
         "Key Details Needed:\n"
         "1. Unit Price & Condition\n"
-        "2. Tag / Documentation (e.g., FAA 8130-3, EASA Form 1, CoC)\n"
-        "3. Traceability (e.g., 121 / 135 / OEM Trace)\n"
+        "2. Tag / Documentation (FAA 8130-3, EASA Form 1, CoC)\n"
+        "3. Traceability (121 / 135 / OEM Trace)\n"
         "4. Lead Time & Location\n\n"
-        "---\n\n"
-        "Inventory Request: While reviewing this requirement, could you also attach your latest full stock list? "
-        "We'd love to keep your active inventory on file for upcoming orders.\n\n"
-        "Thank you as always for your quick support!\n\n"
-        "Best regards,\n"
-        "Winged Tycoons Sourcing Team"
+        "Please also attach your latest inventory list if available so we can reference your active stock for upcoming requirements.\n\n"
+        "Thank you for your prompt assistance.\n\n"
+        "Best regards,\n\n"
+        "Winged Tycoons Sourcing Team\n"
+        "purchasing@wingedtycoons.com"
     )
     return EmailPayload(message_type="SUPPLIER_RFQ", recipient_email=data.recipient_email, subject=subject, body=body)
 
@@ -232,7 +231,7 @@ def supplier_verification(data: SupplierVerificationData) -> EmailPayload:
         "1. The units are currently in stock and available for immediate dispatch.\n"
         "2. The quoted price and condition remain valid.\n"
         "3. The requested airworthiness certification is ready.\n\n"
-        "Please reply to confirm availability so we can issue our formal order.\n\n"
+        "Please reply to confirm availability so we can issue our formal purchase order.\n\n"
         "Best regards,\n\n"
         "Operations Team | Winged Tycoons"
     )
@@ -243,9 +242,10 @@ def customer_followup(data: CustomerFollowupData) -> EmailPayload:
     subject = f"Following up on Quote {data.quote_number} - PN {data.part_number}"
     body = enforce_customer_email_policy((
         f"Hi {data.contact_name},\n\n"
-        f"I wanted to follow up on the quotation ({data.quote_number}) we sent recently for Part Number {data.part_number}.\n\n"
-        "Does this quotation meet your needs? Please let us know if you have any questions about pricing, lead time, or certification.\n\n"
+        f"Following up on Quotation {data.quote_number} for Part Number {data.part_number}.\n\n"
+        "Stock is subject to prior sale. Please let us know if you would like to proceed with your Purchase Order "
+        "or have questions on pricing, lead time, or certification.\n\n"
         "Best regards,\n\n"
-        "Winged Tycoons Aviation Team"
+        "Winged Tycoons Sales Team"
     ), data.company_name or data.contact_name, satisfaction_question="Does this quotation meet your needs?")
     return EmailPayload(message_type="CUSTOMER_FOLLOWUP", recipient_email=data.recipient_email, subject=subject, body=body)

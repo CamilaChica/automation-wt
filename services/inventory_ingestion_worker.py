@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from email.utils import parseaddr
@@ -41,6 +42,10 @@ WAITING_STATUSES = (
     "Supplier_Confirmation_Requested",
 )
 MAX_INGESTION_BATCH_SIZE = 10
+
+
+def _norm_pn(value: Any) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
 
 
 class _NullSavepoint:
@@ -150,8 +155,8 @@ class InventoryIngestionWorker:
                         "rfq_items", "rfq_id", rfq_id
                     )
                     if not any(
-                        str(item.get("resolved_part_number") or item.get("requested_part_number") or "").upper()
-                        == part_number.upper()
+                        _norm_pn(item.get("resolved_part_number") or item.get("requested_part_number"))
+                        == _norm_pn(part_number)
                         for item in item_records.values()
                     ):
                         continue
@@ -178,8 +183,8 @@ class InventoryIngestionWorker:
                 "rfq_items", "rfq_id", rfq_id
             )
             if not any(
-                str(item.get("resolved_part_number") or item.get("requested_part_number") or "").upper()
-                == part_number.upper()
+                _norm_pn(item.get("resolved_part_number") or item.get("requested_part_number"))
+                == _norm_pn(part_number)
                 for item in item_records.values()
             ):
                 continue

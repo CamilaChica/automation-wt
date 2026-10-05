@@ -884,8 +884,8 @@ class PostgresReviewTelemetryRepository:
     def claim_automation_events(self, *, event_type: str, limit: int = 10) -> list[dict[str, Any]]:
         with self._begin() as connection:
             rows = connection.execute(text(
-                "WITH candidates AS (SELECT id FROM automation_events WHERE event_type = :type AND status = 'QUEUED' "
-                "AND attempts < max_attempts ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT :limit) "
+                "WITH candidates AS (SELECT id FROM automation_events WHERE                 event_type = :type AND attempts < max_attempts "
+                                "AND (status = 'QUEUED' OR (status = 'RUNNING' AND execution_time < now() - interval '15 minutes')) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT :limit) "
                 "UPDATE automation_events AS events SET status = 'RUNNING', attempts = events.attempts + 1, execution_time = now() "
                 "FROM candidates WHERE events.id = candidates.id RETURNING events.id, events.attempts, events.max_attempts, "
                 "events.entity_id, events.result"

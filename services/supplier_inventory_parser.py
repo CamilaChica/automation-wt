@@ -9,15 +9,15 @@ from typing import Any
 
 
 ALIASES = {
-    "part_number": {"part number", "part no", "part #", "pn", "p n", "sku", "stock number", "item number"},
-    "description": {"description", "part description", "item description"},
-    "quantity_available": {"quantity", "qty", "available", "qty available", "quantity available", "stock"},
-    "condition_code": {"condition", "cond", "condition code"},
-    "unit_price": {"price", "unit price", "cost", "unit cost", "price each"},
-    "currency": {"currency", "curr"},
-    "lead_time_days": {"lead time", "lead time days", "days"},
-    "certificate_type": {"certificate", "certification", "cert", "trace", "8130", "easa"},
-    "availability_location": {"location", "warehouse", "ship from", "availability location"},
+    "part_number": {"part number", "part no", "part #", "pn", "p n", "p/n", "sku", "stock number", "item number", "material", "matnr", "part", "item"},
+    "description": {"description", "part description", "item description", "desc", "nomenclature", "item desc", "part name"},
+    "quantity_available": {"quantity", "qty", "available", "qty available", "quantity available", "stock", "on hand", "avail", "qty on hand", "stock qty", "qoh", "units"},
+    "condition_code": {"condition", "cond", "condition code", "cd", "c/d", "state", "cond code"},
+    "unit_price": {"price", "unit price", "cost", "unit cost", "price each", "unit_price", "unit_cost", "net price", "ea price", "list price", "each"},
+    "currency": {"currency", "curr", "ccy"},
+    "lead_time_days": {"lead time", "lead time days", "days", "lt", "delivery", "deliv", "lead-time", "lead"},
+    "certificate_type": {"certificate", "certification", "cert", "trace", "8130", "easa", "tag", "cert type", "release", "doc", "docs", "tag type"},
+    "availability_location": {"location", "warehouse", "ship from", "availability location", "loc", "whs", "city", "country", "site"},
 }
 
 

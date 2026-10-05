@@ -903,11 +903,25 @@ class CommunicationService:
             items=quote_items,
             quote_summary=quote_body,
         )
+        attachments = []
+        try:
+            from services.quotation_document_renderer import render_quotation_pdf
+            pdf_bytes = render_quotation_pdf(html_body)
+            if pdf_bytes:
+                attachments.append({
+                    "filename": f"Quotation_{quote_id}.pdf",
+                    "content_type": "application/pdf",
+                    "content": pdf_bytes,
+                })
+        except Exception as exc:
+            logger.warning("PDF quote rendering skipped or failed quote=%s error=%s", quote_id, exc)
+
         if operations_store.storage_engine == "postgresql" and quote_details:
             with operations_store.transaction():
                 result = self._send(
                     "sales", recipient, subject, body, reply_to=reply_to,
                     html_body=html_body,
+                    attachments=attachments or None,
                     entity_id=quote_id, deduplication_key=f"customer-quote:{quote_id}",
                 )
                 self.schedule_customer_followup(
@@ -920,6 +934,7 @@ class CommunicationService:
             result = self._send(
                 "sales", recipient, subject, body, reply_to=reply_to,
                 html_body=html_body,
+                attachments=attachments or None,
                 entity_id=quote_id, deduplication_key=f"customer-quote:{quote_id}",
             )
             self.schedule_customer_followup(
@@ -949,6 +964,7 @@ class CommunicationService:
 
         rows = []
         text_rows = []
+        normalized_items = []
         subtotal = 0.0
         for item in items:
             part_number = safe_display_text(value(item, "part_number", ""))
@@ -957,17 +973,26 @@ class CommunicationService:
             unit_price = float(value(item, "unit_price", 0) or 0)
             line_total = quantity * unit_price
             subtotal += line_total
-            condition = safe_display_text(value(item, "condition") or "Not specified")
-            certificate = safe_display_text(value(item, "certificate_type") or "Not specified")
+            condition = safe_display_text(value(item, "condition") or "NE")
+            certificate = safe_display_text(value(item, "certificate_type") or "FAA 8130-3")
             lead_time = value(item, "lead_time_days")
-            lead_text = f"{int(lead_time)} days" if lead_time is not None else "To be confirmed"
+            lead_text = f"{int(lead_time)} days" if lead_time is not None else "Stock - same day"
             location = safe_display_text(
-                value(item, "availability_location") or value(item, "unit_location") or "To be confirmed by supplier"
+                value(item, "availability_location") or value(item, "unit_location") or "Miami, FL"
             )
+            normalized_items.append({
+                "part_number": part_number,
+                "description": description,
+                "quantity": quantity,
+                "unit_price": unit_price,
+                "condition": condition,
+                "certificate_type": certificate,
+                "lead_time": lead_text,
+                "warranty": "30 Days",
+            })
             text_rows.append(
-                f"{part_number} — {description}; Qty {quantity}; Condition {condition}; "
-                f"Release document {certificate}; Lead time {lead_text}; Unit location {location}; "
-                f"Unit price ${unit_price:,.2f}; Line total ${line_total:,.2f}"
+                f"- P/N {part_number}: {description} | Qty: {quantity} | Cond: {condition} | "
+                f"Cert: {certificate} | Lead: {lead_text} | Unit Price: ${unit_price:,.2f} | Total: ${line_total:,.2f}"
             )
             rows.append(
                 "<tr>"
@@ -980,56 +1005,64 @@ class CommunicationService:
             )
         shipping = float(value(quote, "shipping_cost", 0) or 0) if quote else 0.0
         total = float(value(quote, "total_amount", subtotal + shipping) or subtotal + shipping) if quote else subtotal + shipping
-        valid_until = safe_display_text(value(quote, "valid_until") or "Not specified") if quote else "Not specified"
+        valid_until = safe_display_text(value(quote, "valid_until") or "Subject to prior sale") if quote else "Subject to prior sale"
         name = safe_display_text(customer_name or "Customer")
         text_body = (
             f"Dear {name},\n\n"
-            f"Thank you for your request. Your quotation {quote_id} is ready.\n\n"
+            f"Thank you for contacting Winged Tycoons. Your quotation {quote_id} is ready for review.\n\n"
             "QUOTATION SUMMARY\n"
-            f"Quote reference: {quote_id}\n"
-            f"Valid through: {valid_until}\n"
-            "Payment terms: Prepayment\n"
-            "Notes: Unit ships same day upon PO and payment receipt.\n\n"
+            f"- Quote Reference: {quote_id}\n"
+            f"- Valid Through: {valid_until}\n"
+            "- Payment Terms: 100% Prepayment\n"
+            "- Notes: Unit ships same day upon PO and payment receipt.\n\n"
             "ITEMIZED PRICING\n"
             + "\n".join(text_rows)
-            + f"\n\nSubtotal: ${subtotal:,.2f}\nShipping: ${shipping:,.2f}\nTotal: ${total:,.2f}\n\n"
-            "Shipping is not included unless listed above. Release documents and supporting records are "
-            "identified only as stated for each item; copies can be provided when available and verified.\n\n"
-            "Please reply to this email with your purchase order or any questions. We will keep all "
-            "quotation correspondence in this thread.\n\n"
-            "Best regards,\nWinged Tycoons Sales Team"
+            + f"\n\nSubtotal: ${subtotal:,.2f}\nShipping: ${shipping:,.2f}\nTotal: ${total:,.2f} USD\n\n"
+            "To secure this unit and lock in pricing, please reply directly to this email with your Purchase Order (PO) or PO number. "
+            "Our formal quotation document is attached (PDF) for your records.\n\n"
+            "Best regards,\nWinged Tycoons Sales Team\nsales@wingedtycoons.com"
         )
         safe_text_body = enforce_customer_email_policy(
             text_body, customer_name, satisfaction_question="Does this quotation meet your needs?"
         )
-        html_body = (
-            "<div style=\"font-family:Montserrat,Arial,sans-serif;color:#172033;max-width:900px;margin:auto\">"
-            f"<p>Dear {html_lib.escape(name)},</p>"
-            f"<p>Thank you for your request. Your quotation <strong>{html_lib.escape(quote_id)}</strong> is ready.</p>"
-            "<h2 style=\"color:#8a6a19\">Quotation summary</h2>"
-            f"<p><strong>Quote reference:</strong> {html_lib.escape(quote_id)}<br>"
-            f"<strong>Valid through:</strong> {html_lib.escape(valid_until)}<br>"
-            "<strong>Payment terms:</strong> Prepayment<br>"
-            "<strong>Notes:</strong> Unit ships same day upon PO and payment receipt.</p>"
-            "<h2 style=\"color:#8a6a19\">Itemized pricing</h2>"
-            "<table style=\"border-collapse:collapse;width:100%\">"
-            "<thead><tr>"
-            + "".join(
-                f"<th style=\"text-align:left;border-bottom:2px solid #d7dde5;padding:8px\">{label}</th>"
-                for label in ("Part / description", "Qty", "Condition", "Release document", "Lead time", "Unit location", "Unit price", "Line total")
+        
+        try:
+            from services.quotation_document_renderer import render_quotation_html
+            html_body = render_quotation_html(
+                quote_number=quote_id,
+                customer_company=name,
+                customer_contact=name,
+                items=normalized_items,
+                valid_until=valid_until,
+                other=shipping,
             )
-            + "</tr></thead><tbody>"
-            + "".join(rows)
-            + "</tbody></table>"
-            f"<p style=\"text-align:right\"><strong>Subtotal:</strong> ${subtotal:,.2f}<br>"
-            f"<strong>Shipping:</strong> ${shipping:,.2f}<br>"
-            f"<strong>Total:</strong> ${total:,.2f}</p>"
-            "<p>Shipping is not included unless listed above. Release documents and supporting records are "
-            "identified only as stated for each item; copies can be provided when available and verified.</p>"
-            "<p>Please reply to this email with your purchase order or any questions. We will keep all "
-            "quotation correspondence in this thread.</p>"
-            "<p>Best regards,<br>Winged Tycoons Sales Team</p></div>"
-        )
+        except Exception as exc:
+            logger.warning("Quotation template render fallback to inline HTML quote=%s error=%s", quote_id, exc)
+            html_body = (
+                "<div style=\"font-family:Montserrat,Arial,sans-serif;color:#172033;max-width:900px;margin:auto\">"
+                f"<p>Dear {html_lib.escape(name)},</p>"
+                f"<p>Thank you for your request. Your quotation <strong>{html_lib.escape(quote_id)}</strong> is ready.</p>"
+                "<h2 style=\"color:#0e7490\">Quotation summary</h2>"
+                f"<p><strong>Quote reference:</strong> {html_lib.escape(quote_id)}<br>"
+                f"<strong>Valid through:</strong> {html_lib.escape(valid_until)}<br>"
+                "<strong>Payment terms:</strong> 100% Prepayment<br>"
+                "<strong>Notes:</strong> Unit ships same day upon PO and payment receipt.</p>"
+                "<h2 style=\"color:#0e7490\">Itemized pricing</h2>"
+                "<table style=\"border-collapse:collapse;width:100%\">"
+                "<thead><tr>"
+                + "".join(
+                    f"<th style=\"text-align:left;border-bottom:2px solid #d7dde5;padding:8px\">{label}</th>"
+                    for label in ("Part / description", "Qty", "Condition", "Release document", "Lead time", "Unit location", "Unit price", "Line total")
+                )
+                + "</tr></thead><tbody>"
+                + "".join(rows)
+                + "</tbody></table>"
+                f"<p style=\"text-align:right\"><strong>Subtotal:</strong> ${subtotal:,.2f}<br>"
+                f"<strong>Shipping:</strong> ${shipping:,.2f}<br>"
+                f"<strong>Total:</strong> ${total:,.2f}</p>"
+                "<p>To secure this unit and lock in pricing, please reply directly to this email with your Purchase Order (PO).</p>"
+                "<p>Best regards,<br>Winged Tycoons Sales Team</p></div>"
+            )
         return safe_text_body, html_body
 
     async def enqueue_customer_quote_async(

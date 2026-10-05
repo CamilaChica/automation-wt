@@ -432,6 +432,13 @@ def _inline_markdown(text: str) -> str:
     return text
 
 
+def plain_text_email(body: str) -> str:
+    """Only quotes are HTML; other mail is plain text without Markdown markers."""
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", body)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    return re.sub(r"(?m)^#{1,4}\s+", "", text)
+
+
 def render_text_email_html(body: str) -> str:
     """Render the Markdown-style plain-text email bodies as clean HTML for Outlook/Gmail."""
     import html as html_lib
@@ -502,6 +509,7 @@ def send_message(
     ensure_staging_recipient_allowed(recipient)
     if not html_body and body:
         html_body = render_text_email_html(body)
+        body = plain_text_email(body)
     if _use_legacy_graph_client():
         config = MAILBOXES.get(mailbox)
         if not config:
