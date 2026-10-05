@@ -1130,38 +1130,43 @@ class CommunicationService:
             qty_text = f"{qty}" + (" (assumed)" if item.get("quantity_defaulted") or not item.get("quantity") else "")
             condition = safe_display_text(str(item.get("condition_preference") or ""), fallback="").strip()
             cond_text = condition or "any available (NE / NS / OH / SV)"
-            lines.append(f"  - P/N {pn}: Qty {qty_text}, Condition {cond_text}")
+            lines.append(f"- **P/N:** `{pn}` | **Qty:** {qty_text} | **Condition:** {cond_text}")
             if "(assumed)" in qty_text:
                 to_confirm.append(f"the quantity you need for {pn}")
             if not condition:
                 to_confirm.append(f"your preferred condition for {pn}")
         if not lines:
-            lines.append("  - the requested parts")
+            lines.append("- the requested parts")
         if not certifications:
             to_confirm.append("any certification you require (e.g. FAA 8130-3, EASA Form 1)")
         confirm_text = ""
         if to_confirm:
             confirm_text = (
-                "To make sure we quote exactly what you need, could you please confirm:\n"
-                + "\n".join(f"  - {entry}" for entry in dict.fromkeys(to_confirm))
-                + "\n\nWe are already working on your quote while you reply, so nothing is on hold.\n\n"
+                "**To quote exactly what you need, please confirm:**\n"
+                + "\n".join(f"- {entry}" for entry in dict.fromkeys(to_confirm))
+                + "\n\nNothing is on hold while you reply.\n\n"
             )
+        portal = customer_portal_url()
+        subject_pn = next(iter(seen), rfq_id)
         body = enforce_customer_email_policy((
-            f"Hello {name},\n\n"
-            f"Thank you for your request for quote. We have received it under reference {rfq_id}, "
-            "and this is what we understood:\n\n"
+            f"Hi **{name}**,\n\n"
+            "Thanks for reaching out! We've received your inquiry (reference "
+            f"`{rfq_id}`).\n\n"
+            "Our sourcing team is already working on it to secure the best availability, trace, and pricing for you.\n\n"
             + "\n".join(lines)
             + "\n\n"
-            "Our team is checking our inventory and supplier network right now, and we will send you our "
-            "quotation in this same email thread as soon as it is ready.\n\n"
             + confirm_text
-            + "Just reply to this email with any changes or details.\n\n"
-            "Best regards,\nWinged Tycoons Sales Team"
+            + "---\n\n"
+            "**Want live tracking on this requirement?**\n\n"
+            f"View real-time status, review tag documentation, and manage your RFQs on the "
+            f"Winged Tycoons Portal: {portal}\n\n"
+            "We'll follow up in this thread shortly with complete options. Feel free to explore your dashboard in the meantime!\n\n"
+            "Best regards,\n**Camila**\n*Winged Tycoons Team*"
         ), name)
         return self._send(
             "sales",
             recipient,
-            f"Re: Your request for quote {rfq_id} - received",
+            f"Re: {subject_pn} – We're on it!",
             body,
             reply_to=reply_to,
             entity_id=rfq_id,

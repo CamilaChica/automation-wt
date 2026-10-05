@@ -186,6 +186,13 @@ class SupplierDiscoveryAgent(BaseAgent):
                 fresh_records.append(record)
             else:
                 self.last_stale_offers.append(record)
+        priced = sorted(float(r.get("unit_cost") or 0.0) for r in fresh_records if float(r.get("unit_cost") or 0.0) > 0)
+        median_cost = priced[len(priced) // 2] if priced else 0.0
+        fresh_records = [
+            r for r in fresh_records
+            if float(r.get("unit_cost") or 0.0) > 0
+            and (len(priced) < 3 or float(r.get("unit_cost") or 0.0) >= median_cost * 0.1)
+        ]
         ranked: List[Dict[str, Any]] = []
 
         for record in fresh_records:

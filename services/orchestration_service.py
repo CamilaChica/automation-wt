@@ -1032,6 +1032,26 @@ class OrchestrationService:
                 )
                 
                 compliance_status = comp_res.data.get("compliance_status")
+                issues_detected = comp_res.data.get("issues_detected", [])
+                trace_only_gap = (
+                    compliance_status == "HUMAN_REVIEW_REQUIRED"
+                    and issues_detected == ["Incomplete traceability information."]
+                    and source_details.get("source") == "Supplier"
+                    and source_details.get("details", {}).get("approval_status") == "Approved"
+                )
+                if trace_only_gap:
+                    source_details["trace_pending"] = True
+                    source_details["compliance_status"] = "Pass"
+                    details = source_details.setdefault("details", {})
+                    if not details.get("trace_documents"):
+                        details["trace_documents"] = ["Trace to be confirmed by supplier"]
+                    self._save_pipeline_state(rfq_id, allocated_sources=allocated_sources)
+                    db_service.add_audit_log(
+                        rfq_id, "ComplianceAgent", "compliance_audit",
+                        f"'{item.resolved_part_number}' quoted with trace documents to be confirmed by the approved supplier.",
+                        "WARNING", json.dumps(comp_res.model_dump(mode="json")),
+                    )
+                    continue
                 if compliance_status != "APPROVED":
                     review_required = compliance_status == "HUMAN_REVIEW_REQUIRED"
                     rfq_status = "Compliance_Warning" if review_required else "Compliance_Blocked"

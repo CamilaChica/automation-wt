@@ -35,6 +35,30 @@ def _price_field_value(value: Optional[str]) -> Optional[float]:
         return None
 
 
+_NO_QUOTE_PATTERN = re.compile(
+    r"\bno[\s-]?quote\b|\bno[\s-]?bid\b|\bunable to (?:quote|offer|supply)\b|\bcannot quote\b|\bnot able to quote\b",
+    re.IGNORECASE,
+)
+_NO_STOCK_PATTERN = re.compile(
+    r"\bno stock\b|\bout of stock\b|\bnone in stock\b|\bnot in stock\b"
+    r"|\bdo not have (?:this|the|that|any)\b|\bdon't have (?:this|the|that|any)\b",
+    re.IGNORECASE,
+)
+_PRICE_PATTERN = re.compile(r"(?:\$|USD|US\$)\s?\d|\d\s?(?:USD|EA)\b", re.IGNORECASE)
+
+
+def is_no_quote_reply(email_text: str) -> bool:
+    """Supplier declined (e.g. 'No Quote from AvioDirect'); never store it as a priced offer."""
+    _, subject = _email_headers(email_text)
+    head = "\n".join(
+        line for line in email_text.splitlines()[:40]
+        if not line.lower().startswith(("from:", "to:", "cc:", "subject:"))
+    )[:1500]
+    if _NO_QUOTE_PATTERN.search(subject) or _NO_QUOTE_PATTERN.search(head):
+        return True
+    return bool(_NO_STOCK_PATTERN.search(head) and not _PRICE_PATTERN.search(email_text))
+
+
 def _email_headers(email_text: str) -> tuple[str, str]:
     sender = ""
     subject = ""
@@ -138,6 +162,8 @@ class SupplierEmailIngestionService:
 
     def ingest_email(self, email_text: str, mailbox: str = "purchasing", message_id: Optional[str] = None, attachments: Optional[List[Dict[str, Any]]] = None, source_received_at: datetime | None = None) -> Dict[str, Any]:
         try:
+            if is_no_quote_reply(email_text):
+                return {"success": False, "status": "Supplier_No_Quote", "no_quote": True, "error": "Supplier declined to quote."}
             attachment_context = build_email_context(email_text, attachments)
             source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
             from services.document_verification import compare_documents
@@ -422,6 +448,8 @@ class SupplierEmailIngestionService:
     ) -> Dict[str, Any]:
         """Persist plain supplier-email extraction through the async repositories."""
         try:
+            if is_no_quote_reply(email_text):
+                return {"success": False, "status": "Supplier_No_Quote", "no_quote": True, "error": "Supplier declined to quote."}
             attachment_context = await asyncio.to_thread(build_email_context, email_text, attachments)
             source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
             from services.document_verification import compare_documents
