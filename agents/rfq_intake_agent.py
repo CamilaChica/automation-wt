@@ -350,8 +350,62 @@ def _extract_customer_info(text: str) -> tuple:
     return customer_name, company, email
 
 
+_TABLE_SPLIT = re.compile(r"\t|\s*\|\s*|\s{2,}")
+
+
+def _table_column(headers: List[str], *names: str) -> Optional[int]:
+    for index, header in enumerate(headers):
+        if any(re.fullmatch(name, header, re.IGNORECASE) for name in names):
+            return index
+    return None
+
+
+def _extract_table_line_items(text: str) -> List[Dict[str, Any]]:
+    """Parse pasted spreadsheet/Outlook tables: a header row (Part Number | Description | Condition | Qty) plus rows."""
+    lines = [line for line in text.splitlines() if line.strip()]
+    for start, line in enumerate(lines):
+        headers = [cell.strip() for cell in _TABLE_SPLIT.split(line.strip()) if cell.strip()]
+        if len(headers) < 2:
+            continue
+        part_col = _table_column(headers, r"part\s*(?:number|no\.?|#)?", r"p/?n")
+        if part_col is None:
+            continue
+        cond_col = _table_column(headers, r"cond(?:ition)?\.?", r"cd")
+        qty_col = _table_column(headers, r"qty\.?", r"quantity", r"qty\s*req(?:uired)?")
+        items: List[Dict[str, Any]] = []
+        for row in lines[start + 1:]:
+            cells = [cell.strip() for cell in _TABLE_SPLIT.split(row.strip())]
+            if len(cells) <= part_col:
+                break
+            candidate = _normalize_part_number(cells[part_col])
+            if not candidate or not _plausible_part_number(cells[part_col]):
+                break
+            quantity = None
+            if qty_col is not None and len(cells) > qty_col:
+                qty_match = re.search(r"\d+", cells[qty_col])
+                quantity = int(qty_match.group()) if qty_match else None
+            condition, ambiguous = (None, False)
+            if cond_col is not None and len(cells) > cond_col:
+                condition, ambiguous = _extract_condition(cells[cond_col])
+            items.append({
+                "requested_part_number": candidate,
+                "quantity": quantity,
+                "quantity_defaulted": quantity is None,
+                "uom": "EA",
+                "aircraft_type": None,
+                "condition_preference": condition if condition and not ambiguous else None,
+                "condition_ambiguous": ambiguous,
+            })
+        if items:
+            return items
+    return []
+
+
 def _extract_line_items(text: str) -> List[Dict[str, Any]]:
     """Extract repeated part rows with independent quantity and condition."""
+    table_items = _extract_table_line_items(text)
+    if table_items:
+        return table_items
     label_pattern = re.compile(
         r"(?:Part\s*(?:Number|No\.?|#)|P/?N|PN)[:\s#]*"
         r"([A-Z0-9][A-Z0-9\- ]{2,40}?)(?=\s+(?:Alt\s+Part\s+No\.?|Description|Condition|Qty|Quantity|Currency)|[\n\r|,;.]|\s*$)",
