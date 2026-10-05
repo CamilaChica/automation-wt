@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import socket
 import uuid
@@ -175,6 +176,8 @@ async def upsert_aviation_part(session: AsyncSession, *, part_number: str, descr
 
 async def upsert_supplier_quote(session: AsyncSession, *, supplier_email: str, part_id: str, quoted_price: Decimal | None, raw_email_id: str | None, has_trace_docs: bool, attachment_url: str | None = None, quantity_available: int | None = None, condition_code: str | None = None, certificate_type: str | None = None, lead_time_days: int | None = None, availability_location: str | None = None, warranty_terms: str | None = None, trace_documents: str | None = None) -> SupplierQuote:
     quote_id = f"SQUOTE-{uuid.uuid4().hex[:12].upper()}"
+    if raw_email_id and len(raw_email_id) > 128:
+        raw_email_id = "sha256:" + hashlib.sha256(raw_email_id.encode("utf-8")).hexdigest()
     statement = insert(SupplierQuote).values(
         id=quote_id,
         supplier_email=supplier_email.lower(),

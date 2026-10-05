@@ -22,7 +22,7 @@ from models.operational_models import (
     SupplierRecord,
 )
 from schemas.supplier import SupplierOfferEntry, SupplierRegistryEntry
-from sqlalchemy import create_engine, inspect, or_, select, text, update
+from sqlalchemy import create_engine, func, inspect, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Engine
 
@@ -856,6 +856,11 @@ class PostgresReviewTelemetryRepository:
         max_attempts: int = 3,
     ) -> str:
         event_id = f"AUT-{uuid.uuid4().hex[:12].upper()}"
+        if idempotency_key and len(idempotency_key) > 128:
+            prefix = idempotency_key.split(":", 1)[0][:60]
+            idempotency_key = f"{prefix}:{hashlib.sha256(idempotency_key.encode()).hexdigest()}"
+        if entity_id and len(entity_id) > 128:
+            entity_id = f"sha256:{hashlib.sha256(entity_id.encode()).hexdigest()}"
         with self._begin() as connection:
             row = connection.execute(text(
                 "INSERT INTO automation_events (id, idempotency_key, event_type, entity_type, entity_id, status, "

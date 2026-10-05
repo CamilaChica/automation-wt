@@ -15,6 +15,10 @@ class SupplierEmailExtractor:
 
     def _normalize_text(self, text: str) -> str:
         cleaned = html.unescape(str(text or ""))
+        cleaned = re.sub(r"[\u200b-\u200d\ufeff]", "", cleaned)
+        cleaned = re.sub(r"\w*BannerStart.*?\w*BannerEnd", "\n", cleaned, flags=re.DOTALL)
+        cleaned = re.sub(r"\w*BannerStart[^\n]*", "\n", cleaned)
+        cleaned = re.sub(r"Be Careful With This Message[^\n]*", "\n", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"<br\s*/?>", "\n", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"</?(p|div|tr|td|table|body|html|span|font)[^>]*>", "\n", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"<[^>]+>", " ", cleaned, flags=re.IGNORECASE | re.DOTALL)
@@ -40,6 +44,9 @@ class SupplierEmailExtractor:
         part_number = self._extract_part_number(normalized)
         quantity = self._extract_quantity(normalized)
         unit_cost = self._extract_unit_cost(normalized)
+        leading_segment = part_number.split("-", 1)[0] if part_number else ""
+        if unit_cost is not None and leading_segment.isdigit() and int(unit_cost) == int(leading_segment):
+            unit_cost = None
         certificate = self._extract_certificate(normalized)
         lead_time_days = self._extract_lead_time(normalized)
         condition = self._extract_condition(normalized)
@@ -115,6 +122,17 @@ class SupplierEmailExtractor:
                 if candidate:
                     return candidate
 
+        generic_domains = ("gmail", "yahoo", "hotmail", "outlook", "aol", "icloud", "partsbase", "ilsmart")
+        if "@" in sender:
+            sender_domain = sender.split("@", 1)[1].split(".", 1)[0].lower().strip("<> ")
+            if sender_domain and sender_domain not in generic_domains and "wingedtycoons" not in sender_domain:
+                display_name = re.match(r"^([^<]+?)\s*<[^>]+>$", sender)
+                if display_name:
+                    candidate = self._clean_supplier_name(display_name.group(1))
+                    if candidate and not candidate.isupper():
+                        return candidate
+                return sender_domain.replace("-", " ").title()
+
         for line in lines:
             if not line or line.startswith(("From:", "Subject:", "To:", "Date:", "Sent:")):
                 continue
@@ -145,12 +163,14 @@ class SupplierEmailExtractor:
 
     def _clean_supplier_name(self, value: str) -> str:
         candidate = re.sub(r"\s+", " ", value).strip(" \t-:;,.|")
+        candidate = re.split(r"\s+(?:for|re:?|regarding)\s+(?:rfq|quote|p/?n|po)\b", candidate, flags=re.IGNORECASE)[0].strip(" \t-:;,.|#")
         lowered = candidate.lower()
-        if len(candidate) < 4 or "@" in candidate:
+        if len(candidate) < 4 or "@" in candidate or re.search(r"winged\s*tycoons?", lowered):
             return ""
         if any(phrase in lowered for phrase in (
             "thank you", "follow up", "contact us", "manage digest", "lead time",
             "available", "received", "please", "regards", "certificate",
+            "impersonat", "learn more", "be careful", "caution",
         )):
             return ""
         if re.search(r"\b(?:part|p/n|qty|quantity|price|cost|quote)\b", lowered):
@@ -200,7 +220,7 @@ class SupplierEmailExtractor:
         scored = []
         for candidate in candidates:
             upper = re.sub(r"\s*[-]\s*", "-", candidate).upper()
-            if not valid_candidate(upper):
+            if not valid_candidate(upper) or re.fullmatch(r"\d{3}-\d{3}-\d{4}", upper):
                 continue
             score = 0
             if upper.count("-") >= 2:
@@ -229,10 +249,20 @@ class SupplierEmailExtractor:
         return None
 
     def _extract_unit_cost(self, text: str) -> Optional[float]:
-        match = re.search(r"\$\s*([0-9]+(?:,[0-9]{3})*(?:\.\d{1,2})?)", text, flags=re.IGNORECASE)
-        if match:
-            value = match.group(1).replace(",", "")
-            return float(value)
+        number = r"([0-9]{1,3}(?:[, ][0-9]{3})+(?:\.\d{1,2})?|[0-9]+(?:\.\d{1,2})?)"
+        patterns = (
+            rf"(?:\$|USD|US\$)\s*{number}\s*(k\b)?",
+            rf"(?:unit\s*price|price|cost|each)\s*[:=\-]?\s*(?:\$|USD)?\s*{number}\s*(k\b)?",
+            rf"\b([0-9]{{1,3}}(?:,[0-9]{{3}})+\.\d{{2}}|[0-9]+\.\d{{2}})\s*(?:USD\s*)?(?:/\s*)?(?:EA|each)\b()",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                value = float(re.sub(r"[, ]", "", match.group(1)))
+                if match.group(2):
+                    value *= 1000
+                if value > 0:
+                    return value
         return None
 
     def _extract_certificate(self, text: str) -> Optional[str]:

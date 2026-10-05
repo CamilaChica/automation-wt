@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import uuid
 from datetime import datetime, timezone
@@ -205,20 +206,32 @@ class SupplierEmailIngestionService:
             except Exception:
                 # Deterministic extraction remains the bounded outage fallback.
                 llm_data = None
-            sentiment_result = analyze_communication_sentiment(
-                attachment_context,
-                router=self.llm_router,
-            )
-            communication_sentiment = _persist_supplier_sentiment(
-                source_email_id,
-                sentiment_result,
-            )
+            if os.getenv("SUPPLIER_SENTIMENT_ENABLED", "true").strip().lower() in {"0", "false", "no", "off"}:
+                communication_sentiment = None
+            else:
+                try:
+                    sentiment_result = analyze_communication_sentiment(
+                        attachment_context,
+                        router=self.llm_router,
+                    )
+                    communication_sentiment = _persist_supplier_sentiment(
+                        source_email_id,
+                        sentiment_result,
+                    )
+                except Exception:
+                    communication_sentiment = None
             unsupported_currencies = sorted({
                 item.currency.value
                 for item in (llm_data.items if llm_data else [])
                 if item.currency.value and item.currency.value.upper() != "USD"
             })
-            if llm_data and (llm_data.pending_human_review or unsupported_currencies):
+            deterministic_complete = bool(
+                deterministic_part_number and float(extracted.get("unit_cost") or 0) > 0
+            )
+            llm_review_hold = bool(
+                llm_data and llm_data.pending_human_review and not (deterministic_complete and not llm_data.items)
+            )
+            if llm_data and (llm_review_hold or unsupported_currencies):
                 sender, subject = _email_headers(email_text)
                 _save_inbound_email(
                     mailbox=mailbox,
@@ -485,18 +498,27 @@ class SupplierEmailIngestionService:
             })
             sender, subject = _email_headers(email_text)
             telemetry = llm_data.telemetry if llm_data else {}
-            sentiment_result = await asyncio.to_thread(
-                analyze_communication_sentiment,
-                attachment_context,
-                router=self.llm_router,
-            )
-            communication_sentiment = await _persist_supplier_sentiment_async(
-                repositories,
-                source_email_id,
-                sentiment_result,
-            )
+            if os.getenv("SUPPLIER_SENTIMENT_ENABLED", "true").strip().lower() in {"0", "false", "no", "off"}:
+                communication_sentiment = None
+            else:
+                sentiment_result = await asyncio.to_thread(
+                    analyze_communication_sentiment,
+                    attachment_context,
+                    router=self.llm_router,
+                )
+                communication_sentiment = await _persist_supplier_sentiment_async(
+                    repositories,
+                    source_email_id,
+                    sentiment_result,
+                )
 
-            if llm_data and (llm_data.pending_human_review or unsupported_currencies):
+            deterministic_complete = bool(
+                deterministic_part_number and float(extracted.get("unit_cost") or 0) > 0
+            )
+            llm_review_hold = bool(
+                llm_data and llm_data.pending_human_review and not (deterministic_complete and not llm_data.items)
+            )
+            if llm_data and (llm_review_hold or unsupported_currencies):
                 hold_flags = list(llm_data.missing_fields)
                 if unsupported_currencies:
                     hold_flags.append("non-USD currency: " + ", ".join(unsupported_currencies))

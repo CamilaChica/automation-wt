@@ -252,11 +252,11 @@ class OperationsStore:
         finally:
             conn.close()
 
-    def save_inbound_email(self, *, mailbox: str, message_id: str, sender: str, subject: str, body: str, processing_status: str = "processed") -> str:
+    def save_inbound_email(self, *, mailbox: str, message_id: str, sender: str, subject: str,     body: str, processing_status: str = "processed", received_at=None) -> str:
         if self._postgres:
             return self._postgres.save_inbound_email(
                 mailbox=mailbox, message_id=message_id, sender=sender, subject=subject,
-                body=body, processing_status=processing_status,
+                    body=body, processing_status=processing_status, received_at=received_at,
             )
         raise RuntimeError("Shared inbound email persistence requires PostgreSQL mode.")
 

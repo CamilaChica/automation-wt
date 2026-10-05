@@ -155,6 +155,8 @@ class SupplierNegotiationService:
             return {"status": "COUNTEROFFER_SENT", "round": round_data.number, "session_id": session_id}
 
         session = NegotiationSession.model_validate(session_payload["session"])
+        if source_email_id and session_payload.get("source_email_id") == source_email_id:
+            return {"status": "DUPLICATE_EMAIL", "session_id": session.session_id}
         if session.state != NegotiationState.COUNTEROFFER_SENT:
             return {"status": session.state.value, "session_id": session.session_id}
         try:
@@ -259,6 +261,8 @@ class SupplierNegotiationService:
             return {"status": "COUNTEROFFER_SENT", "round": round_data.number, "session_id": session_id}
 
         negotiation = NegotiationSession.model_validate(session_payload["session"])
+        if source_email_id and session_payload.get("source_email_id") == source_email_id:
+            return {"status": "DUPLICATE_EMAIL", "session_id": negotiation.session_id}
         if negotiation.state != NegotiationState.COUNTEROFFER_SENT:
             return {"status": negotiation.state.value, "session_id": negotiation.session_id}
         try:

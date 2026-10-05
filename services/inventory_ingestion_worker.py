@@ -478,9 +478,20 @@ class InventoryIngestionWorker:
             if owns_engine:
                 await engine.dispose()
 
+    @staticmethod
+    def _negotiation_eligible(message: dict[str, Any]) -> bool:
+        """Only fresh supplier emails trigger counteroffers; backfilled history never re-contacts suppliers."""
+        received = _received_at(message.get("date"))
+        if received is None:
+            return False
+        max_age_hours = float(os.getenv("NEGOTIATION_MAX_EMAIL_AGE_HOURS", "72"))
+        return (datetime.now(timezone.utc) - received).total_seconds() <= max_age_hours * 3600
+
     async def _record_supplier_negotiations_async(self, repositories, message, result) -> None:
         from email.utils import parseaddr
 
+        if not self._negotiation_eligible(message):
+            return
         sender = str(message.get("from") or "")
         sender_name, sender_email = parseaddr(sender)
         supplier_email = str(result.get("supplier_email") or sender_email or sender).strip()
@@ -624,7 +635,7 @@ class InventoryIngestionWorker:
                 logger.exception("Supplier inventory mirror failed for %s", message_id or "unknown")
             sender = str(message.get("from") or "")
             supplier_email = str(result.get("supplier_email") or sender)
-            if "@" in supplier_email:
+            if "@" in supplier_email and self._negotiation_eligible(message):
                 for item in result.get("items") or [result]:
                     unit_cost = item.get("unit_cost")
                     part_number = item.get("part_number") or result.get("part_number")
