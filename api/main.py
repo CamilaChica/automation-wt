@@ -2051,7 +2051,36 @@ async def approve_purchase_order(
         if not approved:
             raise HTTPException(status_code=409, detail="PO is no longer waiting for human review.")
         await session.commit()
-    return {"status": "Purchase_Order_Received", "quote_id": quote_id, "rfq_id": rfq.id}
+    closed_notices = 0
+    try:
+        if repositories is None:
+            quote_items = db_service.get_quote_items(quote_id)
+        else:
+            quote_items = list((await repositories.records.list_by_payload_value("quote_items", "quote_id", quote_id)).values())
+        for item in quote_items:
+            part_number = item.part_number if hasattr(item, "part_number") else item.get("part_number", "")
+            item_unit_cost = item.unit_cost if hasattr(item, "unit_cost") else item.get("unit_cost", 0)
+            if not part_number:
+                continue
+            offers = (
+                await repositories.supplier.offers_for_part(part_number, quantity_needed=1)
+                if repositories is not None
+                else await asyncio.to_thread(operations_store.get_supplier_offers, part_number, 1)
+                if operations_store.storage_engine == "postgresql"
+                else []
+            )
+            selected = next(
+                (offer for offer in offers if abs(float(offer.get("unit_cost") or 0) - float(item_unit_cost or 0)) < 0.01),
+                None,
+            )
+            sent = await asyncio.to_thread(
+                communication_service.notify_suppliers_rfq_closed,
+                part_number, offers, (selected or {}).get("supplier_email"),
+            )
+            closed_notices += len(sent)
+    except Exception as exc:
+        logger.warning("supplier_rfq_closed_notices_failed quote=%s error=%s", quote_id, exc)
+    return {"status": "Purchase_Order_Received", "quote_id": quote_id, "rfq_id": rfq.id, "supplier_closed_notices": closed_notices}
 
 def _detect_carrier_tracking(value: str):
     """Recognize public carrier tracking numbers and return (carrier, number, live tracking URL)."""

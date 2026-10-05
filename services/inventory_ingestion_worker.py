@@ -478,6 +478,51 @@ class InventoryIngestionWorker:
             if owns_engine:
                 await engine.dispose()
 
+    _CONDITION_RANK = {"NE": 0, "NEW": 0, "FN": 0, "NS": 0, "OH": 1, "SV": 2, "RP": 2, "AR": 3}
+
+    def _missing_attribute_plan(self, supplier_email: str, part_number: str, quote: dict[str, Any]) -> list[str]:
+        """Return missing attributes when this quote ranks in the top N by condition and price."""
+        missing = [
+            label for label, key in (
+                ("Tag/Doc Type", "certificate_type"),
+                ("Traceability", "trace_documents"),
+                ("Warranty", "warranty_terms"),
+                ("Lead Time", "lead_time_days"),
+            )
+            if quote.get(key) in (None, "", [], {}, "Unknown")
+        ]
+        if not missing or not supplier_email or not part_number:
+            return []
+        top_n = int(os.getenv("SUPPLIER_FOLLOWUP_TOP_N", "30"))
+        try:
+            offers = operations_store.get_supplier_offers(part_number)
+        except Exception:
+            offers = []
+        ranked = sorted(
+            (offer for offer in offers or [] if offer.get("unit_cost")),
+            key=lambda offer: (
+                self._CONDITION_RANK.get(str(offer.get("condition_code") or "").upper(), 4),
+                float(offer.get("unit_cost") or 0),
+            ),
+        )[:top_n]
+        if ranked and supplier_email.strip().lower() not in {
+            str(offer.get("supplier_email") or "").strip().lower() for offer in ranked
+        }:
+            return []
+        return missing
+
+    def _request_missing_attributes(self, supplier_email: str, part_number: str, quote: dict[str, Any], message_id: str) -> None:
+        """Send one consolidated in-thread follow-up when a top-ranked quote lacks doc/trace/warranty/lead time."""
+        missing = self._missing_attribute_plan(supplier_email, part_number, quote)
+        if not missing:
+            return
+        communication_service.request_missing_supplier_fields(
+            recipient=supplier_email,
+            part_number=part_number,
+            missing_fields=missing,
+            reply_to=message_id or None,
+        )
+
     @staticmethod
     def _negotiation_eligible(message: dict[str, Any]) -> bool:
         """Only fresh supplier emails trigger counteroffers; backfilled history never re-contacts suppliers."""
@@ -509,6 +554,18 @@ class InventoryIngestionWorker:
                 reply_to=message_id or None,
                 supplier_sentiment=result.get("communication_sentiment"),
             )
+            part_number = str(item.get("part_number") or result.get("part_number") or "")
+            try:
+                missing = await asyncio.to_thread(
+                    self._missing_attribute_plan, supplier_email, part_number, {**result, **item}
+                )
+                if missing:
+                    await communication_service.request_missing_supplier_fields_async(
+                        repositories, supplier_email, part_number, missing,
+                        reply_to=message_id or None, entity_id=message_id or None,
+                    )
+            except Exception as exc:
+                logger.warning("supplier_followup_failed part=%s supplier=%s error=%s", part_number, supplier_email, exc)
 
     def _process_message(self, message: dict[str, Any]) -> dict[str, Any]:
         message_id = str(message.get("message_id") or "").strip()
@@ -652,6 +709,10 @@ class InventoryIngestionWorker:
                         supplier_sentiment=result.get("communication_sentiment"),
                     )
                     logger.info("Supplier negotiation %s part=%s state=%s", negotiation.get("session_id", "none"), part_number, negotiation.get("status"))
+                    try:
+                        self._request_missing_attributes(supplier_email, str(part_number), {**result, **item}, message_id)
+                    except Exception:
+                        logger.exception("Supplier missing-attribute follow-up failed part=%s", part_number)
             for part_number in result.get("part_numbers") or [result.get("part_number")]:
                 self._enqueue_waiting_rfqs(str(part_number or ""))
         response = {"message_id": message_id, "result": result, "success": bool(result.get("success"))}

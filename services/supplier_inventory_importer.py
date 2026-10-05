@@ -14,6 +14,14 @@ from services.communication_service import communication_service
 from services.inbound_email_archive import _received_at
 
 
+def _consolidate_followups(followups: dict[str, set[str]]) -> tuple[str, list[str]]:
+    """One email per supplier: list all parts in the subject and the union of missing fields."""
+    parts = sorted(followups)
+    label = ", ".join(parts[:5]) + (f" (+{len(parts) - 5} more)" if len(parts) > 5 else "")
+    fields = sorted({field for missing in followups.values() for field in missing})
+    return label, fields
+
+
 def has_inventory_table_attachments(message: dict[str, Any]) -> bool:
     for attachment in message.get("attachments") or []:
         content = attachment.get("content") or b""
@@ -148,14 +156,14 @@ def import_inventory_attachments(message: dict[str, Any], mailbox: str) -> dict[
         followup_results = []
         if sender_email and followups:
             reply_to = str(message.get("message_id") or message.get("internet_message_id") or "").strip() or None
-            for part_number, missing_fields in sorted(followups.items()):
-                result = communication_service.request_missing_supplier_fields(
-                    recipient=sender_email,
-                    part_number=part_number,
-                    missing_fields=sorted(missing_fields),
-                    reply_to=reply_to,
-                )
-                followup_results.append({"part_number": part_number, **result})
+            part_label, all_missing = _consolidate_followups(followups)
+            result = communication_service.request_missing_supplier_fields(
+                recipient=sender_email,
+                part_number=part_label,
+                missing_fields=all_missing,
+                reply_to=reply_to,
+            )
+            followup_results.append({"part_number": part_label, "part_numbers": sorted(followups), **result})
         summaries.append({
             "filename": filename,
             "import_id": import_id,
@@ -338,16 +346,16 @@ async def import_inventory_attachments_async(
         followup_results = []
         if sender_email and followups:
             reply_to = str(message.get("message_id") or message.get("internet_message_id") or "").strip() or None
-            for part_number, missing_fields in sorted(followups.items()):
-                result = await communication_service.request_missing_supplier_fields_async(
-                    repositories,
-                    recipient=sender_email,
-                    part_number=part_number,
-                    missing_fields=sorted(missing_fields),
-                    reply_to=reply_to,
-                    entity_id=import_record.id,
-                )
-                followup_results.append({"part_number": part_number, **result})
+            part_label, all_missing = _consolidate_followups(followups)
+            result = await communication_service.request_missing_supplier_fields_async(
+                repositories,
+                recipient=sender_email,
+                part_number=part_label,
+                missing_fields=all_missing,
+                reply_to=reply_to,
+                entity_id=import_record.id,
+            )
+            followup_results.append({"part_number": part_label, "part_numbers": sorted(followups), **result})
         summaries.append({
             "filename": filename,
             "import_id": import_record.id,

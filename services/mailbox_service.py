@@ -91,6 +91,9 @@ def _extract_attachments_from_message(message: email.message.Message) -> list[di
     attachments = []
     for part in message.walk():
         filename = part.get_filename()
+        content_type = part.get_content_type()
+        if not filename and content_type.startswith("image/"):
+            filename = f"inline-image.{content_type.split('/', 1)[1]}"
         content = part.get_payload(decode=True)
         if not filename or not content:
             continue
@@ -217,7 +220,10 @@ def _fetch_graph_inbox_messages(
             "subject": item.get("subject", ""),
             "date": item.get("receivedDateTime") or item.get("sentDateTime", ""),
             "body": body,
-            "attachments": _fetch_graph_attachments(mailbox_user, str(item.get("id", "")), token) if item.get("hasAttachments") else [],
+            # Graph reports hasAttachments=false for inline-only screenshots, so also check for cid: references.
+            "attachments": _fetch_graph_attachments(mailbox_user, str(item.get("id", "")), token)
+            if item.get("hasAttachments") or "cid:" in str((item.get("body") or {}).get("content") or "").lower()
+            else [],
         })
     return results
 

@@ -1061,15 +1061,24 @@ class PostgresReviewTelemetryRepository:
 
     def list_suppliers(self) -> list[dict[str, Any]]:
         with self._read() as connection:
-            rows = connection.execute(select(
-                SupplierRecord.id,
-                SupplierRecord.company_name,
-                SupplierRecord.email,
-                SupplierRecord.phone,
-                SupplierRecord.approval_status,
-                SupplierRecord.itar_certified,
-            ).order_by(SupplierRecord.company_name)).mappings().all()
-            return [dict(row) for row in rows]
+            rows = connection.execute(text(
+                "SELECT s.id, s.company_name, s.email, s.phone, s.approval_status, s.itar_certified, "
+                "COALESCE(q.quote_count, 0) AS quote_count, q.last_quote_at "
+                "FROM suppliers s LEFT JOIN ("
+                "SELECT supplier_id, COUNT(*) AS quote_count, MAX(COALESCE(source_received_at, updated_at)) AS last_quote_at "
+                "FROM supplier_parts WHERE COALESCE(unit_cost, 0) > 0 GROUP BY supplier_id"
+                ") q ON q.supplier_id = s.id "
+                "ORDER BY (s.approval_status = 'Approved') DESC, COALESCE(q.quote_count, 0) DESC, "
+                "q.last_quote_at DESC NULLS LAST, s.company_name"
+            )).mappings().all()
+            preferred_threshold = max(1, int(os.getenv("PREFERRED_SUPPLIER_MIN_QUOTES", "5")))
+            return [
+                {
+                    **dict(row),
+                    "preferred": row["approval_status"] == "Approved" or int(row["quote_count"] or 0) >= preferred_threshold,
+                }
+                for row in rows
+            ]
 
     def save_supplier_offer(self, *, supplier_name: str, supplier_email: str | None = None, part_number: str = "", quantity_available: int | None = None, unit_cost: float | None = None, certificate_type: str | None = None, lead_time_days: int | None = None, approval_status: str = "Pending", condition_code: str | None = None, source_email_id: str | None = None, source_received_at=None, confidence: float = 1.0, description: str = "", availability_location: str | None = None, warranty_terms: str | None = None, trace_documents: list[str] | None = None, currency: str = "USD") -> dict[str, Any]:
         with self._begin() as connection:

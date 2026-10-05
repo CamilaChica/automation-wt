@@ -329,9 +329,10 @@ class CommunicationService:
             if operations_store.storage_engine == "postgresql"
             else supplier_db.list_suppliers()
         )
-        recipients = [supplier.get("email") for supplier in suppliers if supplier.get("email")]
         configured = os.getenv("SUPPLIER_REQUEST_RECIPIENTS", "")
-        recipients.extend(address.strip() for address in configured.split(",") if address.strip())
+        recipients = [address.strip() for address in configured.split(",") if address.strip()]
+        # Suppliers arrive ranked (approved, then quote history), so slicing keeps the most reliable wave.
+        recipients.extend(supplier.get("email") for supplier in suppliers if supplier.get("email"))
         recipients = [
             address for address in dict.fromkeys(recipients)
             if address and "@" in address
@@ -339,6 +340,8 @@ class CommunicationService:
             and not address.lower().endswith("@wingedtycoons.com")
             and not address.lower().endswith("@onmicrosoft.com")
         ]
+        wave_size = max(1, int(os.getenv("SUPPLIER_RFQ_WAVE_SIZE", "40")))
+        recipients = recipients[:wave_size]
         results = []
         for recipient in recipients:
             supplier_contact = next(
@@ -403,8 +406,8 @@ class CommunicationService:
 
     @staticmethod
     def _supplier_info_key(recipient: str, part_number: str) -> str:
-        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        return f"supplier-info:{recipient.strip().lower()}:{part_number.strip().upper()}:{day}"
+        # One consolidated follow-up per supplier and part; never re-ask field by field.
+        return f"supplier-info:{recipient.strip().lower()}:{part_number.strip().upper()}"
 
     async def request_missing_supplier_fields_async(
         self,
@@ -558,6 +561,45 @@ class CommunicationService:
             "communication_id": queued["id"],
             "outbox_id": queued["id"],
         }
+
+    def notify_suppliers_rfq_closed(
+        self,
+        part_number: str,
+        offers: List[Dict[str, Any]],
+        selected_supplier_email: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Thank non-selected suppliers so nobody is left hanging after a deal closes."""
+        selected = (selected_supplier_email or "").strip().lower()
+        recipients: List[tuple[str, Optional[str]]] = []
+        seen: set[str] = set()
+        for offer in offers or []:
+            email = str(offer.get("supplier_email") or "").strip()
+            key = email.lower()
+            if not email or key == selected or key in seen or not self._is_valid_email(email):
+                continue
+            seen.add(key)
+            recipients.append((email, offer.get("source_email_id")))
+        limit = int(os.getenv("SUPPLIER_RFQ_WAVE_SIZE", "40"))
+        part = part_number.strip().upper()
+        results = []
+        for email, source_id in recipients[:limit]:
+            body = (
+                "Hello,\n\n"
+                f"Thank you for your quote on {part}! The customer elected to go with a different option for this "
+                "requirement, but we look forward to working with you on the next one.\n\n"
+                "While we have you, could you send over your latest full inventory list? "
+                "We'd love to keep it on file for upcoming requirements.\n\n"
+                "Best regards,\nWinged Tycoons Purchasing"
+            )
+            try:
+                results.append(self._send(
+                    "purchasing", email, f"Re: RFQ request: {part} - closed", body,
+                    reply_to=source_id or None,
+                    deduplication_key=f"supplier-closed:{email.lower()}:{part}",
+                ))
+            except Exception as exc:
+                logger.warning("supplier_rfq_closed_failed part=%s supplier=%s error=%s", part, email, exc)
+        return results
 
     def notify_purchase_order(
         self,
@@ -2002,15 +2044,42 @@ class CommunicationService:
             "Best regards,\nWinged Tycoons Purchasing Team"
         )
 
+    _FIELD_EXAMPLES = {
+        "tag": ("Tag/Doc Type", "e.g., FAA 8130-3, Dual Release, CoC"),
+        "cert": ("Tag/Doc Type", "e.g., FAA 8130-3, Dual Release, CoC"),
+        "doc": ("Tag/Doc Type", "e.g., FAA 8130-3, Dual Release, CoC"),
+        "trace": ("Traceability", "e.g., 121 / 135 / OEM Trace"),
+        "warrant": ("Warranty", "e.g., 30 Days / 90 Days / Standard"),
+        "lead": ("Lead Time", "e.g., Same-day dispatch / X days"),
+        "price": ("Unit Price", "e.g., USD per unit"),
+        "cost": ("Unit Price", "e.g., USD per unit"),
+        "condition": ("Condition", "e.g., NE / OH / SV / AR"),
+        "quantity": ("Quantity Available", "e.g., 2 EA"),
+    }
+
     def _missing_fields_request(self, part_number: str, missing_fields: List[str]) -> str:
-        requested = "\n".join(f"- {field}" for field in missing_fields)
+        rows: Dict[str, str] = {}
+        for field in missing_fields:
+            lowered = str(field).casefold()
+            label, example = next(
+                (value for key, value in self._FIELD_EXAMPLES.items() if key in lowered),
+                (str(field).strip().title(), "Please confirm"),
+            )
+            rows.setdefault(label, example)
+        width = max([len("Attribute"), *(len(label) for label in rows)])
+        table = "\n".join(
+            [f"{'Attribute'.ljust(width)} | Details Needed", f"{'-' * width}-|-{'-' * 32}"]
+            + [f"{label.ljust(width)} | {example}" for label, example in rows.items()]
+        )
         return (
             "Hello,\n\n"
-            f"Thank you for your quotation for part {part_number.upper()}. To complete our supplier record and "
-            "continue the customer quote, could you please reply in this same email thread with:\n"
-            f"{requested}\n\n"
-            "If a certificate, trace document, or shop report is available, please attach it to your reply. "
-            "We will update the offer as soon as the information is received.\n\n"
+            "Thank you so much for the quick response and competitive pricing on this unit"
+            f" ({part_number.upper()}) - we really appreciate working with your team.\n\n"
+            "To help us move forward with your unit, could you please confirm the following details in your reply?\n\n"
+            f"{table}\n\n"
+            "If a certificate, trace document, or shop report is available, please attach it to your reply in this same email thread.\n\n"
+            "While we review this unit, could you also send over your latest full inventory list? "
+            "We'd love to keep it on file for upcoming requirements.\n\n"
             "Best regards,\nWinged Tycoons Purchasing Team"
         )
 
