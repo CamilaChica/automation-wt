@@ -21,6 +21,7 @@ from services.customer_question_service import CustomerQuestionService
 from services.customer_chase_schedule import chase_task_keys, final_chase_day
 from services.email_context import safe_display_text
 from services.email_templates import (
+    CANONICAL_SIGNATURE,
     CustomerFollowupData,
     CustomerQuoteData,
     SupplierDiscountData,
@@ -95,7 +96,7 @@ def _customer_inquiry_body(customer_name: str, tone: str, quote_id: str, quote: 
         "**Next Steps:** To move forward, simply reply to this email with your PO, "
         "or place it through our customer portal.\n\n"
         "Please let me know if you need any additional details in the meantime!\n\n"
-        "Warm regards,\nCamila Chica\nWinged Tycoons Team"
+        f"Warm regards,\n\n{CANONICAL_SIGNATURE}"
     )
 
 
@@ -513,7 +514,7 @@ class CommunicationService:
             "Please confirm in this same email thread whether the quoted material is still available and whether "
             "the price, condition, certification, lead time, and quote validity remain current.\n\n"
             "If any detail has changed, please provide the updated value and attach the applicable trace documentation.\n\n"
-            "Best regards,\nWinged Tycoons Purchasing Team"
+            f"Best regards,\n\n{CANONICAL_SIGNATURE}"
         )
         draft = email_program_runtime.draft_supplier_request(
             subject, body, part_number,
@@ -551,7 +552,7 @@ class CommunicationService:
             "- Lead time\n"
             "- Quote validity or expiration date\n\n"
             "Please do not send a new thread; replying here preserves the quote reference.\n\n"
-            "Best regards,\nWinged Tycoons Purchasing Team"
+            f"Best regards,\n\n{CANONICAL_SIGNATURE}"
         )
         return self._send("purchasing", recipient, subject, body, reply_to=reply_to)
 
@@ -578,7 +579,7 @@ class CommunicationService:
             "- Lead time\n"
             "- Quote validity or expiration date\n\n"
             "Please do not send a new thread; replying here preserves the quote reference.\n\n"
-            "Best regards,\nWinged Tycoons Purchasing Team"
+            f"Best regards,\n\n{CANONICAL_SIGNATURE}"
         )
         deduplication_key = hashlib.sha256(
             "\0".join(("purchasing", recipient.lower(), subject, body, reply_to or "")).encode("utf-8")
@@ -628,7 +629,7 @@ class CommunicationService:
                 "requirement, but we look forward to working with you on the next one.\n\n"
                 "While we have you, could you send over your latest full inventory list? "
                 "We'd love to keep it on file for upcoming requirements.\n\n"
-                "Best regards,\nWinged Tycoons Purchasing"
+                f"Best regards,\n\n{CANONICAL_SIGNATURE}"
             )
             try:
                 results.append(self._send(
@@ -765,7 +766,7 @@ class CommunicationService:
             "You can follow its status using this private tracking link:\n\n"
             f"{tracking_url}\n\n"
             "The tracking page will show carrier updates, latest location, and estimated delivery when available.\n\n"
-            "Kind regards,\nWinged Tycoons Logistics Team"
+            f"Kind regards,\n\n{CANONICAL_SIGNATURE}"
         ), company_name)
         return f"Shipment tracking available - {shipment_id}", body
 
@@ -833,7 +834,7 @@ class CommunicationService:
             f"{item_lines}\n\n"
             "Please confirm quantity available, condition, release certificate/trace, price, and estimated ship date. "
             "Do not ship until we provide written authorization.\n\n"
-            "Kind regards,\nWinged Tycoons Purchasing Team"
+            f"Kind regards,\n\n{CANONICAL_SIGNATURE}"
         )
         return self._send(
             "purchasing",
@@ -1020,7 +1021,7 @@ class CommunicationService:
             + f"\n\nSubtotal: ${subtotal:,.2f}\nShipping: ${shipping:,.2f}\nTotal: ${total:,.2f} USD\n\n"
             "To secure this unit and lock in pricing, please reply directly to this email with your Purchase Order (PO) or PO number. "
             "Our formal quotation document is attached (PDF) for your records.\n\n"
-            "Best regards,\nWinged Tycoons Sales Team\nsales@wingedtycoons.com"
+            f"Best regards,\n\n{CANONICAL_SIGNATURE}"
         )
         safe_text_body = enforce_customer_email_policy(
             text_body, customer_name, satisfaction_question="Does this quotation meet your needs?"
@@ -1038,6 +1039,7 @@ class CommunicationService:
             )
         except Exception as exc:
             logger.warning("Quotation template render fallback to inline HTML quote=%s error=%s", quote_id, exc)
+            html_sig = "<br>".join(html_lib.escape(line) for line in CANONICAL_SIGNATURE.splitlines())
             html_body = (
                 "<div style=\"font-family:Montserrat,Arial,sans-serif;color:#172033;max-width:900px;margin:auto\">"
                 f"<p>Dear {html_lib.escape(name)},</p>"
@@ -1061,7 +1063,7 @@ class CommunicationService:
                 f"<strong>Shipping:</strong> ${shipping:,.2f}<br>"
                 f"<strong>Total:</strong> ${total:,.2f}</p>"
                 "<p>To secure this unit and lock in pricing, please reply directly to this email with your Purchase Order (PO).</p>"
-                "<p>Best regards,<br>Winged Tycoons Sales Team</p></div>"
+                f"<p>Best regards,<br>{html_sig}</p></div>"
             )
         return safe_text_body, html_body
 
@@ -1132,7 +1134,8 @@ class CommunicationService:
             quote_number=quote_id,
             company_name=safe_display_text(customer_name),
         ))
-        due = _next_customer_business_window(local_now + timedelta(days=final_chase_day()))
+        chase_delay_minutes = int(os.getenv("CUSTOMER_CHASE_DELAY_MINUTES", "30"))
+        due = _next_customer_business_window(local_now + timedelta(minutes=chase_delay_minutes))
         task = await repositories.records.schedule_communication_task(
             task_key=chase_task_keys(quote_id)[0],
             task_type="customer_followup",
@@ -1208,7 +1211,7 @@ class CommunicationService:
             f"View real-time status, review tag documentation, and manage your RFQs on the "
             f"Winged Tycoons Portal: {portal}\n\n"
             "We'll follow up in this thread shortly with complete options. Feel free to explore your dashboard in the meantime!\n\n"
-            "Best regards,\n**Camila**\n*Winged Tycoons Team*"
+            f"Best regards,\n\n{CANONICAL_SIGNATURE}"
         ), name)
         return self._send(
             "sales",
@@ -1245,7 +1248,7 @@ class CommunicationService:
             f"Hello {name},\n\n"
             f"Thank you for your request for quote {rfq_id} for {part_text}.\n\n"
             "We weren't able to source this part right now; we'll let you know if it becomes available.\n\n"
-            "Best regards,\nWinged Tycoons Sales Team"
+            f"Best regards,\n\n{CANONICAL_SIGNATURE}"
         ), name)
         return self._send(
             "sales",
@@ -1276,15 +1279,12 @@ class CommunicationService:
             raise ValueError("Indicative customer price must be a finite, positive USD amount.")
         historical_note = (
             f"For budgeting only, the indicative unit price is USD {indicative_unit_price:,.2f}. "
-            "This is a non-binding reference, subject to current supplier confirmation; "
+            "This is a non-binding reference, subject to confirming availability from our current stock; "
             "it is not a firm quotation or confirmed availability. "
             if indicative_unit_price is not None else ""
         )
         supplier_update = (
-            "We have asked the supplier(s) to reconfirm current price, quantity, condition, release "
-            "documentation, and lead time. "
-            if supplier_contact_queued else
-            "We are arranging supplier confirmation for current price, quantity, condition, release "
+            "We are gathering the information from our current stock to verify current price, quantity, condition, release "
             "documentation, and lead time. "
         )
         body = enforce_customer_email_policy(
@@ -1292,9 +1292,9 @@ class CommunicationService:
             f"We are still sourcing part {part} for request {rfq_id}. "
             f"{historical_note}"
             f"{supplier_update}"
-            "We will send a firm quotation when a current offer is verified. "
+            "We will send a firm quotation when availability from our current stock is verified. "
             "There is no confirmed price or availability to commit to yet.\n\n"
-            "Kind regards,\nWinged Tycoons Sales Team",
+            f"Kind regards,\n\n{CANONICAL_SIGNATURE}",
             customer_name,
         )
         return self._send(
@@ -1413,7 +1413,7 @@ class CommunicationService:
             "We have sent this request to our team for document retrieval and validation. To avoid sending "
             "a document that may not match the quoted unit, we will follow up in this email thread once "
             "the correct file has been confirmed.\n\n"
-            "Kind regards,\nWinged Tycoons Aviation Team",
+            f"Kind regards,\n\n{CANONICAL_SIGNATURE}",
             customer_name,
         )
         return self._send(
@@ -1450,7 +1450,7 @@ class CommunicationService:
             "We have sent this request to our team for document retrieval and validation. To avoid sending "
             "a document that may not match the quoted unit, we will follow up in this email thread once "
             "the correct file has been confirmed.\n\n"
-            "Kind regards,\nWinged Tycoons Aviation Team",
+            f"Kind regards,\n\n{CANONICAL_SIGNATURE}",
             customer_name,
         )
         return await self._enqueue_customer_reply_async(
@@ -1504,7 +1504,7 @@ class CommunicationService:
         subject = re.sub(r"^\s*(?:re\s*:\s*)+", "", original_subject, flags=re.IGNORECASE).strip()
         body = enforce_customer_email_policy(
             f"Dear {safe_display_text(customer_name)},\n\n{context}\n\n"
-            "Kind regards,\nWinged Tycoons Sales Team", customer_name,
+            f"Kind regards,\n\n{CANONICAL_SIGNATURE}", customer_name,
         )
         return f"Re: {subject or 'Your message to Winged Tycoons'}", body
 
@@ -1623,7 +1623,8 @@ class CommunicationService:
             quote_number=quote_id,
             company_name=safe_display_text(customer_name),
         ))
-        due = _next_customer_business_window(local_now + timedelta(days=final_chase_day()))
+        chase_delay_minutes = int(os.getenv("CUSTOMER_CHASE_DELAY_MINUTES", "30"))
+        due = _next_customer_business_window(local_now + timedelta(minutes=chase_delay_minutes))
         return self._schedule_communication_task(
             task_key=chase_task_keys(quote_id)[0],
             task_type="customer_followup",
@@ -2120,7 +2121,7 @@ class CommunicationService:
             "bulk-buy adjustment available, and whether the proposed price is subject to any certification or "
             "documentation add-ons. Shipping is not included in our customer quotations and is customer-selected. "
             "Thank you.\n\n"
-            "Best regards,\nWinged Tycoons Purchasing Team"
+            f"Best regards,\n\n{CANONICAL_SIGNATURE}"
         )
 
     _FIELD_EXAMPLES = {
@@ -2158,7 +2159,7 @@ class CommunicationService:
             "While we review this unit, could you also send over your latest full stock list? "
             "We'd love to keep it on file for upcoming requirements.\n\n"
             "Thanks again for your excellent help!\n\n"
-            "Best regards,\nWinged Tycoons Sourcing Team"
+            f"Best regards,\n\n{CANONICAL_SIGNATURE}"
         )
 
 

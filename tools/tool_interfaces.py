@@ -1,3 +1,4 @@
+import re
 from typing import Dict, Any
 from tools.base_tool import BaseTool, ToolMetadata
 from services.db_service import db_service
@@ -49,22 +50,29 @@ class SearchPartsCatalogTool(BaseTool):
         super().__init__(metadata)
 
     async def run(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        import re
         part_number = args.get("part_number", "").strip().upper()
         if not part_number:
             return {"found": False, "match_type": "none", "parts": []}
 
+        cond_match = re.match(r"^(.+)-(OH|NE|AR|SV|SVC|NS|FN|RP|IN)$", part_number, re.IGNORECASE)
+        base_part = cond_match.group(1) if cond_match else part_number
+        condition_suffix = cond_match.group(2).upper() if cond_match else ""
+
         inventory_records = [
             record for record in db_service.inventory.values()
-            if record.part_number.strip().upper() == part_number
+            if record.part_number.strip().upper() in (part_number, base_part)
         ]
         supplier_offers = (
             operations_store.get_supplier_offers(part_number, 1)
+            or (operations_store.get_supplier_offers(base_part, 1) if base_part != part_number else [])
             if operations_store.storage_engine == "postgresql"
             else supplier_db.find_supplier_offers(part_number, quantity_needed=1)
         )
         if not inventory_records and not supplier_offers:
             return {"found": False, "match_type": "none", "parts": []}
 
+        from services.supplier_inventory_parser import KNOWN_CATALOG_DESCRIPTIONS
         inventory_record = inventory_records[0] if inventory_records else None
         supplier_offer = supplier_offers[0] if supplier_offers else {}
         certificate_types = list(dict.fromkeys(
@@ -74,19 +82,25 @@ class SearchPartsCatalogTool(BaseTool):
             )
             if certificate and certificate != "None"
         ))
+        description = (
+            supplier_offer.get("description")
+            or getattr(inventory_record, "description", None)
+            or KNOWN_CATALOG_DESCRIPTIONS.get(base_part, "")
+            or KNOWN_CATALOG_DESCRIPTIONS.get(part_number, "")
+        )
         return {
             "found": True,
             "match_type": "exact",
             "parts": [{
-                "part_number": part_number,
-                "description": supplier_offer.get("description", ""),
+                "part_number": base_part if cond_match else part_number,
+                "description": description,
                 "manufacturer": "",
                 "category": "",
                 "aircraft_applicability": "",
                 "condition": (
                     getattr(inventory_record, "condition_code", "")
                     if inventory_record
-                    else supplier_offer.get("condition_code", "")
+                    else supplier_offer.get("condition_code", "") or condition_suffix
                 ),
                 "alternate_part_numbers": [],
                 "documentation_requirements": certificate_types,
@@ -184,10 +198,13 @@ class CheckInventoryTool(BaseTool):
         part_number: str = raw_pn.strip().upper()
         requested_qty: int = max(0, int(args.get("quantity", 1)))
 
-        # Aggregate persisted lots for the exact part number.
+        cond_match = re.match(r"^(.+)-(OH|NE|AR|SV|SVC|NS|FN|RP|IN)$", part_number, re.IGNORECASE)
+        base_part = cond_match.group(1) if cond_match else part_number
+
+        # Aggregate persisted lots for the exact part number or base part number.
         matching_records = [
             record for record in db_service.inventory.values()
-            if record.part_number.strip().upper() == part_number
+            if record.part_number.strip().upper() in (part_number, base_part)
         ]
 
         if not matching_records:

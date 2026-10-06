@@ -48,5 +48,47 @@ class TestSupplierInventoryParser(unittest.TestCase):
         self.assertEqual(error, "part_number is missing")
 
 
+    def test_condition_suffix_separation_and_description_enrichment(self):
+        normalized, error = normalize_inventory_row({
+            "part_number": "456-789-OH",
+            "quantity_available": "5",
+            "unit_price": "500.00",
+        })
+        self.assertIsNone(error)
+        self.assertEqual(normalized["part_number"], "456-789")
+        self.assertEqual(normalized["condition_code"], "OH")
+        self.assertEqual(normalized["description"], "Actuator Assembly (A320)")
+
+    def test_hardware_washer_pricing_normalization(self):
+        normalized, error = normalize_inventory_row({
+            "part_number": "AN960-416",
+            "quantity_available": "100",
+            "unit_price": "0.08",
+        })
+        self.assertIsNone(error)
+        self.assertEqual(normalized["part_number"], "AN960-416")
+        self.assertEqual(normalized["unit_price"], 20.00)
+        self.assertEqual(normalized["description"], "Washer, Flat (Aircraft Hardware)")
+
+    def test_supplier_email_extractor_normalizes_condition_suffix_and_price(self):
+        from services.supplier_email_extractor import supplier_email_extractor
+
+        # 456-789-OH should extract base part number and enriched description
+        ext1 = supplier_email_extractor.extract(
+            "From: sales@horizonmro.com\nSubject: Quote\n\nPart Number: 456-789-OH\nQty: 5\nUnit Price: $500.00\nCert: FAA 8130-3"
+        )
+        self.assertEqual(ext1["part_number"], "456-789")
+        self.assertEqual(ext1["condition_code"], "OH")
+        self.assertEqual(ext1["description"], "Actuator Assembly (A320)")
+
+        # AN960-416 should normalize sub-dollar erroneous price to $20.00 pack price and enrich description
+        ext2 = supplier_email_extractor.extract(
+            "From: quotes@fasteners.com\nSubject: Hardware quote\n\nPart Number: AN960-416\nQty: 100\nUnit Price: $0.08\nCert: CoC"
+        )
+        self.assertEqual(ext2["part_number"], "AN960-416")
+        self.assertEqual(ext2["unit_cost"], 20.00)
+        self.assertEqual(ext2["description"], "Washer, Flat (Aircraft Hardware)")
+
+
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main()

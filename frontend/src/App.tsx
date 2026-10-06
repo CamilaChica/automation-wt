@@ -218,8 +218,8 @@ export const App: React.FC = () => {
   if (isTeamPortalPath) return <InternalTeamPortal />;
   if (isInternalPath) return <InternalApp />;
   if (isCustomerPath) return <CustomerPortalRoute />;
-  if (isLandingPath) return <LandingPage />;
   if (isInternalSession) return <InternalApp />;
+  if (isLandingPath) return <LandingPage />;
   if (isCustomerSession) return <CustomerPortalRoute />;
   return <CustomerPortalRoute />;
 };

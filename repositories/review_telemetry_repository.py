@@ -1039,22 +1039,32 @@ class PostgresReviewTelemetryRepository:
             return int(recovered_count)
 
     def upsert_supplier(self, supplier_name: str, supplier_email: str | None = None, phone: str | None = None, approval_status: str = "Pending") -> str:
-        supplier_id = f"SUP-{uuid.uuid5(uuid.NAMESPACE_URL, (supplier_email or supplier_name).strip().lower()).hex[:16].upper()}"
-        supplier_data = SupplierRegistryEntry(
-            id=supplier_id, company_name=supplier_name, email=supplier_email,
-            phone=phone, approval_status=approval_status,
-        )
+        from services.entity_name_intelligence import clean_company_name, name_quality_score
+        clean_name = clean_company_name(supplier_name) or supplier_name.strip()
+        supplier_id = f"SUP-{uuid.uuid5(uuid.NAMESPACE_URL, (supplier_email or clean_name).strip().lower()).hex[:16].upper()}"
         with self._begin() as connection:
-            existing = connection.execute(select(SupplierRecord.id).where(
-                or_(SupplierRecord.company_name == supplier_name,
+            existing_row = connection.execute(select(SupplierRecord.id, SupplierRecord.company_name).where(
+                or_(SupplierRecord.company_name == clean_name,
                     SupplierRecord.email == supplier_email if supplier_email else text("false"))
-            ).limit(1)).scalar_one_or_none()
-            supplier_id = str(existing or supplier_id)
+            ).limit(1)).first()
+            if existing_row:
+                supplier_id = str(existing_row[0])
+                existing_name = str(existing_row[1] or "")
+                new_score = name_quality_score(clean_name)
+                old_score = name_quality_score(existing_name)
+                best_name = clean_name if new_score > old_score else existing_name
+            else:
+                best_name = clean_name
+
+            supplier_data = SupplierRegistryEntry(
+                id=supplier_id, company_name=best_name, email=supplier_email,
+                phone=phone, approval_status=approval_status,
+            )
             supplier_values = supplier_data.model_dump()
             connection.execute(insert(SupplierRecord).values(
                 **supplier_values,
             ).on_conflict_do_update(index_elements=[SupplierRecord.id], set_={
-                "company_name": supplier_name, "email": supplier_email, "phone": phone,
+                "company_name": best_name, "email": supplier_email, "phone": phone,
                 "approval_status": approval_status, "updated_at": text("now()"),
             }))
             return supplier_id

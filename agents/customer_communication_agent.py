@@ -26,6 +26,10 @@ CUSTOMER_COMMUNICATION_MODEL_COST_PER_MILLION = {
 class GeneratedEmailDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    reasoning_steps: List[str] = Field(
+        default_factory=list,
+        description="Step-by-step chain of thought reasoning verifying entity identity, quote details, and privacy redactions before drafting",
+    )
     subject: str = Field(..., min_length=5, max_length=200)
     body_text: str = Field(..., min_length=20)
     body_html: str = Field(..., min_length=20)
@@ -88,8 +92,15 @@ class CustomerCommunicationAgent(BaseAgent):
         quantity_question = "\n\nHow many do you need?" if self._quantity_was_defaulted else ""
         from services.mailbox_service import render_text_email_html
 
-        body_text = (f"Hi {name},\n\nPlease find your approved quotation {quote_id} below.\n\n{summary}{quantity_question}\n\nPlease reply in our customer portal with any questions or a purchase order.\n\nBest regards,\nWinged Tycoons Sales Team")
+        first_name = name.split()[0] if name and " " in name and "Team" not in name else (name or "there")
+        body_text = (f"Hi {first_name},\n\nPlease find your approved quotation {quote_id} below.\n\n{summary}{quantity_question}\n\nPlease reply in our customer portal with any questions or a purchase order.\n\nBest regards,\nWinged Tycoons Sales Team")
         return GeneratedEmailDraft(
+            reasoning_steps=[
+                "Emergency template triggered: deterministic quote fallback.",
+                f"Recipient salutation derived for {first_name}.",
+                f"Quotation {quote_id} summary formatted with customer pricing only.",
+                "Redacted supplier costs, internal margins, and vendor identities.",
+            ],
             subject=f"Winged Tycoons quotation {quote_id}",
             body_text=body_text,
             body_html=render_text_email_html(body_text),
@@ -99,12 +110,37 @@ class CustomerCommunicationAgent(BaseAgent):
 
     async def execute(self, inputs: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> AgentResponse:
         email = inputs.get("customer_email", "")
-        name = inputs.get("customer_name", "")
-        company_name = safe_display_text(inputs.get("company_name") or name, fallback="")
-        if not company_name:
+        raw_name = inputs.get("contact_name") or inputs.get("customer_name") or ""
+        raw_company = inputs.get("company_name") or inputs.get("customer_company") or ""
+
+        from services.entity_name_intelligence import (
+            clean_person_name,
+            clean_company_name,
+            is_generic_mailbox,
+            is_garbage_name,
+        )
+
+        person_name = clean_person_name(raw_name)
+        company_name = clean_company_name(raw_company or raw_name)
+
+        if person_name and (
+            is_generic_mailbox(person_name)
+            or is_garbage_name(person_name)
+            or (company_name and person_name.lower() == company_name.lower())
+        ):
+            person_name = ""
+
+        if person_name:
+            greeting_name = person_name.split()[0]
+        elif company_name and "@" not in company_name:
+            greeting_name = f"{company_name} Team"
+        else:
+            greeting_name = "there"
+
+        if not company_name and not person_name:
             return AgentResponse(
                 success=False,
-                error_message="Customer company name is required before drafting a customer email.",
+                error_message="Customer company name or contact name is required before drafting a customer email.",
             )
         details = inputs.get("quote_details", {})
         self._quantity_was_defaulted = bool(details.get("quantity_defaulted", False))
@@ -133,16 +169,26 @@ class CustomerCommunicationAgent(BaseAgent):
         request = LLMRequest(
             task="customer_communication",
             system_prompt=(f"{self.metadata.system_instruction} "
+                           "CHAIN OF THOUGHT REASONING MANDATE: "
+                           "First populate 'reasoning_steps' with step-by-step reasoning: "
+                           "Step 1 (Recipient Salutation): Verify individual contact person name; prioritize personal name over organization name. "
+                           "Step 2 (Quote Verification): Verify quote ID, subtotal, and line item parts. "
+                           "Step 3 (Confidentiality & Redaction): Confirm zero leak of supplier costs, buy prices, vendor identities, or warehouse locations. "
+                           "Step 4 (Tone Calibration): Align style with customer sentiment guidance. "
+                           "Step 5 (Actionable Closure): Ensure customer portal link and question are present. "
+                           "Then generate the email fields. "
                            "Redact supplier costs, internal margins, supplier identities, warehouse locations, credentials, and private audit data. "
-                           "Address the customer as the supplied company's team, using the company name from the customer portal or verified client communication. "
+                           "Address the customer directly by their personal name (e.g., 'Dear Priya,' or 'Hello Valentina,'). Never address them as the company or company's team unless an individual person's name is completely unavailable. "
                            "Encourage use of the customer portal and confirm whether the quotation meets their needs. "
                            f"Use the inbound communication sentiment only as tone guidance: {tone_guidance} "
                            "Do not mention the sentiment label or evidence to the customer. "
                            "Do not invent facts. If quantity_defaulted is true, ask exactly: How many do you need? "
                            "Return exactly the JSON schema."),
             user_prompt=json.dumps({"untrusted_quote_data": {
-                "customer_name": company_name,
-                "company_name_from_portal_or_verified_communication": company_name,
+                "contact_person": person_name or greeting_name,
+                "customer_name": person_name or greeting_name,
+                "company_name": company_name or person_name,
+                "company_name_from_portal_or_verified_communication": company_name or person_name,
                 "communication_sentiment": {
                     "label": sentiment_label,
                     "confidence": sentiment_confidence,
@@ -179,13 +225,14 @@ class CustomerCommunicationAgent(BaseAgent):
             logger.exception("llm_email_draft status=failure quote_id=%s fallback_enabled=%s", quote_id, self.template_fallback_enabled)
             if not self.template_fallback_enabled:
                 return AgentResponse(success=False, error_message=f"LLM email drafting failed: {type(exc).__name__}: {exc}")
-            draft = self._emergency_template(name, quote_id, summary)
+            draft = self._emergency_template(greeting_name, quote_id, summary)
             response = None
 
         draft.body_text = enforce_customer_email_policy(
             draft.body_text,
             company_name,
             satisfaction_question="Does this quotation meet your needs?",
+            contact_name=greeting_name,
         )
         model_id = response.model if response else "template-fallback"
         input_tokens = int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)

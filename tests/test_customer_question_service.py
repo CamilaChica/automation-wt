@@ -157,6 +157,33 @@ class CustomerQuestionServiceTests(unittest.TestCase):
             base64.b64encode(b"purchase-order").decode("ascii"),
         )
 
+    def test_answers_worldwide_shipping_inquiry(self):
+        answer = self.service.answer_from_quote(
+            "Do you offer worldwide shipping or international delivery?",
+            {"valid_until": "2026-12-31"},
+            [{"part_number": "PN-123", "quantity": 1}],
+        )
+        self.assertIsNotNone(answer)
+        self.assertIn("worldwide delivery", answer.lower())
+
+    def test_answers_exchange_policy_inquiry(self):
+        answer = self.service.answer_from_quote(
+            "Can we do a core exchange on this part?",
+            {"valid_until": "2026-12-31"},
+            [{"part_number": "PN-123", "quantity": 1}],
+        )
+        self.assertIsNotNone(answer)
+        self.assertIn("outright purchase only", answer.lower())
+
+    def test_answers_unit_location_inquiry(self):
+        answer = self.service.answer_from_quote(
+            "Where is the unit located?",
+            {"valid_until": "2026-12-31"},
+            [{"part_number": "PN-123", "quantity": 1, "availability_location": "Miami, FL"}],
+        )
+        self.assertIsNotNone(answer)
+        self.assertIn("Miami, FL", answer)
+
 
 if __name__ == "__main__":
     unittest.main()

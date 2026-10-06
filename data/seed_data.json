@@ -6,8 +6,13 @@
       "uom": "EA"
     },
     {
-      "part_number": "456-789-OH",
+      "part_number": "456-789",
       "description": "Actuator Assembly (A320)",
+      "uom": "EA"
+    },
+    {
+      "part_number": "AN960-416",
+      "description": "Washer, Flat (Aircraft Hardware)",
       "uom": "EA"
     }
   ],
@@ -36,7 +41,7 @@
     },
     {
       "id": "INV-003",
-      "part_number": "456-789-OH",
+      "part_number": "456-789",
       "serial_number": "SN-ACT-981",
       "quantity_available": 1,
       "condition_code": "OH",
@@ -47,7 +52,7 @@
     },
     {
       "id": "INV-004",
-      "part_number": "456-789-OH",
+      "part_number": "456-789",
       "serial_number": "SN-ACT-982",
       "quantity_available": 1,
       "condition_code": "OH",
@@ -175,7 +180,7 @@
       "supplier_name": "Horizon MRO Parts",
       "contact_email": "sales@horizonmro.com",
       "contact_phone": "+1-404-555-0215",
-      "part_number": "456-789-OH",
+      "part_number": "456-789",
       "unit_cost": 500.0,
       "quantity_available": 5,
       "lead_time_days": 2,
@@ -186,7 +191,7 @@
       "supplier_name": "Suspect Supplier Corp",
       "contact_email": "info@suspectsupplier.com",
       "contact_phone": "+1-000-000-0000",
-      "part_number": "456-789-OH",
+      "part_number": "456-789",
       "unit_cost": 300.0,
       "quantity_available": 1,
       "lead_time_days": 1,

@@ -276,6 +276,49 @@ class TestDspyEmailPrograms(unittest.TestCase):
         self.assertEqual(response.raw["usage"]["prompt_tokens"], 10)
         self.assertEqual(response.raw["usage"]["completion_tokens"], 4)
 
+    def test_communications_training_data_personal_names_and_stock_policy(self):
+        examples = load_training_data()
+        cust_demos = examples["customer_communication"]
+        self.assertGreaterEqual(len(cust_demos), 80)
+        for demo in cust_demos:
+            body = demo.structured_result.get("body_text", "")
+            first_line = body.strip().split("\n")[0]
+            # Ensure personal greeting exists
+            self.assertTrue(
+                any(first_line.startswith(prefix) for prefix in ("Dear ", "Hi ", "Hello ")),
+                f"Missing greeting in demo: {first_line}",
+            )
+            # Ensure no generic team greeting
+            self.assertFalse(
+                any(generic in first_line.lower() for generic in ("team", "procurement team", "department")),
+                f"Generic team greeting found: {first_line}",
+            )
+            # Ensure stock policy: never mention sourcing from suppliers/vendors
+            self.assertNotIn("from our supplier", body.lower())
+            self.assertNotIn("sourced from supplier", body.lower())
+            self.assertNotIn("getting the units from our supplier", body.lower())
+
+        supp_demos = examples["supplier_communication"]
+        self.assertGreaterEqual(len(supp_demos), 90)
+        for demo in supp_demos:
+            body = demo.structured_result.get("body_text", "")
+            first_line = body.strip().split("\n")[0]
+            self.assertTrue(
+                any(first_line.startswith(prefix) for prefix in ("Dear ", "Hi ", "Hello ")),
+                f"Missing greeting in supplier demo: {first_line}",
+            )
+            self.assertFalse(
+                any(generic in first_line.lower() for generic in ("team", "sales team", "procurement team")),
+                f"Generic team greeting found in supplier demo: {first_line}",
+            )
+
+    def test_dynamic_demo_selection_from_communications_corpus(self):
+        examples = load_training_data()
+        rfq_examples = examples["rfq_extraction"]
+        # Verify demonstrations contain real examples extracted from winged_tycoons_communications.json
+        source_ids = {getattr(ex, "source_id", None) for ex in rfq_examples if getattr(ex, "source_id", None)}
+        self.assertTrue(any(sid.startswith("CLI-") for sid in source_ids if sid))
+
 
 if __name__ == "__main__":
     unittest.main()

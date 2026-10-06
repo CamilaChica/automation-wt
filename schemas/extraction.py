@@ -31,6 +31,10 @@ class PolicyEvaluationRecommendation(BaseModel):
 class SupplierEmailDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    reasoning_steps: List[str] = Field(
+        default_factory=list,
+        description="Step-by-step chain of thought reasoning verifying vendor identity, part requirements, and scope before drafting",
+    )
     subject: str = Field(min_length=5, max_length=200)
     body_text: str = Field(min_length=20)
     requested_fields: List[str] = Field(default_factory=list)

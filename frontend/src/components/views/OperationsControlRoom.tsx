@@ -109,7 +109,14 @@ function ExtractionReviewDialog({
 }) {
   const decideReview = useDecideExtractionReview();
   const rawExtraction = (review.extraction || {}) as Record<string, unknown>;
-  const [editorMode, setEditorMode] = useState<'form' | 'json'>('form');
+  const [editorMode, setEditorMode] = useState<'form' | 'json'>('json');
+
+  const isSupplierTask = review.task === 'supplier_quote_extraction' || Boolean(rawExtraction.supplier_name);
+  const [customerName, setCustomerName] = useState(String(rawExtraction.customer_name || ''));
+  const [customerCompany, setCustomerCompany] = useState(String(rawExtraction.customer_company || rawExtraction.company || ''));
+  const [customerEmail, setCustomerEmail] = useState(String(rawExtraction.customer_email || ''));
+  const [supplierName, setSupplierName] = useState(String(rawExtraction.supplier_name || ''));
+  const [supplierEmail, setSupplierEmail] = useState(String(rawExtraction.supplier_email || ''));
 
   // Structured fields
   const [partNumber, setPartNumber] = useState(String(rawExtraction.part_number || rawExtraction.requested_part_number || ''));
@@ -124,19 +131,47 @@ function ExtractionReviewDialog({
   const [comments, setComments] = useState('');
   const [error, setError] = useState('');
 
+  const buildUpdatedExtraction = (base: Record<string, unknown>) => {
+    const updated: Record<string, unknown> = {
+      ...base,
+      part_number: partNumber.trim().toUpperCase(),
+      description: description.trim(),
+      quantity: Math.max(1, Number(quantity) || 1),
+      condition_requested: condition.trim(),
+      certification_requested: certification.trim(),
+      ...(targetPrice ? { target_price: Number(targetPrice) || 0 } : {}),
+      urgency: urgency.trim(),
+    };
+    if (isSupplierTask) {
+      if (supplierName.trim()) updated.supplier_name = supplierName.trim();
+      if (supplierEmail.trim()) updated.supplier_email = supplierEmail.trim();
+    } else {
+      if (customerName.trim()) updated.customer_name = customerName.trim();
+      if (customerCompany.trim()) updated.customer_company = customerCompany.trim();
+      if (customerEmail.trim()) updated.customer_email = customerEmail.trim();
+    }
+    if (Array.isArray(base.items) && base.items.length > 0) {
+      updated.items = base.items.map((item: any, idx: number) => {
+        if (idx === 0) {
+          return {
+            ...item,
+            part_number: { ...item?.part_number, value: partNumber.trim().toUpperCase() },
+            quantity: { ...item?.quantity, value: String(Math.max(1, Number(quantity) || 1)) },
+            condition_code: { ...item?.condition_code, value: condition.trim() },
+            description: description.trim(),
+            target_price: targetPrice ? { ...item?.target_price, value: String(targetPrice) } : item?.target_price,
+          };
+        }
+        return item;
+      });
+    }
+    return updated;
+  };
+
   const syncFormToJson = () => {
     try {
       const existing = JSON.parse(extractionJson || '{}') as Record<string, unknown>;
-      const updated = {
-        ...existing,
-        part_number: partNumber.trim().toUpperCase(),
-        description: description.trim(),
-        quantity: Math.max(1, Number(quantity) || 1),
-        condition_requested: condition.trim(),
-        certification_requested: certification.trim(),
-        ...(targetPrice ? { target_price: Number(targetPrice) || 0 } : {}),
-        urgency: urgency.trim(),
-      };
+      const updated = buildUpdatedExtraction(existing);
       setExtractionJson(JSON.stringify(updated, null, 2));
     } catch {
       // Keep existing json if parsing failed
@@ -171,16 +206,8 @@ function ExtractionReviewDialog({
       try {
         if (editorMode === 'form') {
           syncFormToJson();
-          approvedExtraction = {
-            ...(typeof rawExtraction === 'object' ? rawExtraction : {}),
-            part_number: partNumber.trim().toUpperCase(),
-            description: description.trim() || undefined,
-            quantity: Math.max(1, Number(quantity) || 1),
-            condition_requested: condition.trim(),
-            certification_requested: certification.trim(),
-            ...(targetPrice ? { target_price: Number(targetPrice) || 0 } : {}),
-            urgency: urgency.trim(),
-          };
+          const base = (typeof rawExtraction === 'object' ? rawExtraction : {}) as Record<string, unknown>;
+          approvedExtraction = buildUpdatedExtraction(base);
         } else {
           const parsed: unknown = JSON.parse(extractionJson);
           if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -211,7 +238,7 @@ function ExtractionReviewDialog({
   };
 
   return (
-    <DialogFrame title="Review Parsed RFQ Request" onClose={onClose}>
+    <DialogFrame title="Review Parsed Request" onClose={onClose}>
       <div className="ops-dialog-body">
         <p className="ops-dialog-copy">{review.reason || 'Verify and confirm the extracted request fields before autonomous sourcing continues.'}</p>
         
@@ -223,7 +250,7 @@ function ExtractionReviewDialog({
         )}
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
-          <span className="ops-field-label">STRUCTURED RFQ FIELDS</span>
+          <label className="ops-field-label" htmlFor="ops-extraction-json">Extracted Fields (JSON)</label>
           <div style={{ display: 'flex', gap: '6px' }}>
             <button
               type="button"
@@ -249,6 +276,80 @@ function ExtractionReviewDialog({
 
         {editorMode === 'form' ? (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '6px' }}>
+            {isSupplierTask ? (
+              <>
+                <div>
+                  <label className="ops-field-label" htmlFor="ops-form-supplier-name">Supplier Name / Vendor</label>
+                  <input
+                    id="ops-form-supplier-name"
+                    className="ops-input"
+                    value={supplierName}
+                    onChange={e => {
+                      setSupplierName(e.target.value);
+                      handleFieldChange(() => {}, e.target.value);
+                    }}
+                    placeholder="e.g. Apex Aero Components LLC"
+                  />
+                </div>
+                <div>
+                  <label className="ops-field-label" htmlFor="ops-form-supplier-email">Supplier Contact Email</label>
+                  <input
+                    id="ops-form-supplier-email"
+                    type="email"
+                    className="ops-input"
+                    value={supplierEmail}
+                    onChange={e => {
+                      setSupplierEmail(e.target.value);
+                      handleFieldChange(() => {}, e.target.value);
+                    }}
+                    placeholder="e.g. quotes@apexaero.com"
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <label className="ops-field-label" htmlFor="ops-form-customer-company">Client Organization / Company</label>
+                  <input
+                    id="ops-form-customer-company"
+                    className="ops-input"
+                    value={customerCompany}
+                    onChange={e => {
+                      setCustomerCompany(e.target.value);
+                      handleFieldChange(() => {}, e.target.value);
+                    }}
+                    placeholder="e.g. Delta MRO Spares"
+                  />
+                </div>
+                <div>
+                  <label className="ops-field-label" htmlFor="ops-form-customer-name">Contact Person</label>
+                  <input
+                    id="ops-form-customer-name"
+                    className="ops-input"
+                    value={customerName}
+                    onChange={e => {
+                      setCustomerName(e.target.value);
+                      handleFieldChange(() => {}, e.target.value);
+                    }}
+                    placeholder="e.g. John Smith"
+                  />
+                </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label className="ops-field-label" htmlFor="ops-form-customer-email">Client Contact Email</label>
+                  <input
+                    id="ops-form-customer-email"
+                    type="email"
+                    className="ops-input"
+                    value={customerEmail}
+                    onChange={e => {
+                      setCustomerEmail(e.target.value);
+                      handleFieldChange(() => {}, e.target.value);
+                    }}
+                    placeholder="e.g. buyer@deltamro.com"
+                  />
+                </div>
+              </>
+            )}
             <div>
               <label className="ops-field-label" htmlFor="ops-form-pn">Part Number (P/N)</label>
               <input
@@ -359,11 +460,11 @@ function ExtractionReviewDialog({
         {error && <p className="ops-form-error" role="alert">{error}</p>}
         <div className="ops-dialog-actions" style={{ marginTop: '14px' }}>
           <button type="button" className="ops-button ops-button-muted" disabled={decideReview.isPending} onClick={() => void submit('reject')}>
-            Reject RFQ
+            Reject
           </button>
           <button type="button" className="ops-button ops-button-primary" disabled={decideReview.isPending} onClick={() => void submit('approve')}>
             {decideReview.isPending ? <Loader2 size={15} className="ops-spin" aria-hidden="true" /> : <CheckCircle2 size={15} aria-hidden="true" />}
-            Confirm & Progress RFQ
+            Approve Edited Fields
           </button>
         </div>
       </div>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
 from email.utils import parseaddr
 from typing import Any
@@ -42,6 +43,81 @@ def _save_offer(**offer: Any) -> Any:
     return supplier_db.save_supplier_offer(**offer)
 
 
+def _resolve_supplier_identity(message: dict[str, Any], parsed_files: list) -> tuple[str, str]:
+    from services.entity_name_intelligence import (
+        clean_company_name,
+        derive_company_from_domain,
+        extract_company_from_signature,
+        name_quality_score,
+    )
+    sender_header = str(message.get("from") or "").strip()
+    sender_name, sender_email = parseaddr(sender_header)
+    sender_email = (sender_email or (sender_header if "@" in sender_header else "")).strip("<> ").lower()
+
+    candidates: list[tuple[int, str]] = []
+
+    # 1. From header display name if it represents a company
+    if sender_name:
+        cleaned = clean_company_name(sender_name)
+        score = name_quality_score(cleaned)
+        if score >= 50:
+            candidates.append((score + 40, cleaned))
+
+    # 2. Check existing persistent supplier DB
+    if sender_email:
+        try:
+            suppliers = supplier_db.list_suppliers()
+            for sup in suppliers:
+                if (sup.get("email") or "").lower() == sender_email:
+                    known_name = clean_company_name(sup.get("company_name", ""))
+                    if name_quality_score(known_name) >= 50:
+                        candidates.append((120, known_name))
+                        break
+        except Exception:
+            pass
+
+    # 3. Signature block in message body
+    body = str(message.get("body") or "")
+    if body:
+        _, sig_company = extract_company_from_signature(body)
+        if sig_company:
+            score = name_quality_score(sig_company)
+            if score >= 50:
+                candidates.append((score + 30, sig_company))
+
+    # 4. Email Subject line
+    subject = str(message.get("subject") or "")
+    if subject:
+        subj_clean = re.sub(r"(?i)\b(?:inventory|feed|stock|list|availab\w*|parts|catalog|update|sheet)\b", " ", subject)
+        cleaned_subj = clean_company_name(subj_clean)
+        score = name_quality_score(cleaned_subj)
+        if score >= 50:
+            candidates.append((score + 20, cleaned_subj))
+
+    # 5. Attachment filenames
+    for attachment, _, _ in parsed_files:
+        fn = str(attachment.get("filename") or "")
+        fn_clean = re.sub(r"\.[a-zA-Z0-9]+$", "", fn).replace("_", " ").replace("-", " ")
+        fn_clean = re.sub(r"(?i)\b(?:inventory|feed|stock|list|availab\w*|parts|catalog|update|sheet|\d{4,})\b", " ", fn_clean)
+        cleaned_fn = clean_company_name(fn_clean)
+        score = name_quality_score(cleaned_fn)
+        if score >= 50:
+            candidates.append((score + 15, cleaned_fn))
+
+    # 6. Domain derivation
+    if sender_email:
+        derived = derive_company_from_domain(sender_email)
+        if derived:
+            candidates.append((name_quality_score(derived), derived))
+
+    if candidates:
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][1], sender_email
+
+    fallback = sender_name or (derive_company_from_domain(sender_email) if sender_email else "Unknown Supplier")
+    return fallback, sender_email
+
+
 def import_inventory_attachments(message: dict[str, Any], mailbox: str) -> dict[str, Any] | None:
     """Import spreadsheet/PDF tables; return None when no attachment table is recognized."""
     attachments = message.get("attachments") or []
@@ -59,10 +135,7 @@ def import_inventory_attachments(message: dict[str, Any], mailbox: str) -> dict[
     if not parsed_files:
         return None
 
-    sender_header = str(message.get("from") or "")
-    sender_name, sender_email = parseaddr(sender_header)
-    sender_email = sender_email or sender_header if "@" in sender_header else sender_email
-    supplier_name = sender_name or (sender_email.rsplit("@", 1)[-1] if "@" in sender_email else "Unknown Supplier")
+    supplier_name, sender_email = _resolve_supplier_identity(message, parsed_files)
     source_message_id = str(message.get("internet_message_id") or message.get("message_id") or f"inventory-{uuid.uuid4().hex}")
     summaries = []
     imported_part_numbers: set[str] = set()
@@ -203,12 +276,7 @@ async def import_inventory_attachments_async(
     if not parsed_files:
         return None
 
-    sender_header = str(message.get("from") or "")
-    sender_name, sender_email = parseaddr(sender_header)
-    sender_email = sender_email or (sender_header if "@" in sender_header else "")
-    supplier_name = sender_name or (
-        sender_email.rsplit("@", 1)[-1] if "@" in sender_email else "Unknown Supplier"
-    )
+    supplier_name, sender_email = _resolve_supplier_identity(message, parsed_files)
     source_message_id = str(
         message.get("internet_message_id")
         or message.get("message_id")

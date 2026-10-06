@@ -33,10 +33,10 @@ class TestIngestionReliability(unittest.TestCase):
                     part_number=ExtractedField(value="AN960-416", source_snippet="Part Number: AN960-416"),
                     quantity=ExtractedField(value="12", source_snippet="Quantity: 12"),
                     condition_code=ExtractedField(value="NE", source_snippet="Condition: NE"),
-                    target_price=ExtractedField(value="0.08", source_snippet="$0.08"),
+                    target_price=ExtractedField(value="20.00", source_snippet="$20.00"),
                     lead_time_days=ExtractedField(value="3", source_snippet="Lead time 3"),
                     unit_of_measure=ExtractedField(value="EA", source_snippet="Quantity: 12"),
-                    currency=ExtractedField(value="USD", source_snippet="$0.08"),
+                    currency=ExtractedField(value="USD", source_snippet="$20.00"),
                     trace_documents=["FAA 8130-3"],
                 ),
             ],
@@ -53,7 +53,7 @@ class TestIngestionReliability(unittest.TestCase):
             patch("services.supplier_ingestion_service.operations_store.record_automation_event") as record_sentiment,
         ):
             result = service.ingest_email(
-                "From: quotes@multi.example\nSubject: Two-line quote\n\nPart Number: MS20470AD4-6\nQuantity: 50\n$0.12\nPart Number: AN960-416\nQuantity: 12\n$0.08",
+                "From: quotes@multi.example\nSubject: Two-line quote\n\nPart Number: MS20470AD4-6\nQuantity: 50\n$0.12\nPart Number: AN960-416\nQuantity: 12\n$20.00",
                 message_id="multi-line-reliability",
             )
 

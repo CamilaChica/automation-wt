@@ -338,3 +338,38 @@ class SupplierNegotiationService:
             quantity=quantity,
             supplier_sentiment=supplier_sentiment,
         )
+
+    def initiate_purchase_intent_negotiations(
+        self,
+        part_number: str,
+        quantity: int = 1,
+        po_number: str | None = None,
+    ) -> List[Dict[str, Any]]:
+        """Contact all suppliers that quoted the part upon customer purchase intent to confirm availability and bargain for discount."""
+        from services.supplier_database import supplier_db
+        offers = supplier_db.find_supplier_offers(part_number, quantity_needed=quantity)
+        results = []
+        seen_emails = set()
+        for offer in offers:
+            email = str(offer.get("supplier_email") or "").strip().lower()
+            if not email or "@" not in email or email in seen_emails:
+                continue
+            seen_emails.add(email)
+            supplier_name = str(offer.get("supplier_name") or email.split("@")[0].replace(".", " ").title())
+            unit_cost = float(offer.get("unit_cost") or 0.0)
+            if unit_cost <= 0:
+                continue
+            source_id = str(offer.get("source_email_id") or f"PO-{po_number or 'INTENT'}")
+            res = self.record_supplier_quote(
+                supplier_email=email,
+                supplier_name=supplier_name,
+                part_number=part_number,
+                quantity=quantity,
+                unit_cost=unit_cost,
+                source_email_id=source_id,
+            )
+            results.append({"supplier_email": email, "result": res})
+        return results
+
+
+supplier_negotiation_service = SupplierNegotiationService()

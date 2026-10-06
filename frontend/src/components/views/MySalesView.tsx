@@ -20,14 +20,14 @@ export const MySalesView: React.FC = () => {
         <ColumnChart rows={daily} empty="No hours logged this month yet." />
       </Panel>
       <Panel title="RFQs I handled">
-        {!data?.handled_rfqs.length ? (
+        {!(data?.handled_rfqs && data.handled_rfqs.length) ? (
           <p className="text-sm text-slate-500 dark:text-slate-400">No RFQs assigned to you yet.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead className="text-slate-500"><tr><th className="py-2">RFQ</th><th>Part</th><th>Customer</th><th>Status</th></tr></thead>
               <tbody className="text-slate-800 dark:text-slate-200">
-                {data.handled_rfqs.map(r => (
+                {(data?.handled_rfqs || []).map(r => (
                   <tr key={r.rfq_id} className="border-t border-slate-200 dark:border-slate-800">
                     <td className="py-2 font-mono">{r.rfq_id}</td>
                     <td>{r.part_number || '—'}</td>

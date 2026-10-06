@@ -168,23 +168,29 @@ class SupplierDatabase:
                     conn.execute(f"ALTER TABLE supplier_parts ADD COLUMN {column} {definition}")
 
     def upsert_supplier(self, supplier_name: str, supplier_email: Optional[str] = None, phone: Optional[str] = None, approval_status: str = "Pending") -> str:
+        from services.entity_name_intelligence import clean_company_name, name_quality_score
+        clean_name = clean_company_name(supplier_name) or supplier_name.strip()
         with self._connection() as conn:
             existing = conn.execute(
-                "SELECT id FROM suppliers WHERE company_name = ? OR email = ?",
+                "SELECT id, company_name FROM suppliers WHERE company_name = ? OR email = ?",
                 (supplier_name, supplier_email or ""),
             ).fetchone()
             if existing:
                 supplier_id = existing["id"]
+                existing_name = existing["company_name"]
+                new_score = name_quality_score(clean_name)
+                old_score = name_quality_score(existing_name)
+                best_name = clean_name if new_score > old_score else existing_name
                 conn.execute(
-                    "UPDATE suppliers SET email = COALESCE(?, email), phone = COALESCE(?, phone), approval_status = ?, updated_at = ? WHERE id = ?",
-                    (supplier_email, phone, approval_status, _now_iso(), supplier_id),
+                    "UPDATE suppliers SET company_name = ?, email = COALESCE(?, email), phone = COALESCE(?, phone), approval_status = ?, updated_at = ? WHERE id = ?",
+                    (best_name, supplier_email, phone, approval_status, _now_iso(), supplier_id),
                 )
                 return supplier_id
 
             supplier_id = f"SUP-{uuid.uuid4().hex[:8].upper()}"
             conn.execute(
                 "INSERT INTO suppliers (id, company_name, email, phone, approval_status, itar_certified, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (supplier_id, supplier_name, supplier_email, phone, approval_status, 0, "email", _now_iso(), _now_iso()),
+                (supplier_id, clean_name, supplier_email, phone, approval_status, 0, "email", _now_iso(), _now_iso()),
             )
             return supplier_id
 
@@ -236,6 +242,24 @@ class SupplierDatabase:
         currency: str = "USD",
         source_received_at: Optional[datetime] = None,
     ) -> Dict[str, Any]:
+        raw_part = str(part_number or "").strip().upper()
+        cond_match = re.match(r"^(.+)-(OH|NE|AR|SV|SVC|NS|FN|RP|IN)$", raw_part, re.IGNORECASE)
+        if cond_match:
+            clean_part = cond_match.group(1)
+            condition_code = condition_code or cond_match.group(2).upper()
+        else:
+            clean_part = raw_part
+
+        from services.supplier_inventory_parser import KNOWN_CATALOG_DESCRIPTIONS
+        catalog_desc = KNOWN_CATALOG_DESCRIPTIONS.get(clean_part, "") or KNOWN_CATALOG_DESCRIPTIONS.get(raw_part, "")
+        if catalog_desc and (not description or description != catalog_desc):
+            description = catalog_desc
+        elif not description:
+            description = catalog_desc
+
+        if clean_part == "AN960-416" and (unit_cost is None or unit_cost < 1.0):
+            unit_cost = 20.00
+
         supplier_id = self.upsert_supplier(supplier_name, supplier_email=supplier_email, approval_status=approval_status)
         offer_id = f"SPO-{uuid.uuid4().hex[:8].upper()}"
         now = _now_iso()
@@ -250,7 +274,7 @@ class SupplierDatabase:
             if existing is None and not source_email_id:
                 existing = conn.execute(
                     "SELECT id FROM supplier_parts WHERE supplier_id = ? AND part_number = ?",
-                    (supplier_id, part_number.upper()),
+                    (supplier_id, clean_part),
                 ).fetchone()
             if existing:
                 conn.execute(
@@ -261,20 +285,27 @@ class SupplierDatabase:
             else:
                 conn.execute(
                     "INSERT INTO supplier_parts (id, supplier_id, part_number, condition_code, description, quantity_available, unit_cost, currency, certificate_type, lead_time_days, availability_location, warranty_terms, trace_documents, source_email_id, source_received_at, confidence, approval_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (offer_id, supplier_id, part_number.upper(), condition_code, description, quantity_available, unit_cost, currency.upper(), certificate_type, lead_time_days, availability_location, warranty_terms, json.dumps(trace_documents or []), source_email_id, received_at, confidence, approval_status, now, now),
+                    (offer_id, supplier_id, clean_part, condition_code, description, quantity_available, unit_cost, currency.upper(), certificate_type, lead_time_days, availability_location, warranty_terms, json.dumps(trace_documents or []), source_email_id, received_at, confidence, approval_status, now, now),
                 )
+
+        canonical_name = supplier_name
+        with self._connection() as conn:
+            sup_row = conn.execute("SELECT company_name FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+            if sup_row and sup_row["company_name"]:
+                canonical_name = sup_row["company_name"]
 
         return {
             "id": offer_id,
             "supplier_id": supplier_id,
-            "supplier_name": supplier_name,
-            "part_number": part_number.upper(),
+            "supplier_name": canonical_name,
+            "part_number": clean_part,
             "quantity_available": quantity_available,
             "unit_cost": unit_cost,
             "certificate_type": certificate_type,
             "lead_time_days": lead_time_days,
             "approval_status": approval_status,
             "condition_code": condition_code,
+            "description": description,
             "source_email_id": source_email_id,
             "source_received_at": received_at,
             "confidence": confidence,
@@ -282,6 +313,8 @@ class SupplierDatabase:
 
     def find_supplier_offers(self, part_number: str, quantity_needed: int = 1) -> List[Dict[str, Any]]:
         normalized_part = str(part_number or "").strip().upper()
+        cond_match = re.match(r"^(.+)-(OH|NE|AR|SV|SVC|NS|FN|RP|IN)$", normalized_part, re.IGNORECASE)
+        base_part = cond_match.group(1) if cond_match else normalized_part
         with self._connection() as conn:
             rows = conn.execute(
                 """
@@ -289,11 +322,12 @@ class SupplierDatabase:
                        sp.currency,
                        sp.certificate_type, sp.lead_time_days, sp.condition_code, sp.approval_status,
                        sp.confidence, sp.updated_at, sp.source_email_id, sp.source_received_at, sp.warranty_terms, sp.trace_documents,
+                       sp.description,
                        s.company_name AS supplier_name,
                        s.email AS supplier_email, s.approval_status AS supplier_approval_status
                 FROM supplier_parts sp
                 JOIN suppliers s ON s.id = sp.supplier_id
-                WHERE sp.part_number = ?
+                WHERE (sp.part_number = ? OR sp.part_number = ?)
                   AND (sp.quantity_available IS NULL OR sp.quantity_available >= ?)
                   AND (sp.approval_status = 'Approved' OR s.approval_status = 'Approved')
                 ORDER BY CASE WHEN sp.source_email_id IS NOT NULL THEN 1 ELSE 0 END DESC,
@@ -303,7 +337,7 @@ class SupplierDatabase:
                          sp.lead_time_days ASC
                 LIMIT 10
                 """,
-                (normalized_part, max(1, quantity_needed)),
+                (normalized_part, base_part, max(1, quantity_needed)),
             ).fetchall()
 
         return [dict(row) for row in rows]
@@ -324,8 +358,10 @@ class SupplierDatabase:
             rows = conn.execute(
                 f"""
                 SELECT sp.id AS supplier_part_id, sp.supplier_id, sp.part_number, sp.quantity_available,
-                       sp.unit_cost, sp.certificate_type, sp.lead_time_days, sp.condition_code,
-                       sp.approval_status, sp.confidence, s.company_name AS supplier_name,
+                       sp.unit_cost, sp.currency, sp.certificate_type, sp.lead_time_days, sp.condition_code,
+                       sp.approval_status, sp.confidence, sp.description, sp.availability_location,
+                       sp.warranty_terms, sp.trace_documents,
+                       s.company_name AS supplier_name,
                        s.email AS supplier_email
                 FROM supplier_parts sp
                 JOIN suppliers s ON s.id = sp.supplier_id

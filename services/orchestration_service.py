@@ -21,8 +21,59 @@ from services.agents.prompts import AgentPipelineState
 from services.operations_store import operations_store
 from services.supplier_database import supplier_db
 from services.email_program_runtime import email_program_runtime
+from services.entity_name_intelligence import (
+    clean_company_name,
+    clean_person_name,
+    derive_company_from_domain,
+    is_garbage_name,
+    is_generic_mailbox,
+    name_quality_score,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_best_customer_name(
+    existing_name: Optional[str],
+    parsed_company: Optional[str],
+    parsed_contact: Optional[str],
+    email: Optional[str] = None,
+) -> Optional[str]:
+    """Resolve the highest quality, most specific customer entity name."""
+    cand_existing = clean_company_name(existing_name) if existing_name else ""
+    cand_company = clean_company_name(parsed_company) if parsed_company else ""
+    cand_contact = clean_person_name(parsed_contact) if parsed_contact else ""
+
+    if cand_existing and (
+        "@" in cand_existing
+        or is_generic_mailbox(cand_existing)
+        or is_garbage_name(cand_existing)
+    ):
+        cand_existing = ""
+
+    candidates: List[tuple[int, str]] = []
+    if cand_company and not is_garbage_name(cand_company) and not is_generic_mailbox(cand_company):
+        candidates.append((name_quality_score(cand_company, email=email) + 15, cand_company))
+    if email:
+        cand_domain = derive_company_from_domain(email)
+        if cand_domain and not is_garbage_name(cand_domain):
+            candidates.append((name_quality_score(cand_domain, email=email) + 10, cand_domain))
+    if cand_existing and not is_garbage_name(cand_existing) and not is_generic_mailbox(cand_existing):
+        candidates.append((name_quality_score(cand_existing, email=email), cand_existing))
+    if cand_contact and not is_garbage_name(cand_contact) and not is_generic_mailbox(cand_contact):
+        candidates.append((name_quality_score(cand_contact, email=email), cand_contact))
+
+    if candidates:
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][1]
+
+    if email:
+        derived = derive_company_from_domain(email)
+        if derived:
+            return derived
+
+    return cand_existing or cand_company or cand_contact or None
+
 
 
 class ReviewDecisionConflict(RuntimeError):
@@ -507,13 +558,25 @@ class OrchestrationService:
                     sender = line.split(":", 1)[1].strip()
                     break
             source_id = review.get("entity_id") or review_id
+
+            resolved_supplier = clean_company_name(extraction.supplier_name) if extraction.supplier_name else ""
+            if not resolved_supplier or resolved_supplier == "Supplier Pending Identification" or is_garbage_name(resolved_supplier) or is_generic_mailbox(resolved_supplier):
+                from services.supplier_email_extractor import supplier_email_extractor
+                extracted_name = supplier_email_extractor._extract_supplier_name(sender=sender, body=review["source_text"])
+                if extracted_name and extracted_name != "Unknown Supplier":
+                    resolved_supplier = extracted_name
+                elif sender:
+                    resolved_supplier = derive_company_from_domain(sender) or "Supplier Pending Identification"
+                else:
+                    resolved_supplier = "Supplier Pending Identification"
+
             approved_offers = []
             for index, item in enumerate(extraction.items):
                 price = float(re.sub(r"[^0-9.\-]", "", item.target_price.value or ""))
                 quantity = int(re.search(r"\d+", item.quantity.value or "").group())
                 lead_time_match = re.search(r"\d+", item.lead_time_days.value or "")
                 offer = {
-                    "supplier_name": extraction.supplier_name or "Supplier Pending Identification",
+                    "supplier_name": resolved_supplier,
                     "supplier_email": extraction.supplier_email or sender,
                     "part_number": item.part_number.value or "",
                     "quantity_available": quantity,
@@ -587,10 +650,17 @@ class OrchestrationService:
                     or intake_data.get("priority") in {"AOG", "Urgent"}
                 )
                 if requires_internal_review:
+                    existing_rfq = db_service.get_rfq(rfq_id)
+                    best_name = _resolve_best_customer_name(
+                        getattr(existing_rfq, "customer_name", None),
+                        intake_data.get("company"),
+                        intake_data.get("customer_name"),
+                        intake_data.get("customer_email") or getattr(existing_rfq, "customer_email", None),
+                    )
                     db_service.update_rfq_customer(
                         rfq_id,
-                        intake_data.get("company") or intake_data.get("customer_name"),
-                        intake_data.get("customer_email"),
+                        best_name,
+                        intake_data.get("customer_email") or getattr(existing_rfq, "customer_email", None),
                     )
                     for item in intake_data.get("items", []):
                         requested_part = item.get("requested_part_number")
@@ -632,11 +702,15 @@ class OrchestrationService:
             # Populate DB with extracted items
             items_data = res.data.get("items", [])
             existing_rfq = db_service.get_rfq(rfq_id)
-            # Portal-provided identity is authoritative; parsed values only fill gaps.
+            best_name = _resolve_best_customer_name(
+                getattr(existing_rfq, "customer_name", None),
+                res.data.get("company"),
+                res.data.get("customer_name"),
+                (getattr(existing_rfq, "customer_email", None) or "").strip() or res.data.get("customer_email"),
+            )
             db_service.update_rfq_customer(
                 rfq_id,
-                (lambda n: n if n and "@" not in n else "")((getattr(existing_rfq, "customer_name", None) or "").strip())
-                or res.data.get("company") or res.data.get("customer_name"),
+                best_name,
                 (getattr(existing_rfq, "customer_email", None) or "").strip()
                 or res.data.get("customer_email"),
             )

@@ -17,7 +17,7 @@ class CustomerQuestionIntent(BaseModel):
 
     requested_fields: list[Literal[
         "unit_price", "lead_time", "condition", "certificate", "trace", "warranty", "document_request",
-        "validity", "part_details", "availability", "other",
+        "validity", "part_details", "availability", "worldwide_shipping", "exchange_policy", "location", "other",
     ]] = Field(default_factory=list)
     confidence: float = Field(ge=0, le=1)
 
@@ -53,6 +53,18 @@ class CustomerQuestionService:
                 "availability",
                 r"\b(availability|in stock|stock level|inventory|available quantity|quantity available|"
                 r"is (?:the )?(?:part|item|unit) available|are (?:the )?(?:part|item|units?) available)\b",
+            ),
+            (
+                "worldwide_shipping",
+                r"\b(worldwide\s+shipping|international\s+shipping|ship\s+(?:internationally|worldwide|overseas)|deliver\s+(?:internationally|worldwide)|international\s+delivery)\b",
+            ),
+            (
+                "exchange_policy",
+                r"\b(exchange|core\s*return|core\s*exchange|outright|core\s*deposit|exchange\s*basis)\b",
+            ),
+            (
+                "location",
+                r"\b(where\s+is\s+(?:the\s+)?(?:unit|part|item)|where\s+located|unit\s+location|part\s+location|item\s+location)\b",
             ),
         )
         for name, pattern in patterns:
@@ -165,6 +177,16 @@ class CustomerQuestionService:
                 facts[field] = value(quote, "valid_until")
             elif field == "part_details":
                 facts[field] = "; ".join(item_lines) or None
+            elif field == "worldwide_shipping":
+                facts[field] = "Yes, we support worldwide delivery and priority international dispatch."
+            elif field == "exchange_policy":
+                facts[field] = "Outright purchase only (no exchange or core return required)."
+            elif field == "location":
+                locs = [
+                    f"{value(item, 'part_number', '')}: {value(item, 'availability_location')}"
+                    for item in items if value(item, "availability_location")
+                ]
+                facts[field] = "; ".join(locs) if locs else "United States warehouse (Florida facility)"
             else:
                 facts[field] = None
 

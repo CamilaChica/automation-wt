@@ -219,6 +219,17 @@ def _record_email_purchase_order(message: dict[str, Any], rfq: Any, quote: Any, 
                 for attachment in message.get("attachments") or []
             ],
         )
+        # Contact all quoting suppliers to confirm availability and initiate 2-round discount bargaining
+        try:
+            from services.negotiation_service import supplier_negotiation_service
+            for item in quote_items:
+                supplier_negotiation_service.initiate_purchase_intent_negotiations(
+                    part_number=item.part_number,
+                    quantity=item.quantity,
+                    po_number=po_number,
+                )
+        except Exception as exc:
+            logger.warning("supplier_purchase_intent_negotiation_failed po=%s error=%s", po_number, exc)
     return {"status": "Pending_PO_Review", "po_number": po_number, "quote_id": quote.id, "notification": notification}
 
 

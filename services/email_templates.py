@@ -104,15 +104,49 @@ def enforce_customer_email_policy(
     body: str,
     company_name: str,
     *,
+    contact_name: str | None = None,
     satisfaction_question: str | None = None,
 ) -> str:
     company = safe_display_text(company_name, fallback="")
-    if not company:
-        raise ValueError("Customer company name is required before sending an email.")
+    if not company and not contact_name:
+        raise ValueError("Customer company name or contact name is required before sending an email.")
 
     content = str(body or "").strip()
+    person = safe_display_text(contact_name, fallback="").strip()
+    if person and "@" in person:
+        person = ""
+    # Avoid using company as person if person is identical to company
+    if person and company and person.lower() == company.lower():
+        person = ""
+
+    # Check if content already has a customized personal greeting
+    existing_greeting_match = re.match(r"^(?:Dear|Hi|Hello)\s+([^,\n]+)[,!]?\n+", content, flags=re.IGNORECASE)
+    
+    if person:
+        first_name = person.split()[0]
+        greeting = f"Hi {first_name},"
+    elif existing_greeting_match and not any(kw in existing_greeting_match.group(1).lower() for kw in ("team", "there", (company or "").lower())):
+        greeting = existing_greeting_match.group(0).strip()
+    elif company and "@" not in company:
+        greeting = f"Hi {company} Team,"
+    else:
+        greeting = "Hi there,"
+
     content = re.sub(r"^(?:Dear|Hi|Hello)\b[^\n]*\n+", "", content, count=1, flags=re.IGNORECASE)
-    greeting = "Hi there," if "@" in company else f"Hi {company},"
+
+    # In client communications, never state parts are sourced from suppliers; state that we are gathering information / securing units from our current stock
+    supplier_replacements = [
+        (r"(?i)\bsecure\s+(?:the\s+)?(?:units?|parts?)\s+(?:with|from)\s+(?:our\s+|the\s+)?suppliers?\b", "secure the unit from our current stock"),
+        (r"(?i)\bsecuring\s+(?:the\s+)?(?:units?|parts?)\s+(?:with|from)\s+(?:our\s+|the\s+)?suppliers?\b", "securing the unit from our current stock"),
+        (r"(?i)\b(?:getting|gathering|sourcing|procuring|purchasing|acquiring)\s+(?:the\s+)?(?:units?|parts?|information)\s+(?:from|with)\s+(?:our\s+|the\s+)?suppliers?\b", "gathering the information from our current stock"),
+        (r"(?i)\b(?:asked|contacted)\s+(?:the\s+|our\s+)?suppliers?(?:\(s\))?\s+to\s+(?:reconfirm|confirm)\b", "gathering the information from our current stock to verify"),
+        (r"(?i)\barranging\s+supplier\s+confirmation\b", "gathering information from our current stock"),
+        (r"(?i)\bsubject\s+to\s+current\s+supplier\s+confirmation\b", "subject to confirming availability from our current stock"),
+        (r"(?i)\b(?:from|with)\s+(?:our\s+|the\s+)?suppliers?\b", "from our current stock"),
+        (r"(?i)\b(?:our\s+|the\s+)?supplier(?:'s)?\s+(?:stock|inventory|network)\b", "our current stock"),
+    ]
+    for pattern, replacement in supplier_replacements:
+        content = re.sub(pattern, replacement, content)
 
     additions = []
     if satisfaction_question and satisfaction_question.casefold() not in content.casefold():
@@ -136,6 +170,18 @@ def enforce_customer_email_policy(
     return f"{greeting}\n\n{content}".rstrip()
 
 
+CANONICAL_SIGNATURE = (
+    "Camila Chica\n"
+    "Winged Tycoons | AOG & MRO Parts Sourcing\n"
+    "Direct: +1 (786) 349-3433 | 24/7 Sourcing Desk\n"
+    "Web: https://portal.wingedtycoons.com\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "✈ 24/7 AOG Support | FAA 8130-3 & EASA Form 1 Traceability\n"
+    "✈ Direct Warehouse Dispatch | Outright Commercial Aviation Spares\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+)
+
+
 def customer_quote(data: CustomerQuoteData) -> EmailPayload:
     subject = f"Quotation {data.quote_number} - Part Number {data.part_number}"
     attachment_text = ""
@@ -155,10 +201,8 @@ def customer_quote(data: CustomerQuoteData) -> EmailPayload:
         f"- Quote Validity: Valid until {data.valid_until}{attachment_text}\n\n"
         "To secure this unit and lock in pricing, please reply directly to this email with your Purchase Order (PO) or PO number. "
         "Our formal quotation document is attached for your records.\n\n"
-        "Best regards,\n\n"
-        "Winged Tycoons Sales Team\n"
-        "sales@wingedtycoons.com"
-    ), data.company_name or data.contact_name, satisfaction_question="Does this quotation meet your needs?")
+        f"Best regards,\n\n{CANONICAL_SIGNATURE}"
+    ), data.company_name or data.contact_name, contact_name=data.contact_name, satisfaction_question="Does this quotation meet your needs?")
     return EmailPayload(message_type="CUSTOMER_QUOTE", recipient_email=data.recipient_email, subject=subject, body=body)
 
 
@@ -180,9 +224,7 @@ def supplier_rfq(data: SupplierRFQData) -> EmailPayload:
         "4. Lead Time & Location\n\n"
         "Please also attach your latest inventory list if available so we can reference your active stock for upcoming requirements.\n\n"
         "Thank you for your prompt assistance.\n\n"
-        "Best regards,\n\n"
-        "Winged Tycoons Sourcing Team\n"
-        "purchasing@wingedtycoons.com"
+        f"Best regards,\n\n{CANONICAL_SIGNATURE}"
     )
     return EmailPayload(message_type="SUPPLIER_RFQ", recipient_email=data.recipient_email, subject=subject, body=body)
 
@@ -214,8 +256,7 @@ def supplier_discount_request(data: SupplierDiscountData) -> EmailPayload:
         f"${data.quoted_price:,.2f} {data.currency} per unit.\n\n"
         f"{negotiation_request}\n\n"
         "We appreciate your support and look forward to finalizing this purchase.\n\n"
-        "Best regards,\n\n"
-        "Purchasing Team | Winged Tycoons"
+        f"Best regards,\n\n{CANONICAL_SIGNATURE}"
     )
     return EmailPayload(message_type="SUPPLIER_DISCOUNT_REQUEST", recipient_email=data.recipient_email, subject=subject, body=body)
 
@@ -232,8 +273,7 @@ def supplier_verification(data: SupplierVerificationData) -> EmailPayload:
         "2. The quoted price and condition remain valid.\n"
         "3. The requested airworthiness certification is ready.\n\n"
         "Please reply to confirm availability so we can issue our formal purchase order.\n\n"
-        "Best regards,\n\n"
-        "Operations Team | Winged Tycoons"
+        f"Best regards,\n\n{CANONICAL_SIGNATURE}"
     )
     return EmailPayload(message_type="SUPPLIER_VERIFICATION", recipient_email=data.recipient_email, subject=subject, body=body)
 
@@ -245,7 +285,6 @@ def customer_followup(data: CustomerFollowupData) -> EmailPayload:
         f"Following up on Quotation {data.quote_number} for Part Number {data.part_number}.\n\n"
         "Stock is subject to prior sale. Please let us know if you would like to proceed with your Purchase Order "
         "or have questions on pricing, lead time, or certification.\n\n"
-        "Best regards,\n\n"
-        "Winged Tycoons Sales Team"
-    ), data.company_name or data.contact_name, satisfaction_question="Does this quotation meet your needs?")
+        f"Best regards,\n\n{CANONICAL_SIGNATURE}"
+    ), data.company_name or data.contact_name, contact_name=data.contact_name, satisfaction_question="Does this quotation meet your needs?")
     return EmailPayload(message_type="CUSTOMER_FOLLOWUP", recipient_email=data.recipient_email, subject=subject, body=body)

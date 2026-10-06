@@ -298,56 +298,111 @@ def _extract_condition(text: str) -> tuple:
 def _extract_customer_info(text: str) -> tuple:
     """
     Returns (customer_name, company, email).
-
-    Looks for common label patterns first; falls back to capitalized phrases.
+    customer_name: the contact individual (e.g. Sandy Delgado)
+    company: the client organization (e.g. Delta MRO Services, Innovation Aerospace, LLC)
+    email: client contact email
     """
+    from services.entity_name_intelligence import (
+        clean_company_name,
+        clean_person_name,
+        derive_company_from_domain,
+        extract_company_from_signature,
+        is_garbage_name,
+        CORPORATE_INDICATORS,
+        AVIATION_INDUSTRY_WORDS,
+    )
+
     customer_name: Optional[str] = None
     company: Optional[str] = None
 
-    # Explicit labels
-    name_m = re.search(
-        r"(?:customer[ \t]*name|contact(?:[ \t]*name)?|name)[: \t]+([A-Za-z][\w \t\.\-]{1,50})",
-        text, re.IGNORECASE
-    )
-    if name_m:
-        customer_name = name_m.group(1).strip()
-
-    company_m = re.search(
-        r"(?:company|organization|org|airline|operator|mro)[: \t]+([A-Za-z][\w \t\.\-&,]{1,60})",
-        text, re.IGNORECASE
-    )
-    if company_m:
-        company = company_m.group(1).strip()
-    else:
-        from_m = re.search(r"from[: \t]+([^<\n\r]+)", text, re.IGNORECASE)
-        if from_m:
-            company = from_m.group(1).strip()
-
-    # Fallback: pick the first Title-Cased multi-word token block as company
-    if not company and not customer_name:
-        caps_match = re.findall(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,4})\b", text)
-        if caps_match:
-            company = caps_match[0]
-
+    # 1. Explicit email label or regex
     email_labels = re.findall(
         r"(?:customer\s*email|contact\s*email|email|e-mail)\s*[:\-]\s*([^\s<>,;]+@[^\s<>,;]+)",
         text,
         re.IGNORECASE,
     )
     email = email_labels[0].strip().lower() if email_labels else _extract_email(text)
+
+    # 2. Explicit contact name patterns (exclude 'part name', 'item name', 'file name', etc.)
+    name_m = re.search(
+        r"(?<!part\s)(?<!item\s)(?<!file\s)(?<!alt\s)(?<!alt\.\s)(?<!domain\s)\b(?:customer[ \t]*name|contact(?:[ \t]*name)?|buyer(?:[ \t]*name)?|contact)[: \t]+([A-Za-z][\w \t\.\-]{1,50})",
+        text, re.IGNORECASE
+    )
+    if name_m:
+        cand = clean_person_name(name_m.group(1))
+        if cand and not is_garbage_name(cand):
+            customer_name = cand
+
+    # 3. Explicit company patterns (require explicit delimiter like colon, dash, or equals)
+    company_m = re.search(
+        r"\b(?:company(?:[ \t]*name)?|organization|org|airline|operator|client(?:[ \t]*company)?|customer(?:[ \t]*company)?|mro)\s*[:\-=]\s*([A-Za-z0-9][\w \t\.\-&,]{1,60})",
+        text, re.IGNORECASE
+    )
+    if company_m:
+        cand_co = clean_company_name(company_m.group(1))
+        if cand_co and not is_garbage_name(cand_co):
+            company = cand_co
+
+    # 4. Signature block extraction
+    sig_person, sig_company = extract_company_from_signature(text)
+    if not customer_name and sig_person:
+        customer_name = sig_person
+    if not company and sig_company:
+        company = sig_company
+
+    # 5. From: header inspection
+    from_m = re.search(r"from[: \t]+([^\n\r]+)", text, re.IGNORECASE)
+    if from_m:
+        from_str = from_m.group(1).strip()
+        display_m = re.match(r"^([^<]+?)\s*(?:<[^>]+>)?$", from_str)
+        if display_m:
+            header_display = display_m.group(1).strip(" \t\"'#")
+            words = [w.lower().strip(".,") for w in header_display.split()]
+            has_corp = any(w in CORPORATE_INDICATORS for w in words)
+            has_avi = any(w in AVIATION_INDUSTRY_WORDS for w in words)
+            if (has_corp or has_avi) and not company:
+                cleaned_co = clean_company_name(header_display)
+                if cleaned_co and not is_garbage_name(cleaned_co):
+                    company = cleaned_co
+            elif not customer_name and not (has_corp or has_avi):
+                cleaned_p = clean_person_name(header_display)
+                if cleaned_p and not is_garbage_name(cleaned_p) and len(words) <= 3:
+                    customer_name = cleaned_p
+
+    # 6. Fallback company from email domain
     if not company and email:
-        domain = email.split("@", 1)[1].split(".", 1)[0]
-        if domain.lower() not in {"gmail", "outlook", "hotmail", "yahoo", "icloud", "aol"}:
-            company = domain.replace("-", " ").replace("_", " ").title()
-    if not customer_name:
-        signature = re.search(
-            r"(?:best|kind regards|regards|sincerely|thank you)[,\s]*\n\s*([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){1,3})",
-            text,
-            re.IGNORECASE,
-        )
-        if signature:
-            customer_name = signature.group(1).strip()
+        domain_company = derive_company_from_domain(email)
+        if domain_company and not is_garbage_name(domain_company):
+            company = domain_company
+
+    # 7. Fallback company from capitalized text tokens
+    if not company and not customer_name:
+        caps_matches = re.findall(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,4})\b", text)
+        for cand_co in caps_matches:
+            cand_cleaned = clean_company_name(cand_co)
+            if not cand_cleaned or is_garbage_name(cand_cleaned):
+                continue
+            cand_words = [w.lower().strip(".,") for w in cand_cleaned.split()]
+            has_corp = any(w in CORPORATE_INDICATORS for w in cand_words)
+            has_avi = any(w in AVIATION_INDUSTRY_WORDS for w in cand_words)
+            if has_corp or has_avi:
+                company = cand_cleaned
+                break
+        if not company and not customer_name and caps_matches:
+            for cand_co in caps_matches:
+                cand_cleaned = clean_company_name(cand_co)
+                if cand_cleaned and not is_garbage_name(cand_cleaned):
+                    company = cand_cleaned
+                    break
+
+    # 8. Final sanity checks: ensure neither is noise
+    if customer_name and is_garbage_name(customer_name):
+        customer_name = None
+    if company and is_garbage_name(company):
+        company = None
+
     return customer_name, company, email
+
 
 
 _TABLE_SPLIT = re.compile(r"\t|\s*\|\s*|\s{2,}")

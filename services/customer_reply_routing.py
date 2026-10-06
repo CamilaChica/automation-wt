@@ -14,18 +14,41 @@ REPLY_WINDOW = timedelta(days=45)
 
 
 def email_derived_name(email: str) -> str:
-    return (email or "").split("@", 1)[0].replace(".", " ").title()
+    from services.entity_name_intelligence import derive_company_from_domain, is_generic_mailbox
+    if not email or "@" not in email:
+        return (email or "").strip()
+    local_part = email.split("@", 1)[0]
+    # If local part is generic (procurement, buyer, sales), derive from domain
+    company = derive_company_from_domain(email)
+    if company and is_generic_mailbox(local_part):
+        return company
+    if company:
+        return company
+    return local_part.replace(".", " ").title()
 
 
 def company_name_for_sender(rfqs: Iterable, sender: str) -> str:
     """Prefer a real company name given earlier (e.g. via the portal) over one guessed from the email."""
+    from services.entity_name_intelligence import name_quality_score, is_garbage_name
     sender = (sender or "").lower()
-    derived = email_derived_name(sender)
+    best_candidate = ""
+    best_score = -1
+
     for rfq in sorted(rfqs, key=lambda r: _created(r), reverse=True):
         name = (getattr(rfq, "customer_name", "") or "").strip()
-        if (getattr(rfq, "customer_email", "") or "").lower() == sender and name and "@" not in name and name != derived:
-            return name
-    return derived
+        email = (getattr(rfq, "customer_email", "") or "").lower()
+        if email == sender and name and not is_garbage_name(name):
+            score = name_quality_score(name)
+            if score > best_score:
+                best_score = score
+                best_candidate = name
+            if score >= 80:
+                return name
+
+    if best_candidate and best_score >= 50:
+        return best_candidate
+
+    return best_candidate or email_derived_name(sender)
 
 
 def _created(rfq) -> datetime:
@@ -145,5 +168,6 @@ def build_rfq_update_reply(rfq_id: str, customer_text: str, quote_answer: str | 
             "We will follow up in this email thread once they are confirmed. "
             "There is no need to submit a new request."
         )
-    parts.append("Best regards,\nWinged Tycoons Sales Team")
+    from services.email_templates import CANONICAL_SIGNATURE
+    parts.append(f"Best regards,\n\n{CANONICAL_SIGNATURE}")
     return "\n\n".join(parts)

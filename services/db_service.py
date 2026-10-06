@@ -310,9 +310,10 @@ class MockDatabaseService:
 
     def seed_supplier_records(self):
         relevant_suppliers = [
-            {"supplier_name": "Apex Aero Components LLC", "supplier_email": "quotes@apexaero.com", "part_number": "060-1234-00", "quantity_available": 10, "unit_cost": 1100.0, "certificate_type": "FAA 8130-3", "lead_time_days": 3, "approval_status": "Approved", "condition_code": "NE"},
-            {"supplier_name": "Vanguard Aviation Spares Inc.", "supplier_email": "procurement@vanguardspares.com", "part_number": "060-1234-00", "quantity_available": 3, "unit_cost": 1050.0, "certificate_type": "FAA 8130-3", "lead_time_days": 7, "approval_status": "Approved", "condition_code": "NE"},
-            {"supplier_name": "Horizon MRO Parts Ltd.", "supplier_email": "sales@horizonmro.com", "part_number": "456-789-OH", "quantity_available": 5, "unit_cost": 500.0, "certificate_type": "FAA 8130-3", "lead_time_days": 2, "approval_status": "Approved", "condition_code": "OH"},
+            {"supplier_name": "Apex Aero Components LLC", "supplier_email": "quotes@apexaero.com", "part_number": "060-1234-00", "quantity_available": 10, "unit_cost": 1100.0, "certificate_type": "FAA 8130-3", "lead_time_days": 3, "approval_status": "Approved", "condition_code": "NE", "description": "Weather Radar Receiver-Transmitter (B737)"},
+            {"supplier_name": "Vanguard Aviation Spares Inc.", "supplier_email": "procurement@vanguardspares.com", "part_number": "060-1234-00", "quantity_available": 3, "unit_cost": 1050.0, "certificate_type": "FAA 8130-3", "lead_time_days": 7, "approval_status": "Approved", "condition_code": "NE", "description": "Weather Radar Receiver-Transmitter (B737)"},
+            {"supplier_name": "Horizon MRO Parts Ltd.", "supplier_email": "sales@horizonmro.com", "part_number": "456-789", "quantity_available": 5, "unit_cost": 500.0, "certificate_type": "FAA 8130-3", "lead_time_days": 2, "approval_status": "Approved", "condition_code": "OH", "description": "Actuator Assembly (A320)"},
+            {"supplier_name": "Horizon MRO Parts Ltd.", "supplier_email": "sales@horizonmro.com", "part_number": "AN960-416", "quantity_available": 50, "unit_cost": 20.0, "certificate_type": "FAA 8130-3", "lead_time_days": 1, "approval_status": "Approved", "condition_code": "NE", "description": "Washer, Flat (Aircraft Hardware)"},
         ]
         for offer in relevant_suppliers:
             supplier_db.save_supplier_offer(
@@ -325,6 +326,7 @@ class MockDatabaseService:
                 lead_time_days=offer["lead_time_days"],
                 approval_status=offer["approval_status"],
                 condition_code=offer["condition_code"],
+                description=offer.get("description", ""),
                 trace_documents=[offer["certificate_type"]],
                 source_received_at=datetime.now(timezone.utc),
             )
@@ -339,6 +341,7 @@ class MockDatabaseService:
             InventoryItem(
                 id="INV-001",
                 part_number="060-1234-00",
+                description="Weather Radar Receiver-Transmitter (B737)",
                 serial_number="SN-WR-001",
                 quantity_available=1,
                 condition_code="NE",
@@ -350,6 +353,7 @@ class MockDatabaseService:
             InventoryItem(
                 id="INV-002",
                 part_number="060-1234-00",
+                description="Weather Radar Receiver-Transmitter (B737)",
                 serial_number="SN-WR-002",
                 quantity_available=1,
                 condition_code="NE",
@@ -360,7 +364,8 @@ class MockDatabaseService:
             ),
             InventoryItem(
                 id="INV-003",
-                part_number="456-789-OH",
+                part_number="456-789",
+                description="Actuator Assembly (A320)",
                 serial_number="SN-ACT-981",
                 quantity_available=1,
                 condition_code="OH",
@@ -371,7 +376,8 @@ class MockDatabaseService:
             ),
             InventoryItem(
                 id="INV-004",
-                part_number="456-789-OH",
+                part_number="456-789",
+                description="Actuator Assembly (A320)",
                 serial_number="SN-ACT-982",
                 quantity_available=1,
                 condition_code="OH",

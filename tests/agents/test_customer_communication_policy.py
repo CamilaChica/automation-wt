@@ -46,7 +46,7 @@ class TestCustomerCommunicationPolicy(unittest.TestCase):
             "Global Airlines",
         )
         body = result.data["formatted_body"]
-        self.assertTrue(body.startswith("Hi Global Airlines,\n\n"))
+        self.assertTrue(body.startswith("Hi Maria,\n\n"))
         self.assertIn("Does this quotation meet your needs?", body)
         self.assertIn("https://portal.wingedtycoons.com/customer-portal", body)
 
