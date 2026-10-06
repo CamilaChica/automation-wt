@@ -185,6 +185,37 @@ CREATE TABLE IF NOT EXISTS customer_quote_items (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS client_quote_history (
+    id TEXT PRIMARY KEY,
+    client_email TEXT NOT NULL,
+    client_name TEXT,
+    company_name TEXT,
+    quote_number TEXT NOT NULL,
+    rfq_id TEXT,
+    part_number TEXT NOT NULL,
+    normalized_part_number TEXT NOT NULL,
+    description TEXT,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    uom TEXT NOT NULL DEFAULT 'EA',
+    unit_price REAL NOT NULL DEFAULT 0.0,
+    total_price REAL NOT NULL DEFAULT 0.0,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    condition TEXT,
+    certification TEXT,
+    lead_time TEXT,
+    valid_until TEXT,
+    status TEXT NOT NULL DEFAULT 'Sent',
+    sent_at TEXT NOT NULL,
+    email_subject TEXT,
+    email_body TEXT,
+    attachments TEXT,
+    source_mailbox TEXT NOT NULL DEFAULT 'sales',
+    source_message_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (quote_number, normalized_part_number, client_email)
+);
+
 CREATE TABLE IF NOT EXISTS purchase_orders (
     id TEXT PRIMARY KEY,
     customer_id TEXT REFERENCES customers(id),
@@ -390,3 +421,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_rfq_created ON audit_logs(rfq_id, crea
 CREATE INDEX IF NOT EXISTS idx_raw_emails_internet_message_id ON raw_emails(internet_message_id);
 CREATE INDEX IF NOT EXISTS idx_supplier_inventory_imports_created ON supplier_inventory_imports(created_at);
 CREATE INDEX IF NOT EXISTS idx_supplier_inventory_rows_part_number ON supplier_inventory_rows(part_number);
+CREATE INDEX IF NOT EXISTS idx_cqh_client_email ON client_quote_history(client_email);
+CREATE INDEX IF NOT EXISTS idx_cqh_part_number ON client_quote_history(part_number);
+CREATE INDEX IF NOT EXISTS idx_cqh_norm_part ON client_quote_history(normalized_part_number);
+CREATE INDEX IF NOT EXISTS idx_cqh_quote_number ON client_quote_history(quote_number);

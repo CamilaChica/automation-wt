@@ -193,3 +193,39 @@ class CustomerQuestionService:
         if any(value is None for value in facts.values()):
             return None
         return "\n".join(f"{field.replace('_', ' ').title()}: {value}" for field, value in facts.items())
+
+    def answer_from_client_history(
+        self,
+        question: str,
+        client_email: str,
+        part_number: str | None = None,
+    ) -> str | None:
+        """Answer customer questions grounded in previous quotes sent to this specific client."""
+        from services.client_history_service import client_history_service
+        if part_number:
+            past_quotes = client_history_service.get_part_quote_history_for_client(client_email, part_number)
+        else:
+            hist = client_history_service.get_client_quote_history(client_email)
+            past_quotes = hist.get("quotes", [])
+
+        if not past_quotes:
+            return None
+
+        latest = past_quotes[0]
+        pn = latest.get("part_number") or part_number or "the requested part"
+        qty = latest.get("quantity") or 1
+        unit_price = float(latest.get("unit_price") or 0.0)
+        cond = latest.get("condition") or "NE"
+        cert = latest.get("certification") or "FAA 8130-3 / OEM CoC"
+        lead = latest.get("lead_time") or "Stock"
+        q_num = latest.get("quote_number") or "previous quotation"
+        sent_date = str(latest.get("sent_at", ""))[:10]
+
+        return (
+            f"Based on our previous quotation ({q_num}" + (f" on {sent_date}" if sent_date else "") + f"):\n"
+            f"- Part Number: {pn} (Quantity: {qty})\n"
+            f"- Quoted Unit Price: ${unit_price:,.2f} USD\n"
+            f"- Condition: {cond}\n"
+            f"- Certification: {cert}\n"
+            f"- Lead Time: {lead}"
+        )

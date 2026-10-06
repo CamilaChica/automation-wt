@@ -1797,10 +1797,39 @@ def _accept_prequote_purchase_order(request: "PurchaseOrderRequest", rfq: Any, r
     customer_name = getattr(rfq, "customer_name", None) or (rfq.get("customer_name") if isinstance(rfq, dict) else "") or customer_email
     recipient = os.getenv("CAMILA_NOTIFICATION_EMAIL", os.getenv("PURCHASE_ORDER_NOTIFICATION_EMAIL", "camila@wingedtycoons.com"))
     po_number = request.po_number.strip()
+    part_number = getattr(rfq, "part_number", None) or (rfq.get("part_number") if isinstance(rfq, dict) else "")
+    supplier_info = ""
+    if part_number:
+        try:
+            offers = (
+                operations_store.get_supplier_offers(part_number, 1)
+                if operations_store.storage_engine == "postgresql"
+                else supplier_db.find_supplier_offers(part_number, 1)
+            )
+            if offers:
+                best = offers[0]
+                s_name = best.get("supplier_name", "Unknown")
+                s_email = best.get("supplier_email", "N/A")
+                s_cost = float(best.get("unit_cost") or 0.0)
+                s_cond = best.get("condition_code") or best.get("condition") or "NE"
+                s_cert = best.get("certificate_type") or best.get("trace_documents") or "FAA 8130-3 / OEM CoC"
+                s_lead = best.get("lead_time_days") or best.get("lead_time") or "Stock"
+                supplier_info = (
+                    f"\n\nSELECTED SUPPLIER DETAILS (TOP CANDIDATE):\n"
+                    f"- Part Number: {part_number}\n"
+                    f"  * Supplier: {s_name}\n"
+                    f"  * Supplier Email: {s_email}\n"
+                    f"  * Sourced Cost: ${s_cost:,.2f} USD\n"
+                    f"  * Condition: {s_cond} | Cert: {s_cert}\n"
+                    f"  * Lead Time: {s_lead}\n"
+                )
+        except Exception:
+            pass
     body = (
         f"Purchase order received before the quote was sent: {po_number}\n\n"
         f"RFQ: {rfq_reference}\nCustomer: {safe_display_text(customer_name)}\nCustomer email: {customer_email}\n"
-        f"Attachments: {', '.join(request.attachment_ids)}\n\n"
+        f"Attachments: {', '.join(request.attachment_ids)}"
+        f"{supplier_info}\n\n"
         "Please review the PO and confirm pricing with the customer."
     )
     notification: Dict[str, Any] = {}
@@ -1940,6 +1969,10 @@ async def submit_purchase_order(
             "supplier_name": supplier_name,
             "supplier_email": supplier_email,
             "supplier_unit_cost": float(selected.get("unit_cost") or item_unit_cost or 0) if selected else float(item_unit_cost or 0),
+            "supplier_condition": (selected.get("condition_code") or selected.get("condition")) if selected else "NE",
+            "supplier_certificate": (selected.get("certificate_type") or selected.get("trace_documents")) if selected else "FAA 8130-3 / OEM CoC",
+            "supplier_lead_time": str((selected.get("lead_time_days") or selected.get("lead_time")) if selected else "Stock"),
+            "supplier_location": (selected.get("availability_location") or selected.get("location") or selected.get("warehouse_location") or "") if selected else "",
         }
         internal_items.append(internal_item)
         if supplier_email:
@@ -2562,3 +2595,63 @@ async def mailbox_send(
         raise HTTPException(403, "You do not have send access to this mailbox.")
     send_message(mailbox, request.recipient, request.subject, request.body, request.reply_to)
     return {"status": "sent", "mailbox": mailbox, "sent_by": user["email"]}
+
+
+@app.get("/api/clients")
+async def list_clients_history(
+    search: str = "",
+    limit: int = 100,
+    offset: int = 0,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
+):
+    """List all clients with quote metrics (distinct parts quoted, total quotes sent, value)."""
+    from services.client_history_service import client_history_service
+    return client_history_service.list_clients(search=search, limit=limit, offset=offset)
+
+
+@app.get("/api/clients/{client_email}/history")
+async def get_client_history(
+    client_email: str,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
+):
+    """Get the complete history of every part ever quoted to a client, with all details sent to them."""
+    from services.client_history_service import client_history_service
+    return client_history_service.get_client_quote_history(client_email)
+
+
+@app.get("/api/clients/{client_email}/parts/{part_number}")
+async def get_client_part_history(
+    client_email: str,
+    part_number: str,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
+):
+    """Get all quotes ever sent to a specific client for a given part number."""
+    from services.client_history_service import client_history_service
+    return client_history_service.get_part_quote_history_for_client(client_email, part_number)
+
+
+@app.get("/api/clients/parts/{part_number}")
+async def get_part_all_clients(
+    part_number: str,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING")),
+):
+    """Get all clients ever quoted a specific part number and what was sent to them."""
+    from services.client_history_service import client_history_service
+    return client_history_service.get_part_all_clients_history(part_number)
+
+
+@app.post("/api/internal/clients/sync-history")
+async def sync_clients_quote_history(
+    limit: int = 100,
+    _user: dict = Depends(require_roles("ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES")),
+):
+    """Trigger sync and backfill of client quote history from mailbox and database."""
+    from services.client_history_service import client_history_service
+    db_count = client_history_service.backfill_from_existing_database(limit=10000)
+    mail_res = client_history_service.sync_from_sales_mailbox(limit=limit)
+    return {
+        "status": "success",
+        "database_records_synced": db_count,
+        "mailbox_sync": mail_res,
+    }
+

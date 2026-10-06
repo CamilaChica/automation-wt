@@ -693,17 +693,53 @@ class CommunicationService:
         safe_customer_name = safe_display_text(customer_name)
         total_value = sum(float(item.get("unit_price") or 0) * int(item.get("quantity") or 0) for item in items)
         item_lines = []
-        for item in items:
+        supplier_blocks = []
+        for idx, item in enumerate(items, start=1):
+            pn = item.get("part_number", "N/A")
+            qty = int(item.get("quantity") or 1)
+            u_price = float(item.get("unit_price") or 0.0)
+            s_name = str(item.get("supplier_name") or "Internal inventory")
+            s_email = str(item.get("supplier_email") or "").strip()
+            s_cost = float(item.get("supplier_unit_cost") or 0.0)
+            s_cond = str(item.get("supplier_condition") or item.get("condition") or "NE")
+            s_cert = str(item.get("supplier_certificate") or item.get("certification") or "FAA 8130-3 / OEM CoC")
+            s_lead = str(item.get("supplier_lead_time") or item.get("lead_time") or "Stock")
+            s_loc = str(item.get("supplier_location") or item.get("location") or "").strip()
+
+            margin_unit = u_price - s_cost
+            margin_pct = ((margin_unit / u_price) * 100.0) if u_price > 0 else 0.0
+
             item_lines.append(
-                f"- {item['part_number']} | Qty {item['quantity']} | Customer price ${item['unit_price']:,.2f} | "
-                f"Selected supplier: {item.get('supplier_name', 'Internal inventory')} | "
-                f"Supplier cost: ${item.get('supplier_unit_cost', 0.0):,.2f}"
+                f"- {pn} | Qty {qty} | Customer price ${u_price:,.2f} | "
+                f"Selected supplier: {s_name} | "
+                f"Supplier cost: ${s_cost:,.2f}"
             )
+
+            supplier_lines = [
+                f"  [{idx}] Part Number: {pn} (Quantity: {qty})",
+                f"      * Selected Supplier: {s_name}",
+            ]
+            if s_email:
+                supplier_lines.append(f"      * Supplier Contact / Email: {s_email}")
+            supplier_lines.append(f"      * Supplier Unit Cost: ${s_cost:,.2f} USD (Line Total Cost: ${s_cost * qty:,.2f} USD)")
+            supplier_lines.append(f"      * Quoted Condition: {s_cond} | Certification / Trace: {s_cert}")
+            supplier_lines.append(f"      * Supplier Lead Time: {s_lead}")
+            if s_loc:
+                supplier_lines.append(f"      * Dispatch Location: {s_loc}")
+            supplier_lines.append(f"      * Projected Margin: ${margin_unit * qty:,.2f} USD ({margin_pct:.1f}%)")
+            supplier_blocks.append("\n".join(supplier_lines))
+
+        supplier_section = (
+            "SELECTED SUPPLIER DETAILS (INTERNAL PROCUREMENT USE):\n"
+            + ("\n\n".join(supplier_blocks) if supplier_blocks else "  No supplier details available.")
+        )
+
         body = (
             f"Purchase order received: {po_number}\n\n"
             f"Customer: {safe_customer_name}\nCustomer email: {customer_email}\nQuote: {quote_id}\n"
             f"Total value: ${total_value:,.2f}\n\n"
             "Requested items:\n" + "\n".join(item_lines) + "\n\n"
+            f"{supplier_section}\n\n"
             f"Review and approve this PO in the Sales Command Dashboard: {review_url or os.getenv('SALES_DASHBOARD_URL') or os.getenv('PUBLIC_APP_URL', 'http://localhost:3000')}\n\n"
             "Do not fulfill, invoice, or contact suppliers until a human operator approves this PO. "
             "Supplier details are included for internal use only."

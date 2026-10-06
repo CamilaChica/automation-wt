@@ -1356,6 +1356,33 @@ class OrchestrationService:
             db_service.update_quote_status(quote.id, "Sent")
             db_service.update_rfq_status(rfq_id, "Quote_Sent")
 
+            try:
+                from services.client_history_service import client_history_service
+                q_items = db_service.get_quote_items(quote.id)
+                formatted_body = communication_result.data.get("formatted_body") or ""
+                subject = communication_result.data.get("subject") or f"Quotation {quote.id}"
+                for qi in q_items:
+                    client_history_service.record_client_quote(
+                        client_email=rfq.customer_email,
+                        client_name=rfq.customer_name,
+                        quote_number=quote.id,
+                        rfq_id=rfq.id,
+                        part_number=qi.part_number,
+                        description=getattr(qi, "description", None) or qi.part_number,
+                        quantity=qi.quantity,
+                        unit_price=float(qi.unit_price or 0.0),
+                        total_price=float(qi.unit_price or 0.0) * int(qi.quantity or 1),
+                        condition=getattr(qi, "condition", None) or "NE",
+                        certification=getattr(qi, "certification", None) or "FAA 8130-3 / OEM CoC",
+                        lead_time=str(getattr(qi, "lead_time", None) or "Stock"),
+                        valid_until=getattr(quote, "valid_until", None),
+                        status="Sent",
+                        email_subject=subject,
+                        email_body=formatted_body,
+                    )
+            except Exception as hist_err:
+                logger.warning("record_client_quote_history_on_dispatch_failed rfq=%s err=%s", rfq_id, hist_err)
+
             status = "Quote_Sent"
             if context["has_low_margin_escalation"]:
                 margin_rule_payload = (

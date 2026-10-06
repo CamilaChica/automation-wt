@@ -180,6 +180,10 @@ def _record_email_purchase_order(message: dict[str, Any], rfq: Any, quote: Any, 
             "supplier_name": selected.get("supplier_name") if selected else "Internal inventory",
             "supplier_email": selected.get("supplier_email") if selected else "",
             "supplier_unit_cost": float(selected.get("unit_cost") or item.unit_cost or 0) if selected else float(item.unit_cost or 0),
+            "supplier_condition": (selected.get("condition_code") or selected.get("condition")) if selected else (getattr(item, "condition", None) or "NE"),
+            "supplier_certificate": (selected.get("certificate_type") or selected.get("trace_documents")) if selected else (getattr(item, "certification", None) or "FAA 8130-3 / OEM CoC"),
+            "supplier_lead_time": str((selected.get("lead_time_days") or selected.get("lead_time")) if selected else (getattr(item, "lead_time", None) or "Stock")),
+            "supplier_location": (selected.get("availability_location") or selected.get("location") or selected.get("warehouse_location") or "") if selected else "",
         })
     attachments = [
         {"filename": str(item.get("filename") or "attachment"), "content_type": str(item.get("content_type") or ""), "size": len(item.get("content") or b"")}
@@ -291,7 +295,7 @@ async def _ingest_sales_message(message: dict[str, str]) -> bool:
     if existing and getattr(existing, "automation_paused", False) and str(getattr(existing, "pause_reason", "")).startswith("Critical "):
         _review_inbound_customer_message(message, "critical_infrastructure_fault_customer_reply_held", existing.id)
         return True
-    if existing and not existing.automation_paused and existing.status in {"Supplier_Sourcing", "Sourcing_Failed"}:
+    if existing and not getattr(existing, "automation_paused", False) and existing.status in {"Supplier_Sourcing", "Sourcing_Failed"}:
         if _confirm_catalog_miss(message, existing, body):
             return True
     if quote:
@@ -606,6 +610,10 @@ async def _ingest_existing_sales_message_async(message: dict[str, Any], reposito
                             float(selected.get("unit_cost") or item.unit_cost or 0)
                             if selected else float(item.unit_cost or 0)
                         ),
+                        "supplier_condition": (selected.get("condition_code") or selected.get("condition")) if selected else (getattr(item, "condition", None) or "NE"),
+                        "supplier_certificate": (selected.get("certificate_type") or selected.get("trace_documents")) if selected else (getattr(item, "certification", None) or "FAA 8130-3 / OEM CoC"),
+                        "supplier_lead_time": str((selected.get("lead_time_days") or selected.get("lead_time")) if selected else (getattr(item, "lead_time", None) or "Stock")),
+                        "supplier_location": (selected.get("availability_location") or selected.get("location") or selected.get("warehouse_location") or "") if selected else "",
                     })
                 await communication_service.notify_purchase_order_async(
                     repositories,

@@ -1279,9 +1279,28 @@ class OperationsStore:
             results = [dict(row) for row in rows]
             for result in results:
                 result["model_calls"] = json.loads(result.pop("model_calls_json"))
-            return results
         finally:
             conn.close()
+
+    def get_client_quote_history(self, client_identifier: str) -> dict[str, Any]:
+        from services.client_history_service import client_history_service
+        return client_history_service.get_client_quote_history(client_identifier)
+
+    def get_part_quote_history_for_client(self, client_email: str, part_number: str) -> list[dict[str, Any]]:
+        from services.client_history_service import client_history_service
+        return client_history_service.get_part_quote_history_for_client(client_email, part_number)
+
+    def get_part_all_clients_history(self, part_number: str) -> list[dict[str, Any]]:
+        from services.client_history_service import client_history_service
+        return client_history_service.get_part_all_clients_history(part_number)
+
+    def list_clients_quote_history(self, search: str = "", limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        from services.client_history_service import client_history_service
+        return client_history_service.list_clients(search=search, limit=limit, offset=offset)
+
+    def record_client_quote(self, **kwargs: Any) -> dict[str, Any]:
+        from services.client_history_service import client_history_service
+        return client_history_service.record_client_quote(**kwargs)
 
 
 operations_store = OperationsStore()

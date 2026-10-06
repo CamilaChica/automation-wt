@@ -28,6 +28,7 @@ class TestEmailPurchaseOrderFlow(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
             "ENVIRONMENT": "local", "WT_ENV": "local", "WT_AUTH_ENV": "local", "RENDER": "false",
             "CAMILA_NOTIFICATION_EMAIL": "camila@wingedtycoons.com",
+            "EMAIL_SEND_ENABLED": "false",
         }, clear=False):
             store = OperationsStore(os.path.join(directory, "po-flow.db"))
             connection = store._connect()
@@ -52,6 +53,7 @@ class TestEmailPurchaseOrderFlow(unittest.TestCase):
                 patch("worker.db_service.get_quote_items", return_value=[quote_item]),
                 patch("worker.supplier_db.find_supplier_offers", return_value=[]),
                 patch("worker.communication_service.cancel_customer_followups"),
+                patch("worker.communication_service.send_customer_receipt", return_value={"transmission_status": "DRY_RUN"}),
                 patch("worker.communication_service.notify_purchase_order", return_value={"transmission_status": "PENDING"}) as notify,
                 patch("worker.orchestration_service.mark_purchase_order_received") as mark_received,
             ):

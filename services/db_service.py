@@ -921,6 +921,28 @@ class MockDatabaseService:
                 lead_time=lead_time_days,
                 attachments=json.dumps(list(attachments or [])),
             )
+            try:
+                rfq = self.get_rfq(quote.rfq_id)
+                if rfq and getattr(rfq, "customer_email", None):
+                    from services.client_history_service import client_history_service
+                    client_history_service.record_client_quote(
+                        client_email=rfq.customer_email,
+                        client_name=getattr(rfq, "customer_name", None),
+                        quote_number=quote.id,
+                        rfq_id=quote.rfq_id,
+                        part_number=part_number,
+                        description=description or part_number,
+                        quantity=qty,
+                        unit_price=unit_price,
+                        total_price=unit_price * qty,
+                        condition=condition,
+                        certification=cert,
+                        lead_time=str(lead_time_days) if lead_time_days is not None else "Stock",
+                        valid_until=quote.valid_until,
+                        status=quote.status,
+                    )
+            except Exception:
+                pass
         self._persist_state()
         return item
 
