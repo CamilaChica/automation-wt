@@ -159,19 +159,13 @@ def import_inventory_attachments(message: dict[str, Any], mailbox: str) -> dict[
             parser_names.add(str(block.get("parser") or "table"))
             for row in block.get("rows") or []:
                 normalized, error = normalize_inventory_row(row)
-                missing_supplier_fields = [
-                    label for field, label in (
-                        ("unit_price", "unit price and currency"),
-                        ("lead_time_days", "lead time"),
-                        ("certificate_type", "release certificate and trace documentation"),
-                    )
-                    if normalized.get(field) in (None, "")
-                ]
-                if not error and missing_supplier_fields:
-                    error = "Supplier follow-up required: " + ", ".join(missing_supplier_fields)
+                # Missing fields (lead time, trace) never block ingestion or trigger premature supplier outreach.
+                missing_price = normalized.get("unit_price") in (None, "")
+                if not error and missing_price:
+                    error = "Supplier follow-up required: unit price and currency"
                     part_number = str(normalized.get("part_number") or "").strip().upper()
                     if part_number:
-                        followups.setdefault(part_number, set()).update(missing_supplier_fields)
+                        followups.setdefault(part_number, set()).add("unit price and currency")
                 row_number = len(normalized_rows) + 1
                 normalized["source_row_number"] = normalized.get("row_number")
                 normalized.update({
@@ -304,19 +298,13 @@ async def import_inventory_attachments_async(
             parser_names.add(str(block.get("parser") or "table"))
             for row in block.get("rows") or []:
                 normalized, error = normalize_inventory_row(row)
-                missing_fields = [
-                    label for field, label in (
-                        ("unit_price", "unit price and currency"),
-                        ("lead_time_days", "lead time"),
-                        ("certificate_type", "release certificate and trace documentation"),
-                    )
-                    if normalized.get(field) in (None, "")
-                ]
-                if not error and missing_fields:
-                    error = "Supplier follow-up required: " + ", ".join(missing_fields)
+                # Missing fields (lead time, trace) never block ingestion or trigger premature supplier outreach.
+                missing_price = normalized.get("unit_price") in (None, "")
+                if not error and missing_price:
+                    error = "Supplier follow-up required: unit price and currency"
                     part_number = str(normalized.get("part_number") or "").strip().upper()
                     if part_number:
-                        followups.setdefault(part_number, set()).update(missing_fields)
+                        followups.setdefault(part_number, set()).add("unit price and currency")
                 row_number = len(normalized_rows) + 1
                 normalized["source_row_number"] = normalized.get("row_number")
                 normalized.update({

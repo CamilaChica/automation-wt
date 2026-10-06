@@ -77,8 +77,37 @@ class TestPhaseOneLocalPersistence(unittest.TestCase):
             save_offer.assert_not_called()
             request_followup.assert_called_once()
             self.assertIn("unit price and currency", request_followup.call_args.kwargs["missing_fields"])
-            self.assertIn("lead time", request_followup.call_args.kwargs["missing_fields"])
+            self.assertNotIn("lead time", request_followup.call_args.kwargs["missing_fields"])
+            self.assertNotIn("release certificate and trace documentation", request_followup.call_args.kwargs["missing_fields"])
             self.assertEqual(request_followup.call_args.kwargs["reply_to"], "graph-stock-2")
+
+    def test_missing_lead_time_and_trace_never_blocks_ingestion_or_triggers_outreach(self):
+        csv_content = (
+            "Part Number,Description,Quantity,Condition,Unit Price,Currency\n"
+            "060-1234-00,Actuator,5,OH,250.00,USD\n"
+        ).encode()
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+            "ENVIRONMENT": "local", "WT_ENV": "local", "WT_AUTH_ENV": "local", "RENDER": "false",
+        }, clear=False):
+            store = OperationsStore(os.path.join(directory, "noblock.db"))
+            with patch.object(supplier_inventory_importer, "operations_store", store), patch.object(
+                supplier_inventory_importer, "_save_offer", return_value={"id": "offer-nb"},
+            ) as save_offer, patch.object(
+                supplier_inventory_importer.communication_service,
+                "request_missing_supplier_fields",
+            ) as request_followup:
+                result = supplier_inventory_importer.import_inventory_attachments({
+                    "message_id": "graph-stock-3",
+                    "internet_message_id": "<stock-3@supplier.example>",
+                    "from": "Stock Supplier <inventory@supplier.example>",
+                    "attachments": [{"filename": "stock_no_lead.csv", "content_type": "text/csv", "content": csv_content}],
+                }, "purchasing")
+
+            self.assertTrue(result["success"])
+            self.assertEqual(result["imports"][0]["rows_imported"], 1)
+            self.assertEqual(result["imports"][0]["rows_rejected"], 0)
+            save_offer.assert_called_once()
+            request_followup.assert_not_called()
 
     def test_automation_events_are_claimed_once_for_background_work(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
