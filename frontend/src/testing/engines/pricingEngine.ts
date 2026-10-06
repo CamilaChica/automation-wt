@@ -27,9 +27,9 @@ export const calculateAutomatedQuote = (input: PricingInput): PricingResult => {
   const marginBoost =
     input.isCriticalFlightComponent && stockRatio < 1 ? 15 : 0;
   const appliedMarginPercent = input.baseMarginPercent + marginBoost;
-  const unitPrice = Number(
-    (input.baseUnitCost * (1 + appliedMarginPercent / 100)).toFixed(2)
-  );
+  const rawUnitPrice = input.baseUnitCost * (1 + appliedMarginPercent / 100);
+  // Round up customer quote unit price from 50 to 50
+  const unitPrice = Math.max(50, Math.ceil(Number(rawUnitPrice.toFixed(4)) / 50) * 50);
 
   return {
     approved: true,

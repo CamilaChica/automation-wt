@@ -106,6 +106,24 @@ def _is_partsbase_rfq(rfq: Any) -> bool:
     source = f"{getattr(rfq, 'customer_email', '')} {getattr(rfq, 'raw_text', '')}".lower()
     return "partsbase.com" in source
 
+
+def round_up_to_50(price: float) -> float:
+    """Round up price in quotes to clients from 50 to 50 (in multiples/increments of 50).
+    
+    Examples:
+        50.0 -> 50.0
+        50.01 -> 100.0
+        125.0 -> 150.0
+        150.0 -> 150.0
+        152.0 -> 200.0
+        1250.0 -> 1250.0
+        1255.0 -> 1300.0
+    """
+    if price is None or price <= 0:
+        return 50.0
+    return float(math.ceil(round(float(price), 4) / 50.0) * 50.0)
+
+
 class OrchestrationService:
     MIN_AUTONOMOUS_MARGIN = 0.18
 
@@ -311,8 +329,10 @@ class OrchestrationService:
             suggested_unit_price = float(requested_price_limit)
             actual_margin = (suggested_unit_price - unit_cost) / suggested_unit_price
         else:
-            actual_margin = margin
-            suggested_unit_price = round(unit_cost / (1 - actual_margin), 2)
+            raw_suggested = unit_cost / (1 - margin)
+            # Round up prices in quotes to clients from 50 to 50 (in multiples of 50)
+            suggested_unit_price = round_up_to_50(raw_suggested)
+            actual_margin = (suggested_unit_price - unit_cost) / suggested_unit_price
         if suggested_unit_price <= unit_cost:
             raise ValueError(
                 f"Customer price ${suggested_unit_price:.2f} must exceed source cost ${unit_cost:.2f}."
