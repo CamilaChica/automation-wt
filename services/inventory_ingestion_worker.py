@@ -8,6 +8,10 @@ mirrors normalized records into PostgreSQL when DATABASE_URL is configured.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 import json
 import logging
 import os
