@@ -2616,7 +2616,7 @@ async def get_inventory(
     """
     if session is None:
         try:
-            catalog = operations_store.list_inventory_catalog(500)
+            catalog = operations_store.list_inventory_catalog(10000)
         except Exception:
             logger.exception("Inventory catalog query failed")
             catalog = []

@@ -688,9 +688,84 @@ class OperationsStore:
         return supplier_db.find_candidate_suppliers_for_rfq(part_number)
 
     def list_inventory_catalog(self, limit: int = 500) -> list[dict[str, Any]]:
-        if not self._postgres:
-            return []
-        return self._postgres.list_inventory_catalog(limit)
+        if self._postgres:
+            return self._postgres.list_inventory_catalog(limit)
+        results: list[dict[str, Any]] = []
+        conn = self._connect()
+        try:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            tables = {r[0] for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+
+            # 1. From supplier_inventory_rows
+            if "supplier_inventory_rows" in tables:
+                rows = cur.execute(
+                    "SELECT id, part_number, description, quantity_available, condition_code, "
+                    "COALESCE(availability_location, 'Supplier list') AS location, unit_price AS unit_cost, "
+                    "certificate_type, NULL AS trace_documents, NULL AS supplier_name "
+                    "FROM supplier_inventory_rows WHERE part_number IS NOT NULL AND part_number <> '' LIMIT ?",
+                    (limit,)
+                ).fetchall()
+                results.extend(dict(r) for r in rows)
+
+            # 2. From supplier_parts if present in operations
+            if len(results) < limit and "supplier_parts" in tables:
+                rem = limit - len(results)
+                rows = cur.execute(
+                    "SELECT p.id, p.part_number, p.description, p.quantity_available, p.condition_code, "
+                    "COALESCE(p.availability_location, s.company_name, 'Supplier') AS location, p.unit_cost, "
+                    "p.certificate_type, p.trace_documents, s.company_name AS supplier_name "
+                    "FROM supplier_parts p LEFT JOIN suppliers s ON s.id = p.supplier_id "
+                    "WHERE p.part_number IS NOT NULL AND p.part_number <> '' LIMIT ?",
+                    (rem,)
+                ).fetchall()
+                results.extend(dict(r) for r in rows)
+        except Exception as e:
+            logger.warning("SQLite list_inventory_catalog error: %s", e)
+        finally:
+            conn.close()
+
+        # Also pull from supplier_email_store if more catalog items needed
+        if len(results) < limit:
+            from services.supplier_database import DB_PATH
+            candidate_supplier_dbs = [
+                DB_PATH,
+                Path("data/supplier_email_store.db"),
+                Path("C:/var/data/supplier_email_store.db"),
+            ]
+            seen_ids = {r.get("id") for r in results}
+            for s_path in candidate_supplier_dbs:
+                if not s_path.exists():
+                    continue
+                try:
+                    sconn = sqlite3.connect(s_path)
+                    sconn.row_factory = sqlite3.Row
+                    cur = sconn.cursor()
+                    tables = {r[0] for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+                    if "supplier_parts" in tables:
+                        rem = limit - len(results)
+                        rows = cur.execute(
+                            "SELECT p.id, p.part_number, p.description, p.quantity_available, p.condition_code, "
+                            "COALESCE(p.availability_location, s.company_name, 'Supplier') AS location, p.unit_cost, "
+                            "p.certificate_type, p.trace_documents, s.company_name AS supplier_name "
+                            "FROM supplier_parts p LEFT JOIN suppliers s ON s.id = p.supplier_id "
+                            "WHERE p.part_number IS NOT NULL AND p.part_number <> '' LIMIT ?",
+                            (rem * 2,)
+                        ).fetchall()
+                        for r in rows:
+                            d = dict(r)
+                            if d["id"] not in seen_ids:
+                                seen_ids.add(d["id"])
+                                results.append(d)
+                                if len(results) >= limit:
+                                    break
+                    sconn.close()
+                    if len(results) >= limit:
+                        break
+                except Exception:
+                    pass
+
+        return results[:limit]
 
     def schedule_communication_task(self, **task: Any) -> dict[str, Any]:
         if not self._postgres:
