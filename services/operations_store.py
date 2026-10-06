@@ -97,7 +97,7 @@ class OperationsStore:
     def __init__(self, path: str | Path | None = None):
         production = any(
             os.getenv(name, "").strip().lower() == "production"
-            for name in ("ENVIRONMENT", "WT_ENV", "WT_AUTH_ENV")
+            for name in ("ENVIRONMENT", "WT_ENV")
         ) or os.getenv("RENDER", "false").strip().lower() in {"1", "true", "yes", "on"}
         if production and not os.getenv("DATABASE_URL", "").strip():
             raise RuntimeError("DATABASE_URL is required for production operational persistence.")
