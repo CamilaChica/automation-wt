@@ -63,6 +63,43 @@ export interface InventoryItem {
   is_sample_data?: boolean;
 }
 
+export interface CatalogItem {
+  part_number: string;
+  condition_code: string;
+  quantity_available: number;
+  certificate_type: string;
+  has_full_trace: boolean;
+  quoted_today?: boolean;
+  today_quote_reference?: string;
+  today_quoted_price?: number;
+  today_quote_currency?: string;
+  today_lead_time?: string;
+  today_condition?: string;
+  today_certification?: string;
+  is_same_client?: boolean;
+  original_quote_number?: string;
+  rfq_id?: string;
+}
+
+export interface StockHold {
+  reservation_id: string;
+  part_number: string;
+  quote_number: string;
+  rfq_id: string;
+  client_email: string;
+  company_name: string;
+  unit_price: number;
+  total_price: number;
+  quantity: number;
+  condition: string;
+  certification: string;
+  lead_time: string;
+  reserved_at: string;
+  expires_at: string;
+  remaining_seconds: number;
+  status: string;
+}
+
 export interface Supplier {
   id: string;
   company_name: string;

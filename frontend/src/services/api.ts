@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { RFQ, RFQDetailResponse, InventoryItem, Supplier, SupplierQuote, Quote, QuoteItem, AutomationEvent, Shipment, CommandResponse, InternalCommand } from '../types';
+import { RFQ, RFQDetailResponse, InventoryItem, CatalogItem, StockHold, Supplier, SupplierQuote, Quote, QuoteItem, AutomationEvent, Shipment, CommandResponse, InternalCommand } from '../types';
 import type {
   AutomationPauseBody,
   CarrierTrackingBody,
@@ -497,9 +497,9 @@ export const apiService = {
     return res.data;
   },
 
-  async searchCatalogWithSource(query: string, condition?: string): Promise<{ results: Array<Pick<InventoryItem, 'part_number' | 'condition_code' | 'quantity_available' | 'certificate_type' | 'has_full_trace'>>; isFallback: boolean }> {
+  async searchCatalogWithSource(query: string, condition?: string): Promise<{ results: CatalogItem[]; isFallback: boolean }> {
     try {
-      const res = await axios.get<Array<Pick<InventoryItem, 'part_number' | 'condition_code' | 'quantity_available' | 'certificate_type' | 'has_full_trace'>>>(`${API_BASE}/catalog/search`, { params: { query, condition } });
+      const res = await axios.get<CatalogItem[]>(`${API_BASE}/catalog/search`, { params: { query, condition } });
       return { results: res.data, isFallback: false };
     } catch (error) {
       if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) rethrowAuthError(error);
@@ -507,8 +507,42 @@ export const apiService = {
     }
   },
 
-  async searchCatalog(query: string, condition?: string): Promise<Array<Pick<InventoryItem, 'part_number' | 'condition_code' | 'quantity_available' | 'certificate_type' | 'has_full_trace'>>> {
+  async searchCatalog(query: string, condition?: string): Promise<CatalogItem[]> {
     return (await this.searchCatalogWithSource(query, condition)).results;
+  },
+
+  async createStockHold(data: {
+    part_number: string;
+    quote_number: string;
+    unit_price: number;
+    quantity?: number;
+    total_price?: number;
+    company_name?: string;
+    rfq_id?: string;
+    condition?: string;
+    certification?: string;
+    lead_time?: string;
+  }): Promise<StockHold> {
+    const res = await axios.post<StockHold>(`${API_BASE}/customer/stock-hold`, data);
+    return res.data;
+  },
+
+  async getActiveStockHold(): Promise<StockHold | null> {
+    try {
+      const res = await axios.get<{ active_hold: StockHold | null }>(`${API_BASE}/customer/stock-hold/active`);
+      return res.data.active_hold;
+    } catch {
+      return null;
+    }
+  },
+
+  async releaseStockHold(reservation_id: string): Promise<boolean> {
+    try {
+      const res = await axios.post<{ success: boolean }>(`${API_BASE}/customer/stock-hold/release`, { reservation_id });
+      return res.data.success;
+    } catch {
+      return false;
+    }
   },
 
   async getRFQDetail(rfq_id: string): Promise<RFQDetailResponse> {

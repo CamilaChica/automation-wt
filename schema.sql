@@ -425,3 +425,31 @@ CREATE INDEX IF NOT EXISTS idx_cqh_client_email ON client_quote_history(client_e
 CREATE INDEX IF NOT EXISTS idx_cqh_part_number ON client_quote_history(part_number);
 CREATE INDEX IF NOT EXISTS idx_cqh_norm_part ON client_quote_history(normalized_part_number);
 CREATE INDEX IF NOT EXISTS idx_cqh_quote_number ON client_quote_history(quote_number);
+
+CREATE TABLE IF NOT EXISTS stock_reservations (
+    id TEXT PRIMARY KEY,
+    part_number TEXT NOT NULL,
+    normalized_part_number TEXT NOT NULL,
+    client_email TEXT NOT NULL,
+    company_name TEXT,
+    quote_number TEXT NOT NULL,
+    rfq_id TEXT,
+    unit_price REAL NOT NULL DEFAULT 0.0,
+    total_price REAL NOT NULL DEFAULT 0.0,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    quantity INTEGER NOT NULL DEFAULT 1,
+    condition TEXT,
+    certification TEXT,
+    lead_time TEXT,
+    reserved_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ACTIVE',
+    po_number TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_res_client_status ON stock_reservations(client_email, status);
+CREATE INDEX IF NOT EXISTS idx_stock_res_part ON stock_reservations(normalized_part_number, status);
+CREATE INDEX IF NOT EXISTS idx_stock_res_expires ON stock_reservations(expires_at, status);
+

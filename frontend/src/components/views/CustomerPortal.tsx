@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, Clock3, FileSearch, Globe2, Headphones, Loader2, LogOut, Mail, Plane, Search, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, Clock3, FileSearch, Globe2, Headphones, Loader2, LogOut, Mail, Plane, Search, ShieldCheck, X } from 'lucide-react';
 import { apiService, getApiErrorMessage } from '../../services/api';
 import { Badge } from '../common/Badge';
 import { BrandMark } from '../common/BrandMark';
@@ -8,8 +8,18 @@ import { FloatingQa } from '../common/FloatingQa';
 import { normalizeQuantityInput } from '../../utils/quantity';
 import { customerLanguages, CustomerLanguage, getCustomerLanguagePreference, setCustomerLanguagePreference, translateCustomerPortal } from '../../i18n/customerPortal';
 import { useCreatePurchaseOrder, useCreateRFQ, useShipmentTrace } from '../../hooks/useApiResources';
+import { CatalogItem, StockHold } from '../../types';
 
-type CatalogResult = Awaited<ReturnType<typeof apiService.searchCatalog>>[number];
+function formatHoldTime(totalSecs: number): string {
+  const clamped = Math.max(0, totalSecs);
+  const hrs = Math.floor(clamped / 3600);
+  const mins = Math.floor((clamped % 3600) / 60);
+  const secs = clamped % 60;
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return `${pad(hrs)}:${pad(mins)}:${pad(secs)}`;
+}
+
+type CatalogResult = CatalogItem;
 
 const PO_FILE_EXTENSIONS = ['.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png'];
 const PO_FILE_ACCEPT = '.pdf,.doc,.docx,.jpg,.jpeg,.png,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png';
@@ -72,6 +82,138 @@ export const CustomerPortal: React.FC = () => {
     document.documentElement.lang = language;
     document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
   }, [language]);
+
+  // Stock Hold & Slide-Out Drawer State
+  const [isBuyDrawerOpen, setIsBuyDrawerOpen] = useState(false);
+  const [activeHold, setActiveHold] = useState<StockHold | null>(null);
+  const [remainingSeconds, setRemainingSeconds] = useState(0);
+  const [drawerPoNumber, setDrawerPoNumber] = useState('');
+  const [drawerPoFile, setDrawerPoFile] = useState<File | null>(null);
+  const [drawerExportFile, setDrawerExportFile] = useState<File | null>(null);
+  const [drawerKycFile, setDrawerKycFile] = useState<File | null>(null);
+  const [drawerAgreementSigned, setDrawerAgreementSigned] = useState(false);
+  const [drawerCarrierNotes, setDrawerCarrierNotes] = useState('');
+  const [isSubmittingDrawerPo, setIsSubmittingDrawerPo] = useState(false);
+  const [drawerNotice, setDrawerNotice] = useState<string | null>(null);
+  const [drawerNoticeType, setDrawerNoticeType] = useState<'success' | 'error'>('success');
+  const [drawerFormKey, setDrawerFormKey] = useState(0);
+
+  // Check for active stock hold on mount
+  useEffect(() => {
+    let active = true;
+    apiService.getActiveStockHold().then((hold) => {
+      if (active && hold && hold.remaining_seconds > 0) {
+        setActiveHold(hold);
+        setRemainingSeconds(hold.remaining_seconds);
+      }
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+
+  // Real-time ticking countdown timer
+  useEffect(() => {
+    if (!activeHold || remainingSeconds <= 0) return;
+    const interval = window.setInterval(() => {
+      setRemainingSeconds((prev) => {
+        if (prev <= 1) {
+          window.clearInterval(interval);
+          setActiveHold(null);
+          setIsBuyDrawerOpen(false);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [activeHold, remainingSeconds]);
+
+  const handleOpenBuyDrawer = async (item: CatalogItem) => {
+    try {
+      const hold = await apiService.createStockHold({
+        part_number: item.part_number,
+        quote_number: item.today_quote_reference || '',
+        unit_price: item.today_quoted_price || 0,
+        quantity: 1,
+        condition: item.today_condition || item.condition_code,
+        certification: item.today_certification || item.certificate_type,
+        lead_time: item.today_lead_time || 'Stock',
+        company_name: customerName || '',
+        rfq_id: item.rfq_id,
+      });
+      setActiveHold(hold);
+      setRemainingSeconds(hold.remaining_seconds);
+      setDrawerNotice(null);
+      setIsBuyDrawerOpen(true);
+    } catch (error) {
+      setNoticeType('error');
+      setNotice(getApiErrorMessage(error, 'Could not reserve stock. Please try again.'));
+    }
+  };
+
+  const handleDrawerPoSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (isSubmittingDrawerPo || !activeHold) return;
+    setDrawerNotice(null);
+
+    if (!drawerAgreementSigned) {
+      setDrawerNoticeType('error');
+      setDrawerNotice('Please confirm the compliance and export control agreement before submitting.');
+      return;
+    }
+    if (!drawerPoNumber.trim()) {
+      setDrawerNoticeType('error');
+      setDrawerNotice('Purchase order number is required.');
+      return;
+    }
+    if (!drawerPoFile) {
+      setDrawerNoticeType('error');
+      setDrawerNotice('Please attach your official purchase order document (PDF, Word, or image).');
+      return;
+    }
+    if (!drawerExportFile) {
+      setDrawerNoticeType('error');
+      setDrawerNotice('Please upload the signed Export Compliance certification.');
+      return;
+    }
+    if (!drawerKycFile) {
+      setDrawerNoticeType('error');
+      setDrawerNotice('Please upload the completed KYC form.');
+      return;
+    }
+
+    setIsSubmittingDrawerPo(true);
+    try {
+      const uploadedIds: string[] = [];
+      for (const file of [drawerPoFile, drawerExportFile, drawerKycFile]) {
+        const res = await apiService.uploadAttachment(file);
+        uploadedIds.push(res.attachment_id);
+      }
+
+      await purchaseOrderMutation.mutateAsync({
+        quoteId: activeHold.quote_number,
+        poNumber: drawerPoNumber.trim(),
+        customerEmail: customerEmail.trim() || loginEmail,
+        attachmentIds: uploadedIds,
+      });
+
+      setDrawerNoticeType('success');
+      setDrawerNotice(`PO Received — Order #${drawerPoNumber.trim()} Confirmed. Stock locked and procurement notified.`);
+      setActiveHold(null);
+      setRemainingSeconds(0);
+      setDrawerPoNumber('');
+      setDrawerPoFile(null);
+      setDrawerExportFile(null);
+      setDrawerKycFile(null);
+      setDrawerAgreementSigned(false);
+      setDrawerCarrierNotes('');
+      setDrawerFormKey((k) => k + 1);
+    } catch (error) {
+      setDrawerNoticeType('error');
+      setDrawerNotice(getApiErrorMessage(error, 'Could not submit purchase order. Please verify required files and try again.'));
+    } finally {
+      setIsSubmittingDrawerPo(false);
+    }
+  };
 
   const searchCatalog = async (value: string) => {
     if (!value.trim()) {
@@ -325,10 +467,45 @@ export const CustomerPortal: React.FC = () => {
               {isSearching && <p className="text-sm text-slate-600">{t('searching')}</p>}
               {!isSearching && results.length === 0 && <p className="text-sm text-slate-600">{hasSearched ? t('noMatches') : t('welcomeSearch')}</p>}
               {results.map((item, index) => (
-                <button key={`${item.part_number}-${item.condition_code}-${index}`} onClick={() => setPartNumber(item.part_number)} className="w-full rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left hover:border-cyan-400/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">
-                  <div className="flex items-center justify-between gap-2"><span className="font-mono font-bold">{item.part_number}</span><span className="text-xs text-emerald-700">{item.quantity_available} {t('available')}</span></div>
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600"><span>{item.condition_code}</span><span>•</span><span>{item.certificate_type}</span><span>•</span><span>{item.has_full_trace ? t('fullTrace') : t('traceReview')}</span></div>
-                </button>
+                <div
+                  key={`${item.part_number}-${item.condition_code}-${index}`}
+                  onClick={() => setPartNumber(item.part_number)}
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left hover:border-cyan-400/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 cursor-pointer transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <span className="font-mono text-base font-bold text-slate-900">{item.part_number}</span>
+                      <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-600">
+                        <span>{item.condition_code}</span>
+                        <span>•</span>
+                        <span>{item.certificate_type}</span>
+                        <span>•</span>
+                        <span>{item.has_full_trace ? t('fullTrace') : t('traceReview')}</span>
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end shrink-0">
+                      <span className="text-xs font-semibold text-emerald-700">{item.quantity_available} {t('available')}</span>
+                      {item.quoted_today && (
+                        <div className="mt-1.5 flex flex-col items-end w-full">
+                          <button
+                            type="button"
+                            id={`buy-btn-${item.part_number}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleOpenBuyDrawer(item);
+                            }}
+                            className="w-full rounded-lg border-b-2 border-emerald-800 bg-gradient-to-b from-emerald-500 to-emerald-600 px-3 py-1 text-center font-display text-xs font-bold text-white shadow-sm transition-all hover:brightness-110 active:translate-y-0.5 active:border-b-0"
+                          >
+                            Buy — ${Number(item.today_quoted_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </button>
+                          <span className="mt-1 text-[10px] font-medium tracking-tight text-slate-500 whitespace-nowrap">
+                            Quoted Today • Ref: {item.today_quote_reference}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
               ))}
             </div>
           </div>
@@ -474,6 +651,272 @@ export const CustomerPortal: React.FC = () => {
       </main>
       <CustomerVoiceContact uiLanguage={language} isOpen={isVoiceContactOpen} onClose={() => setIsVoiceContactOpen(false)} />
       <FloatingQa audience="client" language={language} />
+
+      {/* Floating Timer Pill (Edge Case: Drawer closed with active hold) */}
+      {activeHold && !isBuyDrawerOpen && remainingSeconds > 0 && (
+        <aside
+          aria-label="Active Stock Hold"
+          className="fixed bottom-6 right-6 z-40 flex items-center gap-3 rounded-full border border-emerald-300 bg-emerald-50 px-4 py-2 text-xs font-semibold text-emerald-950 shadow-xl backdrop-blur transition-all"
+        >
+          <span>Hold active for {activeHold.part_number}: {formatHoldTime(remainingSeconds)}</span>
+          <button
+            type="button"
+            onClick={() => setIsBuyDrawerOpen(true)}
+            className="rounded-full bg-emerald-700 px-3 py-1 text-xs font-bold text-white hover:bg-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          >
+            Resume PO
+          </button>
+        </aside>
+      )}
+
+      {/* Slide-Out Drawer for Instant Purchase Order Checkout */}
+      {isBuyDrawerOpen && activeHold && (
+        <div className="fixed inset-0 z-50 overflow-hidden" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+          <div
+            className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity"
+            onClick={() => setIsBuyDrawerOpen(false)}
+            aria-hidden="true"
+          />
+          <div className="fixed inset-y-0 right-0 flex max-w-full pl-6 sm:pl-10">
+            <div className="w-screen max-w-xl bg-white shadow-2xl flex flex-col">
+              {/* Drawer Header */}
+              <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="h-5 w-5 text-emerald-600" />
+                  <h2 id="drawer-title" className="font-display text-lg font-bold text-slate-900">Purchase Order Checkout</h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsBuyDrawerOpen(false)}
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 focus:outline-none"
+                  aria-label="Close drawer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              {/* Drawer Content */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {/* Section 1: Live Stock Reservation Banner */}
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-display text-sm font-bold text-emerald-950">
+                      Stock Reserved for {activeHold.company_name || customerName || 'Your Company'} — {formatHoldTime(remainingSeconds)} remaining
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-emerald-800">
+                    This unit is held exclusively for your team at today’s quoted price.
+                  </p>
+                  <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-emerald-200/60">
+                    <div
+                      className="h-full rounded-full bg-emerald-600 transition-all duration-1000"
+                      style={{ width: `${Math.min(100, Math.max(0, (remainingSeconds / 7200) * 100))}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Section 2: Locked Quote Summary */}
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                  <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                    <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Quote Reference</span>
+                    <span className="font-mono text-sm font-bold text-slate-900">{activeHold.quote_number}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <span className="text-slate-500">Part Number</span>
+                      <p className="font-mono font-bold text-slate-900">{activeHold.part_number}</p>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Condition & Certification</span>
+                      <p className="font-semibold text-slate-900">{activeHold.condition} • {activeHold.certification}</p>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Locked Price</span>
+                      <p className="font-bold text-emerald-700">
+                        ${Number(activeHold.unit_price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                        <span className="text-slate-500 font-normal"> (Qty: {activeHold.quantity} EA)</span>
+                      </p>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Quoted Lead Time</span>
+                      <p className="font-semibold text-slate-900">{activeHold.lead_time}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Section 3: Fast PO Submission & Compliance */}
+                <form key={drawerFormKey} onSubmit={handleDrawerPoSubmit} className="space-y-4">
+                  <h3 className="font-display text-sm font-bold text-slate-900 uppercase tracking-wider">Purchase Order & Compliance</h3>
+
+                  <div>
+                    <label htmlFor="drawer-po-number" className="block text-xs font-semibold text-slate-700">
+                      Customer Purchase Order Number <span className="text-red-600">*</span>
+                    </label>
+                    <input
+                      id="drawer-po-number"
+                      name="drawer-po-number"
+                      required
+                      disabled={isSubmittingDrawerPo}
+                      value={drawerPoNumber}
+                      onChange={(e) => setDrawerPoNumber(e.target.value)}
+                      placeholder="e.g., PO-2026-9810"
+                      className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="drawer-po-email" className="block text-xs font-semibold text-slate-700">
+                      Work Email <span className="text-red-600">*</span>
+                    </label>
+                    <input
+                      id="drawer-po-email"
+                      name="drawer-po-email"
+                      type="email"
+                      required
+                      disabled={isSubmittingDrawerPo || Boolean(loginEmail)}
+                      value={customerEmail}
+                      onChange={(e) => { if (!loginEmail) setCustomerEmail(e.target.value); }}
+                      className={`mt-1 w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 ${loginEmail ? 'cursor-not-allowed bg-slate-100 text-slate-500' : ''}`}
+                    />
+                  </div>
+
+                  {/* Mandatory Compliance Document Uploads */}
+                  <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div>
+                      <label htmlFor="drawer-po-file" className="block text-xs font-semibold text-slate-700">
+                        Purchase Order Document (PDF, Word, Image) <span className="text-red-600">*</span>
+                      </label>
+                      <input
+                        id="drawer-po-file"
+                        name="drawer-po-file"
+                        type="file"
+                        required
+                        accept={PO_FILE_ACCEPT}
+                        disabled={isSubmittingDrawerPo}
+                        onChange={(e) => pickPoFile(e, setDrawerPoFile)}
+                        className="mt-1 block w-full text-xs text-slate-600"
+                      />
+                      {drawerPoFile && <span className="mt-1 block text-xs font-semibold text-emerald-700">Uploaded: {drawerPoFile.name}</span>}
+                    </div>
+
+                    <div className="border-t border-slate-200 pt-3">
+                      <div className="flex items-center justify-between">
+                        <label htmlFor="drawer-export-file" className="text-xs font-semibold text-slate-700">
+                          Signed Export Compliance Certification <span className="text-red-600">*</span>
+                        </label>
+                        <a
+                          href="/documents/WingedTycoons-Export-Compliance-Certification.pdf"
+                          download
+                          className="text-xs font-medium text-emerald-700 underline hover:text-emerald-800"
+                        >
+                          Download Template
+                        </a>
+                      </div>
+                      <input
+                        id="drawer-export-file"
+                        name="drawer-export-file"
+                        type="file"
+                        required
+                        accept={PO_FILE_ACCEPT}
+                        disabled={isSubmittingDrawerPo}
+                        onChange={(e) => pickPoFile(e, setDrawerExportFile)}
+                        className="mt-1 block w-full text-xs text-slate-600"
+                      />
+                      {drawerExportFile && <span className="mt-1 block text-xs font-semibold text-emerald-700">Uploaded: {drawerExportFile.name}</span>}
+                    </div>
+
+                    <div className="border-t border-slate-200 pt-3">
+                      <div className="flex items-center justify-between">
+                        <label htmlFor="drawer-kyc-file" className="text-xs font-semibold text-slate-700">
+                          Signed KYC Form <span className="text-red-600">*</span>
+                        </label>
+                        <a
+                          href="/documents/WingedTycoons-KYC-Form.pdf"
+                          download
+                          className="text-xs font-medium text-emerald-700 underline hover:text-emerald-800"
+                        >
+                          Download Form
+                        </a>
+                      </div>
+                      <input
+                        id="drawer-kyc-file"
+                        name="drawer-kyc-file"
+                        type="file"
+                        required
+                        accept={PO_FILE_ACCEPT}
+                        disabled={isSubmittingDrawerPo}
+                        onChange={(e) => pickPoFile(e, setDrawerKycFile)}
+                        className="mt-1 block w-full text-xs text-slate-600"
+                      />
+                      {drawerKycFile && <span className="mt-1 block text-xs font-semibold text-emerald-700">Uploaded: {drawerKycFile.name}</span>}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label htmlFor="drawer-shipping" className="block text-xs font-semibold text-slate-700">
+                      Shipping / Carrier Preference (Optional)
+                    </label>
+                    <input
+                      id="drawer-shipping"
+                      name="drawer-shipping"
+                      disabled={isSubmittingDrawerPo}
+                      value={drawerCarrierNotes}
+                      onChange={(e) => setDrawerCarrierNotes(e.target.value)}
+                      placeholder="e.g., FedEx Account #123456 or prepay freight"
+                      className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+
+                  <label className="flex items-start gap-2.5 text-xs text-slate-700 cursor-pointer pt-1">
+                    <input
+                      id="drawer-agreement"
+                      name="drawer-agreement"
+                      type="checkbox"
+                      required
+                      disabled={isSubmittingDrawerPo}
+                      checked={drawerAgreementSigned}
+                      onChange={(e) => setDrawerAgreementSigned(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <span>
+                      I confirm export compliance, authorized end-user destination, and accuracy of purchase order details.
+                    </span>
+                  </label>
+
+                  {drawerNotice && (
+                    <div
+                      role="status"
+                      className={`rounded-xl p-3 text-xs font-semibold ${
+                        drawerNoticeType === 'error' ? 'bg-red-50 text-red-800 border border-red-200' : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                      }`}
+                    >
+                      {drawerNotice}
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={isSubmittingDrawerPo}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 font-display text-sm font-bold text-white shadow-md transition-all hover:bg-emerald-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isSubmittingDrawerPo ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span>Submitting Purchase Order...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Confirm & Lock Order</span>
+                        <ArrowRight className="h-4 w-4" />
+                      </>
+                    )}
+                  </button>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -143,6 +143,9 @@ _RATE_LIMIT_RULES = {
     "/api/voice/tools/check_inventory_availability": (60, 60),
     "/api/voice/tools/get_order_status": (30, 60),
     "/api/voice/tools/log_customer_concern": (10, 60),
+    "/api/customer/stock-hold": (60, 60),
+    "/api/customer/stock-hold/active": (120, 60),
+    "/api/customer/stock-hold/release": (60, 60),
 }
 _rate_limit_events: dict[tuple[str, str], deque[float]] = defaultdict(deque)
 
@@ -358,6 +361,46 @@ class CatalogItem(BaseModel):
     quantity_available: int
     certificate_type: str
     has_full_trace: bool
+    quoted_today: bool = False
+    today_quote_reference: Optional[str] = None
+    today_quoted_price: Optional[float] = None
+    today_quote_currency: Optional[str] = "USD"
+    today_lead_time: Optional[str] = None
+    today_condition: Optional[str] = None
+    today_certification: Optional[str] = None
+    is_same_client: Optional[bool] = None
+    original_quote_number: Optional[str] = None
+    rfq_id: Optional[str] = None
+
+class StockHoldRequest(BaseModel):
+    part_number: str
+    quote_number: str
+    unit_price: float
+    quantity: int = 1
+    total_price: Optional[float] = None
+    company_name: Optional[str] = None
+    rfq_id: Optional[str] = None
+    condition: Optional[str] = None
+    certification: Optional[str] = None
+    lead_time: Optional[str] = None
+
+class StockHoldResponse(BaseModel):
+    reservation_id: str
+    part_number: str
+    quote_number: str
+    rfq_id: str
+    client_email: str
+    company_name: str
+    unit_price: float
+    total_price: float
+    quantity: int
+    condition: str
+    certification: str
+    lead_time: str
+    reserved_at: str
+    expires_at: str
+    remaining_seconds: int
+    status: str
 
 class CustomerQuoteItem(BaseModel):
     part_number: str
@@ -1842,6 +1885,11 @@ def _accept_prequote_purchase_order(request: "PurchaseOrderRequest", rfq: Any, r
         )
     except Exception:
         logger.exception("Could not queue the pre-quote purchase order notification for %s", rfq_reference)
+    try:
+        from services.stock_reservation_service import stock_reservation_service
+        stock_reservation_service.convert_hold_to_order(rfq_reference, po_number, customer_email)
+    except Exception:
+        pass
     return {
         "status": "Pending_PO_Review",
         "po_number": po_number,
@@ -2039,6 +2087,11 @@ async def submit_purchase_order(
         communication_service.cancel_customer_followups(request.quote_id)
     else:
         await communication_service.cancel_customer_followups_async(repositories, request.quote_id)
+    try:
+        from services.stock_reservation_service import stock_reservation_service
+        stock_reservation_service.convert_hold_to_order(request.quote_id, request.po_number, customer_email)
+    except Exception:
+        pass
     return {
         "status": "Pending_PO_Review",
         "po_number": request.po_number,
@@ -2352,11 +2405,45 @@ async def carrier_webhook(request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+def _enrich_catalog_item(pn: str, cond: str, qty: int, cert: str, has_trace: bool, user_email: str) -> CatalogItem:
+    from services.stock_reservation_service import stock_reservation_service
+    quote_info = None
+    try:
+        quote_info = stock_reservation_service.check_part_quoted_today(pn, user_email)
+    except Exception:
+        pass
+    if quote_info:
+        return CatalogItem(
+            part_number=pn,
+            condition_code=cond,
+            quantity_available=qty,
+            certificate_type=cert,
+            has_full_trace=has_trace,
+            quoted_today=True,
+            today_quote_reference=quote_info["quote_number"],
+            today_quoted_price=quote_info["unit_price"],
+            today_quote_currency=quote_info.get("currency", "USD"),
+            today_lead_time=quote_info.get("lead_time", "Stock"),
+            today_condition=quote_info.get("condition", cond),
+            today_certification=quote_info.get("certification", cert),
+            is_same_client=quote_info.get("is_same_client", False),
+            original_quote_number=quote_info.get("original_quote_number"),
+            rfq_id=quote_info.get("rfq_id"),
+        )
+    return CatalogItem(
+        part_number=pn,
+        condition_code=cond,
+        quantity_available=qty,
+        certificate_type=cert,
+        has_full_trace=has_trace,
+    )
+
 @app.get("/api/catalog/search", response_model=List[CatalogItem])
 async def search_catalog(query: str = "", condition: Optional[str] = None, _user: dict = Depends(require_roles("ROLE_CUSTOMER", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES", "ROLE_PURCHASING"))):
     """Public, customer-safe catalog availability search.
 
     Deliberately omits internal costs, serial numbers, and warehouse locations.
+    Enriches parts quoted today with active quote reference and locked price.
     """
     normalized_query = re.sub(r"[^a-z0-9]", "", query.lower())
     if not normalized_query:
@@ -2365,6 +2452,7 @@ async def search_catalog(query: str = "", condition: Optional[str] = None, _user
     valid_conditions = {"NE", "FN", "NS", "OH", "SVC", "RP", "AR", "IN"}
     if normalized_condition and normalized_condition not in valid_conditions:
         raise HTTPException(status_code=400, detail="Condition must be NE, FN, NS, OH, SVC, RP, AR, or IN.")
+    user_email = (_user.get("email") or "").strip().lower()
     results = []
     seen_parts: set[tuple[str, str]] = set()
     for item in db_service.inventory.values():
@@ -2374,12 +2462,9 @@ async def search_catalog(query: str = "", condition: Optional[str] = None, _user
             continue
         key = (item.part_number.upper(), item.condition_code.upper())
         seen_parts.add(key)
-        results.append(CatalogItem(
-            part_number=item.part_number,
-            condition_code=item.condition_code,
-            quantity_available=item.quantity_available,
-            certificate_type=item.certificate_type,
-            has_full_trace=item.has_full_trace,
+        results.append(_enrich_catalog_item(
+            item.part_number, item.condition_code, item.quantity_available,
+            item.certificate_type, item.has_full_trace, user_email
         ))
     if os.getenv("INVENTORY_INGESTION_POSTGRES_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
         try:
@@ -2394,12 +2479,10 @@ async def search_catalog(query: str = "", condition: Optional[str] = None, _user
                 if key in seen_parts:
                     continue
                 seen_parts.add(key)
-                results.append(CatalogItem(
-                    part_number=key[0],
-                    condition_code=key[1],
-                    quantity_available=int(item.get("quantity_available") or 0),
-                    certificate_type=item.get("certificate_type") or "Available upon supplier confirmation",
-                    has_full_trace=bool(item.get("has_full_trace")),
+                results.append(_enrich_catalog_item(
+                    key[0], key[1], int(item.get("quantity_available") or 0),
+                    item.get("certificate_type") or "Available upon supplier confirmation",
+                    bool(item.get("has_full_trace")), user_email
                 ))
         except Exception:
             logger.exception("postgres_catalog_search_failed")
@@ -2417,14 +2500,50 @@ async def search_catalog(query: str = "", condition: Optional[str] = None, _user
         if not key[0] or key in seen_parts:
             continue
         seen_parts.add(key)
-        results.append(CatalogItem(
-            part_number=key[0],
-            condition_code=key[1],
-            quantity_available=int(offer.get("quantity_available") or 0),
-            certificate_type=offer.get("certificate_type") or "Available upon supplier confirmation",
-            has_full_trace=bool(offer.get("certificate_type")),
+        results.append(_enrich_catalog_item(
+            key[0], key[1], int(offer.get("quantity_available") or 0),
+            offer.get("certificate_type") or "Available upon supplier confirmation",
+            bool(offer.get("certificate_type")), user_email
         ))
     return results
+
+@app.post("/api/customer/stock-hold", response_model=StockHoldResponse)
+async def create_stock_hold(payload: StockHoldRequest, user: dict = Depends(require_roles("ROLE_CUSTOMER", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES"))):
+    """Register an immediate 2-hour stock reservation hold."""
+    from services.stock_reservation_service import stock_reservation_service
+    client_email = user.get("email") or ""
+    res = stock_reservation_service.create_stock_hold(
+        client_email=client_email,
+        part_number=payload.part_number,
+        quote_number=payload.quote_number,
+        unit_price=payload.unit_price,
+        quantity=payload.quantity,
+        total_price=payload.total_price,
+        company_name=payload.company_name or user.get("company_name", ""),
+        rfq_id=payload.rfq_id,
+        condition=payload.condition,
+        certification=payload.certification,
+        lead_time=payload.lead_time,
+    )
+    return StockHoldResponse(**res)
+
+@app.get("/api/customer/stock-hold/active")
+async def get_active_stock_hold(user: dict = Depends(require_roles("ROLE_CUSTOMER", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES"))):
+    """Retrieve active stock hold for current customer session."""
+    from services.stock_reservation_service import stock_reservation_service
+    client_email = user.get("email") or ""
+    active = stock_reservation_service.get_active_hold_for_client(client_email)
+    return {"active_hold": active}
+
+@app.post("/api/customer/stock-hold/release")
+async def release_stock_hold(payload: dict, user: dict = Depends(require_roles("ROLE_CUSTOMER", "ROLE_ADMIN", "ROLE_MANAGER", "ROLE_SALES"))):
+    """Release active stock hold."""
+    from services.stock_reservation_service import stock_reservation_service
+    reservation_id = payload.get("reservation_id", "")
+    client_email = user.get("email") or ""
+    released = stock_reservation_service.release_hold(reservation_id, client_email)
+    return {"success": released}
+
 
 @app.get("/api/inventory")
 async def get_inventory(
