@@ -14,9 +14,13 @@ import os
 import re
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from services.operations_store import operations_store
 
