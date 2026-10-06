@@ -584,6 +584,18 @@ class InventoryIngestionWorker:
         if not body and not message.get("attachments"):
             return {"success": False, "skipped": True, "error": "Message has no body or attachments."}
 
+        sender_raw = str(message.get("from") or "").strip()
+        sender_name, sender_email = parseaddr(sender_raw)
+        sender_email = sender_email or sender_raw
+        if sender_email and "@" in sender_email and "wingedtycoons" not in sender_email.lower():
+            try:
+                from services.entity_name_intelligence import clean_company_name
+                dom = sender_email.split("@")[1].strip().lower()
+                company = clean_company_name(sender_name) or dom.split(".")[0].capitalize()
+                supplier_db.upsert_supplier(company, supplier_email=sender_email, approval_status="Approved")
+            except Exception as exc:
+                logger.warning("Auto-cataloging supplier from worker failed for %s: %s", sender_email, exc)
+
         def import_with_document_check():
             if not has_inventory_table_attachments(message):
                 return None

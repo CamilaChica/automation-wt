@@ -169,8 +169,15 @@ class SupplierEmailIngestionService:
         source_received_at: datetime | None = None,
     ) -> Dict[str, Any]:
         try:
+            sender, subject = _email_headers(email_text)
+            if sender and "@" in sender:
+                try:
+                    early_sup_name = self.extractor._extract_supplier_name(email_text, sender)
+                    supplier_db.upsert_supplier(early_sup_name, supplier_email=sender, approval_status="Approved")
+                except Exception as exc:
+                    logger.warning("Auto-upsert supplier failed for %s: %s", sender, exc)
+
             if is_no_quote_reply(email_text):
-                sender, subject = _email_headers(email_text)
                 supplier_name = self.extractor._extract_supplier_name(email_text, sender)
                 part_number = self.extractor._extract_part_number(f"{subject}\n{email_text}")
                 condition_code = self.extractor._extract_condition(email_text) or "NE"
@@ -522,8 +529,18 @@ class SupplierEmailIngestionService:
     ) -> Dict[str, Any]:
         """Persist plain supplier-email extraction through the async repositories."""
         try:
+            sender, subject = _email_headers(email_text)
+            if sender and "@" in sender:
+                try:
+                    early_sup_name = self.extractor._extract_supplier_name(email_text, sender)
+                    if hasattr(repositories, "supplier") and hasattr(repositories.supplier, "upsert_supplier"):
+                        await repositories.supplier.upsert_supplier(early_sup_name, supplier_email=sender, approval_status="Approved")
+                    else:
+                        supplier_db.upsert_supplier(early_sup_name, supplier_email=sender, approval_status="Approved")
+                except Exception as exc:
+                    logger.warning("Async auto-upsert supplier failed for %s: %s", sender, exc)
+
             if is_no_quote_reply(email_text):
-                sender, subject = _email_headers(email_text)
                 supplier_name = self.extractor._extract_supplier_name(email_text, sender)
                 part_number = self.extractor._extract_part_number(f"{subject}\n{email_text}")
                 condition_code = self.extractor._extract_condition(email_text) or "NE"

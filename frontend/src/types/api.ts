@@ -49,7 +49,8 @@ export type MailboxHealthResponse = Partial<Record<'sales' | 'purchasing', Mailb
 export interface OtpRequestBody { email: string; role: 'ROLE_CUSTOMER' | 'ROLE_INTERNAL'; full_name?: string }
 export interface OtpRequestResponse { challenge_id: string; development_otp?: string }
 export interface OtpVerifyBody { challenge_id: string; code: string }
-export interface LoginResponse { role: string; email: string }
+export interface LoginResponse { role: string; email: string; privacy_policy_accepted?: boolean }
+export interface PrivacyPolicyStatusResponse { email: string; privacy_policy_accepted: boolean; privacy_policy_accepted_at?: string | null }
 export interface EmployeeProfile {
   user_id: string;
   email: string;

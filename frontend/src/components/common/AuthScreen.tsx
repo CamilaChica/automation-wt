@@ -3,6 +3,7 @@ import axios from 'axios';
 import { LockKeyhole, ShieldCheck } from 'lucide-react';
 import { apiService } from '../../services/api';
 import { BrandMark } from './BrandMark';
+import { PrivacyPolicyModal } from './PrivacyPolicyModal';
 
 interface AuthScreenProps {
   role: 'customer' | 'internal';
@@ -18,6 +19,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated, o
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [deliveryFailed, setDeliveryFailed] = useState(false);
+  const [pendingPrivacyPolicy, setPendingPrivacyPolicy] = useState(false);
+  const [viewPrivacyModal, setViewPrivacyModal] = useState(false);
   const isCustomer = role === 'customer';
   const isDevelopmentAuth = import.meta.env.VITE_AUTH_ENV === 'development';
 
@@ -91,7 +94,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated, o
           apiService.logout();
           throw new Error(`Use the ${role} login for this application.`);
         }
-        onAuthenticated();
+        if (role === 'customer' && !session.privacy_policy_accepted) {
+          setPendingPrivacyPolicy(true);
+        } else {
+          onAuthenticated();
+        }
     } catch (loginError) {
       setError(friendlyAuthError(loginError));
     } finally {
@@ -120,8 +127,45 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ role, onAuthenticated, o
         {challengeId && <div className="mt-4 flex items-center justify-between gap-3 text-xs text-slate-500"><button type="button" onClick={() => { setChallengeId(null); setOtp(''); setError(null); setDeliveryFailed(false); }} className="font-semibold underline focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">Change email</button><button type="button" disabled={loading} onClick={() => { setChallengeId(null); setOtp(''); void requestCode(); }} className="font-semibold text-aero-blue underline disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">Resend code</button></div>}
         {deliveryFailed && !challengeId && <p className="mt-3 text-xs text-slate-500">Check the verification mailbox configuration or contact support if the problem continues.</p>}
         {onSwitchRole && !challengeId && <button type="button" onClick={onSwitchRole} className="mt-5 min-h-[44px] w-full rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:border-aero-blue hover:text-aero-blue focus:outline-none focus-visible:ring-2 focus-visible:ring-aero-blue">{isCustomer ? 'Team sign in' : 'Customer portal sign in'}</button>}
-        <p className="mt-6 flex gap-2 text-xs text-slate-500"><ShieldCheck className="h-4 w-4 shrink-0" /> Secure sign-in. For your protection, sessions expire after 8 hours.</p>
+        
+        <div className="mt-6 flex flex-col gap-2 text-xs text-slate-500">
+          <p className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 shrink-0" /> Secure sign-in. For your protection, sessions expire after 8 hours.</p>
+          <div className="flex items-center justify-between pt-2 border-t border-slate-200 dark:border-slate-800">
+            <span>Commercial aviation data protection</span>
+            <button
+              type="button"
+              onClick={() => setViewPrivacyModal(true)}
+              className="text-xs text-aero-blue font-semibold underline hover:text-blue-700 focus:outline-none"
+            >
+              Privacy Policy
+            </button>
+          </div>
+        </div>
       </form>
+
+      {/* First-time sign in mandatory modal */}
+      <PrivacyPolicyModal
+        isOpen={pendingPrivacyPolicy}
+        companyOrEmail={email}
+        onAccept={async () => {
+          await apiService.acceptPrivacyPolicy();
+          setPendingPrivacyPolicy(false);
+          onAuthenticated();
+        }}
+        onDecline={() => {
+          apiService.logout();
+          setPendingPrivacyPolicy(false);
+          setChallengeId(null);
+          setOtp('');
+        }}
+      />
+
+      {/* Read-only policy viewer modal */}
+      <PrivacyPolicyModal
+        isOpen={viewPrivacyModal}
+        isReadOnly={true}
+        onClose={() => setViewPrivacyModal(false)}
+      />
     </div>
   );
 };

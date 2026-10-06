@@ -9,6 +9,7 @@ import { normalizeQuantityInput } from '../../utils/quantity';
 import { customerLanguages, CustomerLanguage, getCustomerLanguagePreference, setCustomerLanguagePreference, translateCustomerPortal } from '../../i18n/customerPortal';
 import { useCreatePurchaseOrder, useCreateRFQ, useShipmentTrace } from '../../hooks/useApiResources';
 import { CatalogItem, StockHold } from '../../types';
+import { PrivacyPolicyModal } from '../common/PrivacyPolicyModal';
 
 function formatHoldTime(totalSecs: number): string {
   const clamped = Math.max(0, totalSecs);
@@ -82,6 +83,22 @@ export const CustomerPortal: React.FC = () => {
     document.documentElement.lang = language;
     document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
   }, [language]);
+
+  // Privacy Policy state
+  const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState(false);
+  const [isPrivacyReadOnly, setIsPrivacyReadOnly] = useState(false);
+
+  // Check privacy policy acceptance on mount/session load
+  useEffect(() => {
+    let active = true;
+    apiService.getPrivacyPolicyStatus().then((status) => {
+      if (active && !status.privacy_policy_accepted) {
+        setIsPrivacyReadOnly(false);
+        setIsPrivacyModalOpen(true);
+      }
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [loginEmail]);
 
   // Stock Hold & Slide-Out Drawer State
   const [isBuyDrawerOpen, setIsBuyDrawerOpen] = useState(false);
@@ -422,6 +439,16 @@ export const CustomerPortal: React.FC = () => {
                 </button>
               </div>}
             </div>
+            <button
+              type="button"
+              onClick={() => {
+                setIsPrivacyReadOnly(true);
+                setIsPrivacyModalOpen(true);
+              }}
+              className="hidden sm:inline-flex min-h-11 items-center gap-1.5 border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:border-cyan-700 hover:text-cyan-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500"
+            >
+              Privacy Policy
+            </button>
             <button type="button" aria-label={t('signOut')} title={t('signOut')} onClick={() => { void apiService.signOut().finally(() => { window.location.href = '/'; }); }} className="flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"><LogOut className="h-4 w-4" /><span className="hidden sm:inline">{t('signOut')}</span></button>
           </div>
         </div>
@@ -645,6 +672,16 @@ export const CustomerPortal: React.FC = () => {
 
         <footer className="flex flex-wrap items-center justify-between gap-4 border-t border-slate-800 pt-6 text-xs text-slate-500">
           <span>{t('portalFooter')}</span>
+          <button
+            type="button"
+            onClick={() => {
+              setIsPrivacyReadOnly(true);
+              setIsPrivacyModalOpen(true);
+            }}
+            className="hover:text-cyan-700 underline font-medium"
+          >
+            Privacy Policy
+          </button>
           <span>{t('availabilityConfirmed')}</span>
           <a href="/internal" className="flex items-center gap-1 hover:text-slate-900"><FileSearch className="h-3.5 w-3.5" /> {t('teamSignIn')}</a>
         </footer>
@@ -917,6 +954,23 @@ export const CustomerPortal: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Customer Privacy Policy Modal */}
+      <PrivacyPolicyModal
+        isOpen={isPrivacyModalOpen}
+        isReadOnly={isPrivacyReadOnly}
+        companyOrEmail={customerEmail || loginEmail}
+        onClose={() => setIsPrivacyModalOpen(false)}
+        onAccept={async () => {
+          await apiService.acceptPrivacyPolicy();
+          setIsPrivacyModalOpen(false);
+        }}
+        onDecline={async () => {
+          await apiService.signOut().finally(() => {
+            window.location.href = '/';
+          });
+        }}
+      />
     </div>
   );
 };

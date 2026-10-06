@@ -185,6 +185,7 @@ class SupplierDatabase:
                     "UPDATE suppliers SET company_name = ?, email = COALESCE(?, email), phone = COALESCE(?, phone), approval_status = ?, updated_at = ? WHERE id = ?",
                     (best_name, supplier_email, phone, approval_status, _now_iso(), supplier_id),
                 )
+                self._sync_to_operations_db(supplier_id, best_name, supplier_email, phone)
                 return supplier_id
 
             supplier_id = f"SUP-{uuid.uuid4().hex[:8].upper()}"
@@ -192,7 +193,38 @@ class SupplierDatabase:
                 "INSERT INTO suppliers (id, company_name, email, phone, approval_status, itar_certified, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (supplier_id, clean_name, supplier_email, phone, approval_status, 0, "email", _now_iso(), _now_iso()),
             )
+            self._sync_to_operations_db(supplier_id, clean_name, supplier_email, phone)
             return supplier_id
+
+    def _sync_to_operations_db(self, supplier_id: str, name: str, email: Optional[str], phone: Optional[str]) -> None:
+        if not email:
+            return
+        candidate_paths = [
+            Path("data/operations.db"),
+            Path("C:/var/data/operations.db"),
+            Path("/var/data/operations.db"),
+        ]
+        now = _now_iso()
+        for p in candidate_paths:
+            if not p.exists():
+                continue
+            try:
+                op_conn = sqlite3.connect(p)
+                cur = op_conn.cursor()
+                cur.execute("SELECT id FROM suppliers WHERE email = ?", (email.strip().lower(),))
+                row = cur.fetchone()
+                if row:
+                    cur.execute("UPDATE suppliers SET company_name = ?, updated_at = ?, active = 1 WHERE id = ?", (name, now, row[0]))
+                else:
+                    cur.execute(
+                        "INSERT INTO suppliers (id, company_name, contact_name, email, phone, country, preferred, active, created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, 'USA', 0, 1, ?, ?)",
+                        (supplier_id, name, name, email.strip().lower(), phone, now, now)
+                    )
+                op_conn.commit()
+                op_conn.close()
+            except Exception:
+                pass
 
     def save_email(
         self,

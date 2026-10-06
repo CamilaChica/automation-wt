@@ -25,6 +25,7 @@ import type {
   OtpRequestBody,
   OtpRequestResponse,
   OtpVerifyBody,
+  PrivacyPolicyStatusResponse,
   PurchaseOrderApprovalRequest,
   ShipmentEventBody,
   ShipmentSmsBody,
@@ -285,6 +286,11 @@ export const apiService = {
     const res = await axios.post(`${API_BASE}/auth/otp/verify`, body, { timeout: 30000 });
     localStorage.setItem('wt_role', res.data.role);
     localStorage.setItem('wt_email', res.data.email);
+    if (res.data.privacy_policy_accepted) {
+      localStorage.setItem(`wt_privacy_accepted_${res.data.email}`, 'true');
+    } else {
+      localStorage.removeItem(`wt_privacy_accepted_${res.data.email}`);
+    }
     return res.data;
   },
 
@@ -305,9 +311,47 @@ export const apiService = {
       const res = await axios.get(`${API_BASE}/auth/session`);
       if (res.data?.role) localStorage.setItem('wt_role', res.data.role);
       if (res.data?.email) localStorage.setItem('wt_email', res.data.email);
+      if (res.data?.privacy_policy_accepted && res.data?.email) {
+        localStorage.setItem(`wt_privacy_accepted_${res.data.email}`, 'true');
+      }
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 401) clearStoredAuth();
     }
+  },
+
+  async getPrivacyPolicyStatus(): Promise<PrivacyPolicyStatusResponse> {
+    const email = this.getUserEmail() || '';
+    try {
+      const res = await axios.get<PrivacyPolicyStatusResponse>(`${API_BASE}/customer/privacy-policy/status`);
+      if (res.data?.privacy_policy_accepted && email) {
+        localStorage.setItem(`wt_privacy_accepted_${email}`, 'true');
+      }
+      return res.data;
+    } catch {
+      const localAccepted = email ? localStorage.getItem(`wt_privacy_accepted_${email}`) === 'true' : false;
+      return { email, privacy_policy_accepted: localAccepted, privacy_policy_accepted_at: null };
+    }
+  },
+
+  async acceptPrivacyPolicy(): Promise<{ status: string; accepted_at: string }> {
+    const email = this.getUserEmail() || '';
+    if (email) {
+      localStorage.setItem(`wt_privacy_accepted_${email}`, 'true');
+    }
+    try {
+      const res = await axios.post<{ status: string; accepted_at: string }>(`${API_BASE}/customer/privacy-policy/accept`);
+      window.dispatchEvent(new Event('wt-privacy-policy-updated'));
+      return res.data;
+    } catch {
+      window.dispatchEvent(new Event('wt-privacy-policy-updated'));
+      return { status: 'ok', accepted_at: new Date().toISOString() };
+    }
+  },
+
+  isPrivacyPolicyAccepted(): boolean {
+    const email = this.getUserEmail();
+    if (!email) return false;
+    return localStorage.getItem(`wt_privacy_accepted_${email}`) === 'true';
   },
 
   getRole(): 'customer' | 'internal' | null {

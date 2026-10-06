@@ -181,13 +181,16 @@ def _fetch_graph_inbox_messages(
         "Prefer": "outlook.body-content=true",
     }
     if max_age_days is None:
-        max_age_days = int(os.getenv("MAILBOX_MAX_AGE_DAYS", "7"))
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat().replace("+00:00", "Z")
+        max_age_days = int(os.getenv("MAILBOX_MAX_AGE_DAYS", "365"))
+    filter_expr = ""
+    if max_age_days > 0:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat().replace("+00:00", "Z")
+        filter_expr = f"&$filter=receivedDateTime ge {cutoff}"
     skip_param = f"&$skip={int(skip)}" if skip else ""
     sort_order = "asc" if oldest_first else "desc"
     url = (
         f"https://graph.microsoft.com/v1.0/users/{mailbox_user}/mailFolders/inbox/messages"
-        f"?$top={limit}{skip_param}&$select=id,internetMessageId,conversationId,internetMessageHeaders,from,subject,body,receivedDateTime,hasAttachments&$filter=receivedDateTime ge {cutoff}&$orderby=receivedDateTime {sort_order}"
+        f"?$top={limit}{skip_param}&$select=id,internetMessageId,conversationId,internetMessageHeaders,from,subject,body,receivedDateTime,hasAttachments{filter_expr}&$orderby=receivedDateTime {sort_order}"
     )
     response = requests.get(url, headers=headers, timeout=30)
     response.raise_for_status()
@@ -278,9 +281,12 @@ def fetch_inbox_messages(
         if status != "OK":
             raise RuntimeError("Unable to open mailbox INBOX.")
         if max_age_days is None:
-            max_age_days = int(os.getenv("MAILBOX_MAX_AGE_DAYS", "7"))
-        since_date = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).strftime("%d-%b-%Y")
-        status, data = client.search(None, "SINCE", since_date)
+            max_age_days = int(os.getenv("MAILBOX_MAX_AGE_DAYS", "365"))
+        if max_age_days > 0:
+            since_date = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).strftime("%d-%b-%Y")
+            status, data = client.search(None, "SINCE", since_date)
+        else:
+            status, data = client.search(None, "ALL")
         if status != "OK":
             raise RuntimeError("Unable to search mailbox.")
         all_ids = data[0].split()

@@ -1017,6 +1017,11 @@ def run() -> None:
                             supplier_db.save_email(mailbox, message_id, message.get("from", ""), message.get("subject", ""), body)
             except Exception:
                 logger.exception("Mailbox poll failed for %s", mailbox)
+        try:
+            from services.email_campaign_service import email_campaign_service
+            email_campaign_service.process_due_dispatches(limit=25)
+        except Exception:
+            logger.debug("Periodic campaign dispatch processing skipped")
         time.sleep(interval)
 
 

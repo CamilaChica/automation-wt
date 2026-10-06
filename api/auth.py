@@ -157,7 +157,8 @@ def init_auth_db() -> None:
                 is_email_verified INTEGER NOT NULL DEFAULT 0,
                 is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
-                last_activity_at TEXT
+                last_activity_at TEXT,
+                privacy_policy_accepted_at TEXT
             );
             CREATE TABLE IF NOT EXISTS otp_challenges (
                 id TEXT PRIMARY KEY,
@@ -192,6 +193,11 @@ def init_auth_db() -> None:
         }
         if "consumed_at" not in challenge_columns:
             connection.execute("ALTER TABLE otp_challenges ADD COLUMN consumed_at INTEGER")
+        user_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(users)")
+        }
+        if "privacy_policy_accepted_at" not in user_columns:
+            connection.execute("ALTER TABLE users ADD COLUMN privacy_policy_accepted_at TEXT")
         existing = connection.execute(
             "SELECT id FROM users WHERE email = ?", ("camila@wingedtycoons.com",)
         ).fetchone()
@@ -337,7 +343,15 @@ def verify_otp(challenge_id: str, code: str) -> dict:
             f"INSERT INTO {_table('audit_events')} (user_id,action,success,metadata,created_at) VALUES (?,?,?,?,?)",
             (user["id"], "otp_verified", True, challenge["role"], _now()),
         )
-        return {"access_token": token, "token_type": "bearer", "role": user["role"], "email": user["email"]}
+        user_dict = dict(user)
+        privacy_policy_accepted = bool(user_dict.get("privacy_policy_accepted_at"))
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "role": user["role"],
+            "email": user["email"],
+            "privacy_policy_accepted": privacy_policy_accepted,
+        }
 
 
 def init_and_get_user(token_value: str | None) -> dict:
@@ -368,6 +382,37 @@ def revoke_session(token_value: str | None) -> None:
             f"DELETE FROM {_table('sessions')} WHERE token_hash = ?",
             (_hash(token_value),),
         )
+
+
+def record_privacy_policy_acceptance(user_id: str) -> str:
+    now = _now()
+    with _connect() as connection:
+        connection.execute(
+            f"UPDATE {_table('users')} SET privacy_policy_accepted_at = ? WHERE id = ?",
+            (now, user_id),
+        )
+        connection.execute(
+            f"INSERT INTO {_table('audit_events')} (user_id,action,success,metadata,created_at) VALUES (?,?,?,?,?)",
+            (user_id, "privacy_policy_accepted", True, "v1.0", now),
+        )
+    return now
+
+
+def get_privacy_policy_status(user_id: str) -> dict:
+    with _connect() as connection:
+        user = connection.execute(
+            f"SELECT email, privacy_policy_accepted_at FROM {_table('users')} WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if not user:
+            return {"email": "", "privacy_policy_accepted": False, "privacy_policy_accepted_at": None}
+        user_dict = dict(user)
+        accepted_at = user_dict.get("privacy_policy_accepted_at")
+        return {
+            "email": user_dict.get("email", ""),
+            "privacy_policy_accepted": bool(accepted_at),
+            "privacy_policy_accepted_at": accepted_at,
+        }
 
 
 def current_user(request: Request) -> dict:

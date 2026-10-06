@@ -453,3 +453,39 @@ CREATE INDEX IF NOT EXISTS idx_stock_res_client_status ON stock_reservations(cli
 CREATE INDEX IF NOT EXISTS idx_stock_res_part ON stock_reservations(normalized_part_number, status);
 CREATE INDEX IF NOT EXISTS idx_stock_res_expires ON stock_reservations(expires_at, status);
 
+CREATE TABLE IF NOT EXISTS email_campaigns (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    target_audience TEXT NOT NULL,
+    template_path TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    from_mailbox TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ACTIVE',
+    schedule_type TEXT NOT NULL,
+    scheduled_start_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS email_campaign_dispatches (
+    id TEXT PRIMARY KEY,
+    campaign_id TEXT NOT NULL REFERENCES email_campaigns(id),
+    recipient_email TEXT NOT NULL,
+    recipient_name TEXT,
+    company_name TEXT,
+    domain TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    scheduled_for TEXT NOT NULL,
+    sent_at TEXT,
+    error_message TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ecd_campaign_status ON email_campaign_dispatches(campaign_id, status);
+CREATE INDEX IF NOT EXISTS idx_ecd_domain ON email_campaign_dispatches(campaign_id, domain);
+CREATE INDEX IF NOT EXISTS idx_ecd_recipient ON email_campaign_dispatches(campaign_id, recipient_email);
+CREATE INDEX IF NOT EXISTS idx_ecd_scheduled_for ON email_campaign_dispatches(status, scheduled_for);
+
+

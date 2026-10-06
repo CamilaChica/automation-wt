@@ -93,6 +93,8 @@ from api.auth import (
     revoke_session,
     verify_otp,
     ROLE_CUSTOMER,
+    record_privacy_policy_acceptance,
+    get_privacy_policy_status,
 )
 from services.shared_rate_limit import SharedRateLimitUnavailable, check_shared_rate_limit
 from services.employee_profile_service import (
@@ -354,6 +356,7 @@ class EmployeeClockAction(BaseModel):
 class LoginResponse(BaseModel):
     role: str
     email: str
+    privacy_policy_accepted: bool = False
 
 class CatalogItem(BaseModel):
     part_number: str
@@ -611,14 +614,72 @@ async def otp_verify(request: OtpVerifyRequest, response: Response):
         samesite="None" if auth_env == "production" else "Lax",
         max_age=8 * 60 * 60,
     )
+    if result["role"] == ROLE_CUSTOMER:
+        try:
+            from services.email_campaign_service import email_campaign_service
+            email_campaign_service.schedule_user_feedback(user_email=result["email"])
+        except Exception:
+            pass
     return LoginResponse(
         role=result["role"],
         email=result["email"],
+        privacy_policy_accepted=bool(result.get("privacy_policy_accepted", False)),
     )
 
 @app.get("/api/auth/session")
 async def auth_session(user: dict = Depends(current_user)):
-    return {"email": user["email"], "role": user["role"]}
+    return {
+        "email": user["email"],
+        "role": user["role"],
+        "privacy_policy_accepted": bool(user.get("privacy_policy_accepted_at")),
+        "privacy_policy_accepted_at": user.get("privacy_policy_accepted_at"),
+    }
+
+@app.get("/api/customer/privacy-policy/status")
+async def customer_privacy_policy_status(user: dict = Depends(current_user)):
+    return get_privacy_policy_status(user["id"])
+
+@app.post("/api/customer/privacy-policy/accept")
+async def customer_privacy_policy_accept(user: dict = Depends(current_user)):
+    accepted_at = record_privacy_policy_acceptance(user["id"])
+    try:
+        from services.email_campaign_service import email_campaign_service
+        email_campaign_service.schedule_user_feedback(user_email=user["email"])
+    except Exception:
+        pass
+    return {
+        "status": "ok",
+        "email": user["email"],
+        "privacy_policy_accepted": True,
+        "privacy_policy_accepted_at": accepted_at,
+    }
+
+class UserFeedbackScheduleRequest(BaseModel):
+    email: str
+    name: str = ""
+    company: str = ""
+
+@app.get("/api/campaigns")
+async def get_campaigns(user: dict = Depends(current_user)):
+    from services.email_campaign_service import email_campaign_service
+    return {"campaigns": email_campaign_service.get_campaign_summaries()}
+
+@app.post("/api/campaigns/{campaign_id}/run")
+async def run_campaign(campaign_id: str, user: dict = Depends(current_user)):
+    from services.email_campaign_service import email_campaign_service, CAMPAIGN_SUPPLIERS
+    if campaign_id in ("suppliers", CAMPAIGN_SUPPLIERS):
+        return email_campaign_service.run_supplier_campaign_now()
+    return email_campaign_service.process_due_dispatches(campaign_id=campaign_id)
+
+@app.post("/api/campaigns/user-feedback/schedule")
+async def schedule_user_feedback_endpoint(request: UserFeedbackScheduleRequest, user: dict = Depends(current_user)):
+    from services.email_campaign_service import email_campaign_service
+    res = email_campaign_service.schedule_user_feedback(
+        user_email=request.email,
+        first_name=request.name,
+        company_name=request.company,
+    )
+    return res or {"scheduled": False}
 
 @app.post("/api/auth/logout", status_code=204)
 async def logout(request: Request, response: Response):
