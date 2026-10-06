@@ -1091,13 +1091,25 @@ class PostgresReviewTelemetryRepository:
             ]
 
     def save_supplier_offer(self, *, supplier_name: str, supplier_email: str | None = None, part_number: str = "", quantity_available: int | None = None, unit_cost: float | None = None, certificate_type: str | None = None, lead_time_days: int | None = None, approval_status: str = "Pending", condition_code: str | None = None, source_email_id: str | None = None, source_received_at=None, confidence: float = 1.0, description: str = "", availability_location: str | None = None, warranty_terms: str | None = None, trace_documents: list[str] | None = None, currency: str = "USD") -> dict[str, Any]:
+        normalized_part = part_number.strip().upper()
+        if approval_status != "No_Quote":
+            if unit_cost is not None:
+                try:
+                    numeric_cost = float(unit_cost)
+                    if numeric_cost <= 0.0:
+                        raise ValueError(f"Quoted cost for {normalized_part} must never be zero or negative. Received: {unit_cost}")
+                except (ValueError, TypeError) as exc:
+                    raise ValueError(f"Quoted cost for {normalized_part} must be a valid positive number, not zero: {exc}")
+        else:
+            unit_cost = None
+            quantity_available = 0
+
         with self._begin() as connection:
             supplier_id = self.upsert_supplier(supplier_name, supplier_email, approval_status=approval_status)
             offer_id = (
                 f"SPO-{uuid.uuid5(uuid.NAMESPACE_URL, source_email_id).hex[:24].upper()}"
                 if source_email_id else f"SPO-{uuid.uuid4().hex[:24].upper()}"
             )
-            normalized_part = part_number.strip().upper()
             trace_json = json.dumps(trace_documents or [])
             offer_data = SupplierOfferEntry(
                 id=offer_id, supplier_id=supplier_id, part_number=normalized_part,
@@ -1124,6 +1136,39 @@ class PostgresReviewTelemetryRepository:
             saved_id = connection.execute(statement.returning(SupplierPartRecord.id)).scalar_one_or_none()
             return {**values, "id": str(saved_id or offer_id), "supplier_name": supplier_name,
                     "supplier_email": supplier_email, "trace_documents": trace_documents or []}
+
+    def find_no_quote_suppliers(self, part_number: str) -> list[dict[str, Any]]:
+        with self._read() as connection:
+            rows = connection.execute(text(
+                "SELECT p.id AS supplier_part_id, p.supplier_id, p.part_number, p.condition_code, "
+                "p.approval_status, p.updated_at, p.source_email_id, p.source_received_at, "
+                "s.company_name AS supplier_name, s.email AS supplier_email, s.phone AS supplier_phone "
+                "FROM supplier_parts p JOIN suppliers s ON s.id = p.supplier_id "
+                "WHERE REGEXP_REPLACE(UPPER(COALESCE(p.part_number, '')), '[^A-Z0-9]', '', 'g') = :part_number "
+                "AND p.approval_status = 'No_Quote' "
+                "ORDER BY p.updated_at DESC NULLS LAST LIMIT 50"
+            ), {
+                "part_number": re.sub(r"[^A-Z0-9]", "", str(part_number or "").upper()),
+            }).mappings().all()
+            return [dict(row) for row in rows]
+
+    def find_candidate_suppliers_for_rfq(self, part_number: str) -> list[dict[str, Any]]:
+        with self._read() as connection:
+            rows = connection.execute(text(
+                "SELECT DISTINCT s.id AS supplier_id, s.company_name AS supplier_name, "
+                "s.email AS supplier_email, s.phone AS supplier_phone, "
+                "p.part_number, p.approval_status, p.condition_code, "
+                "p.unit_cost, p.updated_at, "
+                "CASE WHEN p.approval_status = 'No_Quote' THEN 1 ELSE 0 END AS was_no_quote "
+                "FROM supplier_parts p JOIN suppliers s ON s.id = p.supplier_id "
+                "WHERE REGEXP_REPLACE(UPPER(COALESCE(p.part_number, '')), '[^A-Z0-9]', '', 'g') = :part_number "
+                "AND s.email IS NOT NULL AND s.email != '' "
+                "ORDER BY CASE WHEN p.approval_status = 'Approved' THEN 0 WHEN p.approval_status = 'No_Quote' THEN 1 ELSE 2 END, "
+                "p.updated_at DESC NULLS LAST LIMIT 50"
+            ), {
+                "part_number": re.sub(r"[^A-Z0-9]", "", str(part_number or "").upper()),
+            }).mappings().all()
+            return [dict(row) for row in rows]
 
     def get_supplier_offers(self, part_number: str, quantity_needed: int = 1) -> list[dict[str, Any]]:
         with self._read() as connection:

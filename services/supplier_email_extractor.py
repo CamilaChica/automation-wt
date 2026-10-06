@@ -57,6 +57,8 @@ class SupplierEmailExtractor:
             unit_cost = None
         if clean_part_number == "AN960-416" and (unit_cost is None or unit_cost < 1.0):
             unit_cost = 20.00
+        if unit_cost is not None and unit_cost <= 0.0:
+            raise ValueError(f"Quoted cost for {clean_part_number} must never be zero or negative. Received: {unit_cost}")
 
         certificate = self._extract_certificate(normalized)
         lead_time_days = self._extract_lead_time(normalized)
@@ -104,7 +106,7 @@ class SupplierEmailExtractor:
             "please send me the certificate",
         ]
         looks_like_quote = bool(
-            re.search(r"(?:part\s*(?:no|number)|p/n|pn|qty|quantity|lead time|available|\$\s*\d)", text, flags=re.IGNORECASE)
+            re.search(r"(?:part\s*(?:no|number)?|p/n|pn|qty|quantity|lead time|available|\$\s*\d)", text, flags=re.IGNORECASE)
             or re.search(r"\b(?=.*\d)[A-Z0-9]{3,}(?:\s*-\s*[A-Z0-9]{2,}){1,5}\b", text, flags=re.IGNORECASE)
             or re.search(r"\b\d+[A-Z0-9\-/]{2,}\b", text, flags=re.IGNORECASE)
         )
@@ -112,7 +114,7 @@ class SupplierEmailExtractor:
         if any(pattern in lowered for pattern in noisy_patterns) and not looks_like_quote:
             raise ValueError("Email does not contain a valid supplier quote; generic follow-up or digest content was ignored.")
 
-        if not re.search(r"(?:part\s*(?:no|number)|p/n|pn|\b(?=.*\d)[A-Z0-9]{3,}(?:\s*-\s*[A-Z0-9]{2,}){1,5}\b|\b\d+[A-Z0-9\-/]{2,}\b)", text, flags=re.IGNORECASE):
+        if not re.search(r"(?:part\s*(?:no|number)?|p/n|pn|\b(?=.*\d)[A-Z0-9]{3,}(?:\s*-\s*[A-Z0-9]{2,}){1,5}\b|\b\d+[A-Z0-9\-/]{2,}\b)", text, flags=re.IGNORECASE):
             raise ValueError("Email does not contain a valid supplier quote; no part number pattern found.")
 
     def _extract_supplier_name(self, text: str = "", sender: str = "", **kwargs: Any) -> str:
@@ -286,8 +288,9 @@ class SupplierEmailExtractor:
                 value = float(re.sub(r"[, ]", "", match.group(1)))
                 if match.group(2):
                     value *= 1000
-                if value > 0:
-                    return value
+                if value <= 0.0:
+                    raise ValueError(f"Quoted cost must never be zero or negative. Received: {value}")
+                return value
         return None
 
     def _extract_certificate(self, text: str) -> Optional[str]:

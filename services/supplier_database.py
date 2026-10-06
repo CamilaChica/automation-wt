@@ -260,6 +260,20 @@ class SupplierDatabase:
         if clean_part == "AN960-416" and (unit_cost is None or unit_cost < 1.0):
             unit_cost = 20.00
 
+        # Quoted cost must never be zero; if it is zero, it must be an error.
+        if approval_status != "No_Quote":
+            if unit_cost is not None:
+                try:
+                    numeric_cost = float(unit_cost)
+                    if numeric_cost <= 0.0:
+                        raise ValueError(f"Quoted cost for {clean_part} must never be zero or negative. Received: {unit_cost}")
+                except (ValueError, TypeError) as exc:
+                    raise ValueError(f"Quoted cost for {clean_part} must be a valid positive number, not zero: {exc}")
+        else:
+            # For No_Quote entries, unit_cost is None and quantity is 0
+            unit_cost = None
+            quantity_available = 0
+
         supplier_id = self.upsert_supplier(supplier_name, supplier_email=supplier_email, approval_status=approval_status)
         offer_id = f"SPO-{uuid.uuid4().hex[:8].upper()}"
         now = _now_iso()
@@ -370,6 +384,54 @@ class SupplierDatabase:
                 LIMIT 50
                 """,
                 params,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def find_no_quote_suppliers(self, part_number: str) -> List[Dict[str, Any]]:
+        normalized_part = str(part_number or "").strip().upper()
+        cond_match = re.match(r"^(.+)-(OH|NE|AR|SV|SVC|NS|FN|RP|IN)$", normalized_part, re.IGNORECASE)
+        base_part = cond_match.group(1) if cond_match else normalized_part
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT sp.id AS supplier_part_id, sp.supplier_id, sp.part_number, sp.condition_code,
+                       sp.approval_status, sp.updated_at, sp.source_email_id, sp.source_received_at,
+                       s.company_name AS supplier_name, s.email AS supplier_email, s.phone AS supplier_phone
+                FROM supplier_parts sp
+                JOIN suppliers s ON s.id = sp.supplier_id
+                WHERE (sp.part_number = ? OR sp.part_number = ?)
+                  AND sp.approval_status = 'No_Quote'
+                ORDER BY sp.updated_at DESC
+                """,
+                (normalized_part, base_part),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def find_candidate_suppliers_for_rfq(self, part_number: str) -> List[Dict[str, Any]]:
+        """Return all suppliers who have interacted with this part (priced quotes or previous No Quote replies).
+        
+        This enables prioritizing suppliers who specifically trade, repair, or previously declined
+        this exact part when a client asks for a quote on that particular unit.
+        """
+        normalized_part = str(part_number or "").strip().upper()
+        cond_match = re.match(r"^(.+)-(OH|NE|AR|SV|SVC|NS|FN|RP|IN)$", normalized_part, re.IGNORECASE)
+        base_part = cond_match.group(1) if cond_match else normalized_part
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT s.id AS supplier_id, s.company_name AS supplier_name,
+                       s.email AS supplier_email, s.phone AS supplier_phone,
+                       sp.part_number, sp.approval_status, sp.condition_code,
+                       sp.unit_cost, sp.updated_at,
+                       CASE WHEN sp.approval_status = 'No_Quote' THEN 1 ELSE 0 END AS was_no_quote
+                FROM supplier_parts sp
+                JOIN suppliers s ON s.id = sp.supplier_id
+                WHERE (sp.part_number = ? OR sp.part_number = ?)
+                  AND s.email IS NOT NULL AND s.email != ''
+                ORDER BY CASE WHEN sp.approval_status = 'Approved' THEN 0 WHEN sp.approval_status = 'No_Quote' THEN 1 ELSE 2 END,
+                         sp.updated_at DESC
+                """,
+                (normalized_part, base_part),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -536,6 +598,12 @@ class PostgresSupplierDatabase:
         self, part_number: str, quantity_needed: int = 1
     ) -> List[Dict[str, Any]]:
         return self.operations_store.get_supplier_offers(part_number, quantity_needed)
+
+    def find_no_quote_suppliers(self, part_number: str) -> List[Dict[str, Any]]:
+        return self.operations_store.find_no_quote_suppliers(part_number)
+
+    def find_candidate_suppliers_for_rfq(self, part_number: str) -> List[Dict[str, Any]]:
+        return self.operations_store.find_candidate_suppliers_for_rfq(part_number)
 
     def get_supplier_offers_for_part(self, part_number: str) -> List[Dict[str, Any]]:
         return self.find_supplier_offers(part_number)

@@ -369,9 +369,20 @@ class CommunicationService:
             if operations_store.storage_engine == "postgresql"
             else supplier_db.list_suppliers()
         )
+        # Look up candidate suppliers who have previously quoted or responded No Quote for this exact part/unit
+        part_candidates = (
+            operations_store.find_candidate_suppliers_for_rfq(part_number)
+            if operations_store.storage_engine == "postgresql"
+            else supplier_db.find_candidate_suppliers_for_rfq(part_number)
+        )
+        candidate_recipients = [
+            cand.get("supplier_email") for cand in part_candidates
+            if cand.get("supplier_email")
+        ]
         configured = os.getenv("SUPPLIER_REQUEST_RECIPIENTS", "")
         recipients = [address.strip() for address in configured.split(",") if address.strip()]
-        # Suppliers arrive ranked (approved, then quote history), so slicing keeps the most reliable wave.
+        # Part-specific candidates (including previous No Quote respondents) are placed first
+        recipients.extend(candidate_recipients)
         recipients.extend(supplier.get("email") for supplier in suppliers if supplier.get("email"))
         recipients = [
             address for address in dict.fromkeys(recipients)

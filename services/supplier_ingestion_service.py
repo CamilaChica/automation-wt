@@ -160,10 +160,60 @@ class SupplierEmailIngestionService:
         self.extractor = SupplierEmailExtractor()
         self.llm_router = LLMRouter()
 
-    def ingest_email(self, email_text: str, mailbox: str = "purchasing", message_id: Optional[str] = None, attachments: Optional[List[Dict[str, Any]]] = None, source_received_at: datetime | None = None) -> Dict[str, Any]:
+    def ingest_email(
+        self,
+        email_text: str,
+        mailbox: str = "purchasing",
+        message_id: Optional[str] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
+        source_received_at: datetime | None = None,
+    ) -> Dict[str, Any]:
         try:
             if is_no_quote_reply(email_text):
-                return {"success": False, "status": "Supplier_No_Quote", "no_quote": True, "error": "Supplier declined to quote."}
+                sender, subject = _email_headers(email_text)
+                supplier_name = self.extractor._extract_supplier_name(email_text, sender)
+                part_number = self.extractor._extract_part_number(f"{subject}\n{email_text}")
+                condition_code = self.extractor._extract_condition(email_text) or "NE"
+                source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
+
+                _save_inbound_email(
+                    mailbox=mailbox,
+                    message_id=source_email_id,
+                    sender=sender,
+                    subject=subject or f"Supplier No Quote for {part_number or 'requested part'}",
+                    body=email_text,
+                    received_at=source_received_at,
+                    processing_status="no_quote",
+                )
+
+                stored_offer = None
+                if part_number:
+                    stored_offer = _save_supplier_offer(
+                        supplier_name=supplier_name,
+                        supplier_email=sender,
+                        part_number=part_number,
+                        quantity_available=0,
+                        unit_cost=None,
+                        approval_status="No_Quote",
+                        condition_code=condition_code,
+                        source_email_id=source_email_id,
+                        source_received_at=source_received_at,
+                        description="Supplier responded No Quote / Out of Stock",
+                    )
+                else:
+                    supplier_db.upsert_supplier(supplier_name, supplier_email=sender, approval_status="Approved")
+
+                return {
+                    "success": True,
+                    "status": "Supplier_No_Quote",
+                    "no_quote": True,
+                    "part_number": part_number,
+                    "supplier_name": supplier_name,
+                    "supplier_email": sender,
+                    "source_email_id": source_email_id,
+                    "offer": stored_offer,
+                    "message": "Supplier responded No Quote; recorded in database for future outreach.",
+                }
             attachment_context = build_email_context(email_text, attachments)
             source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
             from services.document_verification import compare_documents
@@ -361,7 +411,9 @@ class SupplierEmailIngestionService:
             supplier_email = extracted.get("supplier_email") or sender
             part_number = extracted.get("part_number")
             quantity = extracted.get("quantity_available") or 1
-            unit_cost = extracted.get("unit_cost") or 0.0
+            unit_cost = extracted.get("unit_cost")
+            if unit_cost is not None and float(unit_cost) <= 0.0:
+                raise ValueError(f"Quoted cost for {part_number} must never be zero or negative. Received: {unit_cost}")
             certificate = extracted.get("certificate_type")
             lead_time = extracted.get("lead_time_days") or 3
             condition = extracted.get("condition_code") or "NE"
@@ -396,8 +448,11 @@ class SupplierEmailIngestionService:
                     item_condition = item.get("condition_code") or condition
 
                 item_quantity = int(item.get("quantity") or quantity or 1)
-                item_price = float(item.get("unit_price") if item.get("unit_price") is not None else unit_cost or 0.0)
-                if item_part_number == "AN960-416" and (item_price < 1.0 or item_price == 0.08):
+                raw_item_price = item.get("unit_price") if item.get("unit_price") is not None else unit_cost
+                item_price = float(raw_item_price) if raw_item_price is not None else None
+                if item_price is not None and item_price <= 0.0:
+                    raise ValueError(f"Quoted cost for {item_part_number} must never be zero or negative. Received: {item_price}")
+                if item_part_number == "AN960-416" and (item_price is not None and item_price < 1.0 or item_price == 0.08):
                     item_price = 20.00
 
                 from services.supplier_inventory_parser import KNOWN_CATALOG_DESCRIPTIONS
@@ -444,7 +499,7 @@ class SupplierEmailIngestionService:
                 "supplier_email": supplier_email,
                 "part_number": part_number,
                 "quantity_available": quantity,
-                "unit_cost": float(unit_cost),
+                "unit_cost": float(unit_cost) if unit_cost is not None else None,
                 "certificate_type": certificate,
                 "lead_time_days": int(lead_time),
                 "warranty_terms": extracted.get("warranty_terms"),
@@ -468,7 +523,54 @@ class SupplierEmailIngestionService:
         """Persist plain supplier-email extraction through the async repositories."""
         try:
             if is_no_quote_reply(email_text):
-                return {"success": False, "status": "Supplier_No_Quote", "no_quote": True, "error": "Supplier declined to quote."}
+                sender, subject = _email_headers(email_text)
+                supplier_name = self.extractor._extract_supplier_name(email_text, sender)
+                part_number = self.extractor._extract_part_number(f"{subject}\n{email_text}")
+                condition_code = self.extractor._extract_condition(email_text) or "NE"
+                source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
+
+                await repositories.records.save_inbound_email(
+                    mailbox=mailbox,
+                    message_id=source_email_id,
+                    sender=sender,
+                    subject=subject or f"Supplier No Quote for {part_number or 'requested part'}",
+                    body=email_text,
+                    received_at=source_received_at,
+                    processing_status="no_quote",
+                )
+
+                if part_number:
+                    await repositories.supplier.save_inventory_offer(
+                        supplier_name=supplier_name,
+                        supplier_email=sender,
+                        part_number=part_number,
+                        quantity_available=0,
+                        unit_cost=None,
+                        certificate_type=None,
+                        lead_time_days=0,
+                        approval_status="No_Quote",
+                        condition_code=condition_code,
+                        source_email_id=source_email_id,
+                        source_received_at=source_received_at,
+                        description="Supplier responded No Quote / Out of Stock",
+                    )
+                else:
+                    await repositories.supplier.upsert_supplier(
+                        supplier_name=supplier_name,
+                        supplier_email=sender,
+                        approval_status="Approved",
+                    )
+
+                return {
+                    "success": True,
+                    "status": "Supplier_No_Quote",
+                    "no_quote": True,
+                    "part_number": part_number,
+                    "supplier_name": supplier_name,
+                    "supplier_email": sender,
+                    "source_email_id": source_email_id,
+                    "message": "Supplier responded No Quote; recorded in database for future outreach.",
+                }
             attachment_context = await asyncio.to_thread(build_email_context, email_text, attachments)
             source_email_id = message_id or f"EMAIL-{uuid.uuid4().hex[:12].upper()}"
             from services.document_verification import compare_documents
@@ -668,7 +770,9 @@ class SupplierEmailIngestionService:
             supplier_email = extracted.get("supplier_email") or sender
             part_number = str(extracted["part_number"])
             quantity = extracted.get("quantity_available") or 1
-            unit_cost = extracted.get("unit_cost") or 0.0
+            unit_cost = extracted.get("unit_cost")
+            if unit_cost is not None and float(unit_cost) <= 0.0:
+                raise ValueError(f"Quoted cost for {part_number} must never be zero or negative. Received: {unit_cost}")
             certificate = extracted.get("certificate_type")
             lead_time = extracted.get("lead_time_days") or 3
             condition = extracted.get("condition_code") or "NE"
@@ -696,7 +800,10 @@ class SupplierEmailIngestionService:
             }] ):
                 item_part_number = str(item.get("part_number") or part_number).strip().upper()
                 item_quantity = int(item.get("quantity") or quantity or 1)
-                item_price = float(item.get("unit_price") if item.get("unit_price") is not None else unit_cost or 0.0)
+                raw_item_price = item.get("unit_price") if item.get("unit_price") is not None else unit_cost
+                item_price = float(raw_item_price) if raw_item_price is not None else None
+                if item_price is not None and item_price <= 0.0:
+                    raise ValueError(f"Quoted cost for {item_part_number} must never be zero or negative. Received: {item_price}")
                 item_certificate = (item.get("trace_documents") or [certificate])[0] if (item.get("trace_documents") or [certificate]) else certificate
                 item_source_id = source_email_id if index == 0 else f"{source_email_id}:{index}"
                 await repositories.supplier.save_inventory_offer(
@@ -747,7 +854,7 @@ class SupplierEmailIngestionService:
                 "supplier_email": supplier_email,
                 "part_number": part_number,
                 "quantity_available": quantity,
-                "unit_cost": float(unit_cost),
+                "unit_cost": float(unit_cost) if unit_cost is not None else None,
                 "certificate_type": certificate,
                 "lead_time_days": int(lead_time),
                 "warranty_terms": extracted.get("warranty_terms"),

@@ -83,6 +83,7 @@ class SupplierDiscoveryAgent(BaseAgent):
         super().__init__(metadata)
         self._event_quotes: Dict[str, List[Dict[str, Any]]] = {}
         self.last_stale_offers: List[Dict[str, Any]] = []
+        self.last_no_quote_suppliers: List[Dict[str, Any]] = []
 
     REQUIRED_TRACE_CERTIFICATES = {"FAA 8130-3", "EASA Form 1", "FAA_8130_3", "EASA_FORM_1"}
     OFFER_FRESHNESS_DAYS = 30
@@ -160,6 +161,12 @@ class SupplierDiscoveryAgent(BaseAgent):
         """Return fresh offers and retain stale records for confirmation outreach."""
         if not part_number:
             return []
+
+        self.last_no_quote_suppliers = (
+            operations_store.find_no_quote_suppliers(part_number)
+            if operations_store.storage_engine == "postgresql"
+            else supplier_db.find_no_quote_suppliers(part_number)
+        )
 
         records = (
             operations_store.get_supplier_offers(part_number, quantity)

@@ -184,9 +184,13 @@ def normalize_inventory_row(row: dict[str, Any]) -> tuple[dict[str, Any], str | 
         currency = match.group(1) if match else "USD"
     normalized["currency"] = currency
     try:
-        normalized["unit_price"] = float(re.sub(r"[^0-9.\-]", "", price_text)) if price_text else None
+        raw_price = re.sub(r"[^0-9.\-]", "", price_text) if price_text else None
+        normalized["unit_price"] = float(raw_price) if raw_price else None
     except ValueError:
         return normalized, "unit_price is not numeric"
+
+    if normalized.get("unit_price") is not None and normalized["unit_price"] <= 0.0:
+        return normalized, "quoted cost must never be zero or negative"
 
     if part_number == "AN960-416" and normalized.get("unit_price") is not None and normalized["unit_price"] < 1.0:
         normalized["unit_price"] = 20.00

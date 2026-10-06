@@ -82,6 +82,8 @@ POSTGRES_STORE_METHODS = (
     "save_supplier_offer",
     "get_supplier_offers",
     "search_supplier_offers",
+    "find_no_quote_suppliers",
+    "find_candidate_suppliers_for_rfq",
     "schedule_communication_task",
     "list_due_communication_tasks",
     "update_communication_task",
@@ -672,6 +674,18 @@ class OperationsStore:
         if not self._postgres:
             raise RuntimeError("Shared supplier offers require PostgreSQL mode.")
         return self._postgres.search_supplier_offers(query, condition)
+
+    def find_no_quote_suppliers(self, part_number: str) -> list[dict[str, Any]]:
+        if self._postgres:
+            return self._postgres.find_no_quote_suppliers(part_number)
+        from services.supplier_database import supplier_db
+        return supplier_db.find_no_quote_suppliers(part_number)
+
+    def find_candidate_suppliers_for_rfq(self, part_number: str) -> list[dict[str, Any]]:
+        if self._postgres:
+            return self._postgres.find_candidate_suppliers_for_rfq(part_number)
+        from services.supplier_database import supplier_db
+        return supplier_db.find_candidate_suppliers_for_rfq(part_number)
 
     def list_inventory_catalog(self, limit: int = 500) -> list[dict[str, Any]]:
         if not self._postgres:
