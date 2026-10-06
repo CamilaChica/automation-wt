@@ -17,17 +17,23 @@ from services.supplier_database import supplier_db
 
 class TestSupplierEmailIngestion(unittest.TestCase):
     def setUp(self):
+        self._llm_live = os.environ.get("LLM_LIVE_ENABLED")
         self._email_send_enabled = os.environ.get("EMAIL_SEND_ENABLED")
         self._graph_environment = {
             name: os.environ.get(name)
             for name in ("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "GRAPH_MAILBOX_USER")
         }
+        os.environ["LLM_LIVE_ENABLED"] = "false"
         os.environ["EMAIL_SEND_ENABLED"] = "false"
         for name in self._graph_environment:
             os.environ.pop(name, None)
         db_service.reset_supplier_data()
 
     def tearDown(self):
+        if self._llm_live is None:
+            os.environ.pop("LLM_LIVE_ENABLED", None)
+        else:
+            os.environ["LLM_LIVE_ENABLED"] = self._llm_live
         if self._email_send_enabled is None:
             os.environ.pop("EMAIL_SEND_ENABLED", None)
         else:
